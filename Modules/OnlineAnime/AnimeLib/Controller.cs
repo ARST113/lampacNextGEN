@@ -154,7 +154,7 @@ public class AnimeLibController : BaseOnlineController
             var episodes = cache.Value;
 
             #region Перевод
-            string voice_memkey = $"animelib:video:{episodes.First().id}";
+            string voice_memkey = $"animelib:video:v2:{episodes.First().id}";
             if (!hybridCache.TryGetValue(voice_memkey, out Player[] players))
             {
                 string req_uri = $"{init.host}/api/episodes/{episodes.First().id}";
@@ -172,21 +172,27 @@ public class AnimeLibController : BaseOnlineController
                 hybridCache.Set(voice_memkey, players, TimeSpan.FromHours(1));
             }
 
-            var vtpl = new VoiceTpl(players.Length);
+            var availablePlayers = players
+                .Where(i => HasStreams(i) || !string.IsNullOrEmpty(i?.src))
+                .ToArray();
+
+            if (availablePlayers.Length == 0)
+                return OnError("players");
+
+            var vtpl = new VoiceTpl(availablePlayers.Length);
             string activTranslate = t;
 
-            foreach (var player in players)
+            foreach (var player in availablePlayers)
             {
-                if (player.player != "Animelib")
-                    continue;
+                string voiceName = PlayerVoiceName(player);
 
                 if (string.IsNullOrEmpty(activTranslate))
-                    activTranslate = player.team.name;
+                    activTranslate = voiceName;
 
                 vtpl.Append(
-                    player.team.name,
-                    activTranslate == player.team.name,
-                    $"{host}/lite/animelib?rjson={rjson}&title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(uri)}&t={HttpUtility.UrlEncode(player.team.name)}"
+                    voiceName,
+                    activTranslate == voiceName,
+                    $"{host}/lite/animelib?rjson={rjson}&title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(uri)}&t={HttpUtility.UrlEncode(voiceName)}"
                 );
             }
             #endregion
@@ -204,7 +210,8 @@ public class AnimeLibController : BaseOnlineController
                     episode.number,
                     link,
                     "call",
-                    streamlink: accsArgs($"{link}&play=true")
+                    streamlink: accsArgs($"{link}&play=true"),
+                    voice_name: activTranslate
                 );
             }
 
@@ -242,7 +249,7 @@ public class AnimeLibController : BaseOnlineController
         }
 
     rhubFallback:
-        var cache = await InvokeCacheResult<Player[]>($"animelib:video:{id}", 30, async e =>
+        var cache = await InvokeCacheResult<Player[]>($"animelib:video:v2:{id}", 30, async e =>
         {
             string req_uri = $"{init.host}/api/episodes/{id}";
             var bearer = HeadersModel.Init("authorization", $"Bearer {init.token}");
@@ -276,7 +283,18 @@ public class AnimeLibController : BaseOnlineController
         }
 
         if (streams == null || streams.Count == 0)
-            return OnError("streams");
+        {
+            var kodikPlayer = FindKodikPlayer(cache.Value, voice);
+            if (kodikPlayer == null)
+                return OnError("streams");
+
+            string kodikUrl = $"{host}/lite/kodik/video?title={HttpUtility.UrlEncode(title)}&original_title=&link={HttpUtility.UrlEncode(kodikPlayer.src)}";
+
+            if (play)
+                return Redirect(accsArgs($"{kodikUrl.Replace("/video", "/video.m3u8")}&play=true"));
+
+            return Redirect(accsArgs(kodikUrl));
+        }
 
         var streamquality = new StreamQualityTpl(streams);
 
@@ -307,10 +325,12 @@ public class AnimeLibController : BaseOnlineController
 
         foreach (var player in players)
         {
-            if (player.player != "Animelib")
+            if (!HasStreams(player))
                 continue;
 
-            if (!string.IsNullOrEmpty(_voice) && _voice != player.team.name)
+            string voiceName = PlayerVoiceName(player);
+
+            if (!string.IsNullOrEmpty(_voice) && _voice != voiceName)
                 continue;
 
             foreach (var video in player.video.quality)
@@ -330,6 +350,41 @@ public class AnimeLibController : BaseOnlineController
         return _streams;
     }
     #endregion
+
+    bool HasStreams(Player player)
+    {
+        return player?.video?.quality != null && player.video.quality.Any(i => !string.IsNullOrEmpty(i.href));
+    }
+
+    Player FindKodikPlayer(Player[] players, string voice)
+    {
+        if (players == null)
+            return null;
+
+        foreach (var player in players)
+        {
+            if (string.IsNullOrEmpty(player?.src))
+                continue;
+
+            if (!string.IsNullOrEmpty(voice) && voice != PlayerVoiceName(player))
+                continue;
+
+            return player;
+        }
+
+        return players.FirstOrDefault(i => !string.IsNullOrEmpty(i?.src));
+    }
+
+    string PlayerVoiceName(Player player)
+    {
+        if (!string.IsNullOrWhiteSpace(player?.team?.name))
+            return player.team.name;
+
+        if (!string.IsNullOrWhiteSpace(player?.player))
+            return player.player;
+
+        return "Animelib";
+    }
 
     #region [Codex AI] EnsureAnimeLibToken / RequestAnimeLibToken
     async ValueTask EnsureAnimeLibToken()

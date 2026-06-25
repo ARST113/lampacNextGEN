@@ -43,6 +43,8 @@ public class Player
     public PlayerTeam team { get; set; }
 
     public Video video { get; set; }
+
+    public string src { get; set; }
 }
 
 public class PlayerTeam

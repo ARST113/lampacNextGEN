@@ -22,3 +22,21 @@ public class PlaylistItem
 
     public int voice_id { get; set; }
 }
+
+public class VenomSeason
+{
+    public int season { get; set; }
+
+    public List<VenomEpisode> episodes { get; set; }
+}
+
+public class VenomEpisode
+{
+    public string episode { get; set; }
+
+    public string hls { get; set; }
+
+    public string dasha { get; set; }
+
+    public string dash { get; set; }
+}
