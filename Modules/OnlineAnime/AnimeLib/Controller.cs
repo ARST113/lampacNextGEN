@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.Services;
@@ -24,9 +25,9 @@ public class AnimeLibController : BaseOnlineController
     public AnimeLibController() : base(ModInit.conf) { }
 
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/animelib")]
-    async public Task<ActionResult> Index(string title, string original_title, int year, string uri, string t, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(string title, string original_title, short year, string uri, string t, bool rjson = false, bool similar = false)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -72,6 +73,8 @@ public class AnimeLibController : BaseOnlineController
                     return e.Fail(string.Empty, refresh_proxy: true);
 
                 string stitle = SearchNameTo.Convert(title);
+                string soriginal = SearchNameTo.Convert(original_title);
+
                 var catalog = new List<(string title, string year, string uri, bool coincidence, string cover)>(result.Length);
 
                 foreach (var anime in result)
@@ -81,11 +84,10 @@ public class AnimeLibController : BaseOnlineController
 
                     var model = ($"{anime.rus_name} / {anime.eng_name}", (anime.releaseDate != null ? anime.releaseDate.Split("-")[0] : "0"), anime.slug_url, false, anime.cover.@default);
 
-                    if (SearchNameTo.Equals(anime.rus_name, stitle) || SearchNameTo.Equals(anime.eng_name, stitle))
-                    {
-                        if (!string.IsNullOrEmpty(anime.releaseDate) && anime.releaseDate.StartsWith(year.ToString()))
-                            model.Item4 = true;
-                    }
+                    if (SearchNameTo.StartsWith(anime.rus_name, stitle) ||
+                        SearchNameTo.StartsWith(anime.eng_name, stitle) ||
+                        SearchNameTo.StartsWith(anime.eng_name, soriginal))
+                        model.Item4 = true;
 
                     catalog.Add(model);
                 }
@@ -116,7 +118,7 @@ public class AnimeLibController : BaseOnlineController
                     res.year,
                     string.Empty,
                     $"{host}/lite/animelib?rjson={rjson}&title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(res.uri)}",
-                    PosterApi.Size(res.cover)
+                    PosterApi.Size(res.cover, HeadersModel.InitOrNull(init.headers_image))
                 );
 
             }
@@ -212,7 +214,7 @@ public class AnimeLibController : BaseOnlineController
     }
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/animelib/video")]
     async public Task<ActionResult> Video(string title, long id, string voice, bool play)
     {
@@ -232,11 +234,11 @@ public class AnimeLibController : BaseOnlineController
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
         }
 
     rhubFallback:

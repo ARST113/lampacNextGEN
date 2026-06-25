@@ -19,10 +19,9 @@ public class AsiaGeController : BaseOnlineController
 {
     public AsiaGeController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/asiage")]
-    async public Task<ActionResult> Index(long id, string title, int year, int serial = 0, string href = null, bool similar = false)
+    async public Task<ActionResult> Index(long id, string title, short year, byte serial = 0, string href = null, bool similar = false)
     {
         if (serial == 0)
             return OnError();

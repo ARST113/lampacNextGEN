@@ -1,11 +1,16 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
+using Shared.PlaywrightCore;
+using Shared.Services.HTTP;
 using Shared.Services.RxEnumerate;
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
@@ -16,12 +21,11 @@ public class AnimebesstController : BaseOnlineController
 {
     public AnimebesstController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/animebesst")]
-    async public Task<ActionResult> Index(string title, string uri, int s, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(string title, string uri, short s, bool rjson = false, bool similar = false)
     {
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
     rhubFallback:
@@ -34,57 +38,48 @@ public class AnimebesstController : BaseOnlineController
             var cache = await InvokeCacheResult<List<(string title, string year, string uri, string s, string img)>>($"animebesst:search:{title}", TimeSpan.FromHours(4), async e =>
             {
                 bool reqOk = false;
+                int httpLen = -1;
+                int pwLen = -1;
+                bool httpCf = false;
+                bool pwCf = false;
                 List<(string title, string year, string uri, string s, string img)> catalog = null;
+
+                void parseSearch(string search, bool playwright = false)
+                {
+                    if (playwright)
+                    {
+                        pwLen = search?.Length ?? -1;
+                        pwCf = !string.IsNullOrEmpty(search) && IsCloudflareChallenge(search);
+                    }
+                    else
+                    {
+                        httpLen = search?.Length ?? -1;
+                        httpCf = !string.IsNullOrEmpty(search) && IsCloudflareChallenge(search);
+                    }
+
+                    var parsed = ParseSearch(search);
+                    reqOk = parsed.reqOk;
+                    catalog = parsed.catalog;
+                }
 
                 string data = $"do=search&subaction=search&search_start=0&full_search=0&result_from=1&story={HttpUtility.UrlEncode(title)}";
 
-                await httpHydra.PostSpan($"{init.host}/index.php?do=search", data, search =>
+                await httpHydra.PostSpan($"{init.host}/index.php?do=search", data, search => parseSearch(search.ToString()));
+
+                if (catalog == null || catalog.Count == 0)
                 {
-                    reqOk = search.Contains(">Поиск по сайту<", StringComparison.OrdinalIgnoreCase);
+                    string searchUrl = $"{init.host}/index.php?{data}";
+                    string html = await FlareSolverrGet(searchUrl);
+                    if (string.IsNullOrEmpty(html))
+                        html = await PlaywrightHttp.Get(init, searchUrl);
 
-                    var sidebar = Rx.Split("id=\"sidebar\"", search);
-                    if (sidebar.Count == 0)
-                        return;
-
-                    var rx = Rx.Split("class=\"shortstory-listab\"", sidebar[0].Span, 1);
-                    if (rx.Count == 0)
-                        return;
-
-                    catalog = new List<(string title, string year, string uri, string s, string img)>(rx.Count);
-
-                    foreach (var row in rx.Rows())
-                    {
-                        if (row.Contains("Новости"))
-                            continue;
-
-                        var g = row.Groups("class=\"shortstory-listab-title\"><a href=\"(https?://[^\"]+\\.html)\">([^<]+)</a>");
-
-                        if (!string.IsNullOrWhiteSpace(g[1].Value) && !string.IsNullOrWhiteSpace(g[2].Value))
-                        {
-                            string season = "0";
-                            if (g[2].Value.Contains("сезон"))
-                            {
-                                season = Regex.Match(g[2].Value, "([0-9]+) сезон").Groups[1].Value;
-                                if (string.IsNullOrEmpty(season))
-                                    season = "1";
-                            }
-
-                            catalog.Add((
-                                g[2].Value,
-                                row.Match("\">([0-9]{4})</a>"),
-                                g[1].Value,
-                                season,
-                                row.Match("<img class=\"img-fit lozad\" data-src=\"([^\"]+)\"")
-                            ));
-                        }
-                    }
-                });
-
+                    parseSearch(html, playwright: true);
+                }
 
                 if ((catalog == null || catalog.Count == 0) && !reqOk)
                     return e.Fail("catalog", refresh_proxy: true);
 
-                return e.Success(catalog);
+                return e.Success(catalog ?? new List<(string title, string year, string uri, string s, string img)>());
             });
 
             if (IsRhubFallback(cache))
@@ -122,21 +117,22 @@ public class AnimebesstController : BaseOnlineController
             {
                 var links = new List<(string episode, string name, string uri)>(5);
 
-                await httpHydra.GetSpan(uri, news =>
+                void parsePlaylist(string news)
                 {
-                    string videoList = Rx.Match(news, "var videoList ?=([^\n\r]+)");
-                    if (videoList == null)
-                        return;
+                    foreach (var link in ParsePlaylist(news))
+                        links.Add(link);
+                }
 
-                    var match = Regex.Match(videoList, "\"id\":\"([0-9]+)( [^\"]+)?\",\"link\":\"(https?:)?\\\\/\\\\/([^\"]+)\"");
-                    while (match.Success)
-                    {
-                        if (!string.IsNullOrWhiteSpace(match.Groups[1].Value) && !string.IsNullOrWhiteSpace(match.Groups[4].Value))
-                            links.Add((match.Groups[1].Value, match.Groups[2].Value.Trim(), match.Groups[4].Value.Replace("\\", "")));
+                await httpHydra.GetSpan(uri, news => parsePlaylist(news.ToString()));
 
-                        match = match.NextMatch();
-                    }
-                });
+                if (links.Count == 0)
+                {
+                    string html = await FlareSolverrGet(uri);
+                    if (string.IsNullOrEmpty(html))
+                        html = await PlaywrightHttp.Get(init, uri);
+
+                    parsePlaylist(html);
+                }
 
                 if (links.Count == 0)
                     return e.Fail("links", refresh_proxy: true);
@@ -154,14 +150,14 @@ public class AnimebesstController : BaseOnlineController
                 foreach (var l in cache.Value)
                 {
                     string name = string.IsNullOrEmpty(l.name) ? $"{l.episode} серия" : $"{l.episode} {l.name}";
-                    string voice_name = !string.IsNullOrEmpty(l.name) ? Regex.Replace(l.name, "(^\\(|\\)$)", "") : "";
+                    string voice_name = !string.IsNullOrEmpty(l.name) ? Regex.Replace(l.name, "(^\\(|\\)$)", "") : "AnimeBesst";
 
                     string link = accsArgs($"{host}/lite/animebesst/video.m3u8?uri={HttpUtility.UrlEncode(l.uri)}&title={HttpUtility.UrlEncode(title)}");
 
                     etpl.Append(
                         name,
                         $"{title} / {name}",
-                        s.ToString(),
+                        s,
                         l.episode,
                         link,
                         "call",
@@ -177,39 +173,34 @@ public class AnimebesstController : BaseOnlineController
     }
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/animebesst/video.m3u8")]
     async public Task<ActionResult> Video(string uri, string title, bool play)
     {
-        if (await IsRequestBlocked(rch: true, rch_check: false))
+        if (await IsRequestBlocked(rch: false, rch_check: false))
             return badInitMsg;
-
-        if (rch != null)
-        {
-            if (rch.IsNotConnected())
-            {
-                if (init.rhub_fallback && play)
-                    rch.Disabled();
-                else
-                    return ContentTo(rch.connectionMsg);
-            }
-
-            if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
-
-            if (rch.IsNotSupport(out string rch_error))
-                return ShowError(rch_error);
-        }
 
     rhubFallback:
         var cache = await InvokeCacheResult<string>($"animebesst:video:{uri}", 30, async e =>
         {
             string hls = null;
+            string iframeUrl = $"https://{uri}";
 
-            await httpHydra.GetSpan($"https://{uri}", addheaders: HeadersModel.Init("referer", init.host), spanAction: iframe =>
+            void parseIframe(string iframe)
             {
                 hls = Rx.Match(iframe, "file:\"(https?://[^\"]+\\.m3u8)\"");
-            });
+            }
+
+            await httpHydra.GetSpan(iframeUrl, addheaders: HeadersModel.Init("referer", init.host), spanAction: iframe => parseIframe(iframe.ToString()));
+
+            if (string.IsNullOrEmpty(hls))
+            {
+                string html = await FlareSolverrGet(iframeUrl);
+                if (string.IsNullOrEmpty(html))
+                    html = await PlaywrightHttp.Get(init, iframeUrl);
+
+                parseIframe(html);
+            }
 
             if (string.IsNullOrEmpty(hls))
                 return e.Fail("hls", refresh_proxy: true);
@@ -237,4 +228,116 @@ public class AnimebesstController : BaseOnlineController
         ));
     }
     #endregion
+
+    static (bool reqOk, List<(string title, string year, string uri, string s, string img)> catalog) ParseSearch(string search)
+    {
+        if (string.IsNullOrEmpty(search))
+            return (false, null);
+
+        bool reqOk = search.Contains(">Поиск по сайту<", StringComparison.OrdinalIgnoreCase) ||
+                     search.Contains("shortstory-listab", StringComparison.OrdinalIgnoreCase);
+
+        if (IsCloudflareChallenge(search))
+            return (false, null);
+
+        var sidebar = Rx.Split("id=\"sidebar\"", search);
+        if (sidebar.Count == 0)
+            return (reqOk, null);
+
+        var rx = Rx.Split("class=\"shortstory-listab\"", sidebar[0].Span, 1);
+        if (rx.Count == 0)
+            return (reqOk, null);
+
+        var catalog = new List<(string title, string year, string uri, string s, string img)>(rx.Count);
+
+        foreach (var row in rx.Rows())
+        {
+            if (row.Contains("Новости"))
+                continue;
+
+            var g = row.Groups("class=\"shortstory-listab-title\"><a href=\"(https?://[^\"]+\\.html)\">([^<]+)</a>");
+
+            if (!string.IsNullOrWhiteSpace(g[1].Value) && !string.IsNullOrWhiteSpace(g[2].Value))
+            {
+                string season = "0";
+                if (g[2].Value.Contains("сезон"))
+                {
+                    season = Regex.Match(g[2].Value, "([0-9]+) сезон").Groups[1].Value;
+                    if (string.IsNullOrEmpty(season))
+                        season = "1";
+                }
+
+                catalog.Add((
+                    g[2].Value,
+                    row.Match("\">([0-9]{4})</a>"),
+                    g[1].Value,
+                    season,
+                    row.Match("<img class=\"img-fit lozad\" data-src=\"([^\"]+)\"")
+                ));
+            }
+        }
+
+        return (reqOk, catalog);
+    }
+
+    static List<(string episode, string name, string uri)> ParsePlaylist(string news)
+    {
+        var links = new List<(string episode, string name, string uri)>(5);
+
+        if (string.IsNullOrEmpty(news) || IsCloudflareChallenge(news))
+            return links;
+
+        string videoList = Rx.Match(news, "var videoList ?=([^\n\r]+)");
+        if (videoList == null)
+            return links;
+
+        var match = Regex.Match(videoList, "\"id\":\"([0-9]+)( [^\"]+)?\",\"link\":\"(https?:)?\\\\/\\\\/([^\"]+)\"");
+        while (match.Success)
+        {
+            if (!string.IsNullOrWhiteSpace(match.Groups[1].Value) && !string.IsNullOrWhiteSpace(match.Groups[4].Value))
+                links.Add((match.Groups[1].Value, match.Groups[2].Value.Trim(), match.Groups[4].Value.Replace("\\", "")));
+
+            match = match.NextMatch();
+        }
+
+        return links;
+    }
+
+
+    static async Task<string> FlareSolverrGet(string url)
+    {
+        try
+        {
+            string payload = JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["cmd"] = "request.get",
+                ["url"] = url,
+                ["maxTimeout"] = 90_000
+            });
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(100) };
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var responseMessage = await client.PostAsync("http://127.0.0.1:8191/v1", content);
+            string json = await responseMessage.Content.ReadAsStringAsync();
+            if (string.IsNullOrEmpty(json))
+                return null;
+
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("status", out var status) || !status.ValueEquals("ok"))
+                return null;
+
+            if (doc.RootElement.TryGetProperty("solution", out var solution) && solution.TryGetProperty("response", out var response))
+                return response.GetString();
+        }
+        catch { }
+
+        return null;
+    }
+
+    static bool IsCloudflareChallenge(string html)
+    {
+        return html.Contains("challenges.cloudflare.com", StringComparison.OrdinalIgnoreCase) ||
+               html.Contains("Just a moment", StringComparison.OrdinalIgnoreCase) ||
+               html.Contains("cf-browser-verification", StringComparison.OrdinalIgnoreCase);
+    }
 }

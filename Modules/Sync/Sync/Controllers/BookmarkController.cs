@@ -5,9 +5,12 @@ using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Attributes;
+using Shared.Models.Base;
 using Shared.Services;
 using Shared.Services.Pools;
-using Shared.Models.Base;
+using Shared.Services.Pools.Json;
+using SyncEvents;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -15,27 +18,23 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Web;
-using Shared.Services.Pools.Json;
-using SyncEvents;
 
 namespace Sync;
 
 public class BookmarkController : BaseController
 {
     #region bookmark.js
-    [HttpGet]
-    [AllowAnonymous]
+    [HttpGet, AllowAnonymous]
+    [Staticache(cacheMinutes: 10, always: true, setHeadersNoCache: true)]
     [Route("bookmark.js")]
     [Route("bookmark/js/{token}")]
     public ActionResult BookmarkJS(string token)
     {
-        SetHeadersNoCache();
-
         string plugin = FileCache.ReadAllText($"{ModInit.modpath}/plugins/bookmark.js", "bookmark.js")
             .Replace("{localhost}", host)
             .Replace("{token}", HttpUtility.UrlEncode(token));
 
-        return Content(plugin, "application/javascript; charset=utf-8");
+        return ContentTo(plugin, "application/javascript; charset=utf-8");
     }
     #endregion
 
@@ -83,7 +82,7 @@ public class BookmarkController : BaseController
         if (string.IsNullOrEmpty(requestInfo.user_uid))
             return JsonFailure();
 
-        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSize, leaveOpen: true))
+        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSizeStreamReader, leaveOpen: true))
         {
             string body = await reader.ReadToEndAsync();
             if (string.IsNullOrWhiteSpace(body))
@@ -605,7 +604,7 @@ public class BookmarkController : BaseController
         JToken token = null;
         var payloads = new List<EventPayload>();
 
-        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSize, leaveOpen: true))
+        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSizeStreamReader, leaveOpen: true))
         {
             try
             {

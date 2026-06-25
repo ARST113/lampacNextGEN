@@ -68,6 +68,8 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
             linkhost = "https://kodikres.com",
             auto_proxy = true,
             cdn_is_working = true,
+            rhub = false,
+            rhub_fallback = false,
             headers = HeadersModel.Init(("referer", "https://anilib.me/")).ToDictionary()
         });
     }

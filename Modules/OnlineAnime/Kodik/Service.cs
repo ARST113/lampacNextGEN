@@ -177,7 +177,7 @@ public struct KodikInvoke
             player_single = Rx.Match(iframe, "src=\"/(assets/js/app\\.player_[^\"]+\\.js)\"");
 
             ReadOnlySpan<char> playerSettings = Rx.Slice(iframe, "advertDebug", "preview-icons");
-            if (!playerSettings.IsEmpty)
+            if (playerSettings.IsEmpty)
                 return;
 
             string _frame = Regex.Replace(playerSettings.ToString(), "[\n\r\t ]+", "");
@@ -290,7 +290,7 @@ public struct KodikInvoke
     #endregion
 
     #region Tpl
-    public ITplResult Tpl(List<Result> results, string args, string imdb_id, long kinopoisk_id, string title, string original_title, int clarification, string pick, string kid, int s, bool rjson)
+    public ITplResult Tpl(List<Result> results, string args, string imdb_id, long kinopoisk_id, string title, string original_title, int clarification, string pick, string kid, short s, bool rjson)
     {
         if (results == null || results.Count == 0)
             return default;
@@ -404,7 +404,7 @@ public struct KodikInvoke
                     etpl.Append(
                         $"{episode.Key} серия",
                         title ?? original_title,
-                        sArhc,
+                        s,
                         episode.Key,
                         url,
                         "call",

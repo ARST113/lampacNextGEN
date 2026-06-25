@@ -1193,7 +1193,34 @@
       display: none !important;
     }
 
-    /* ── SIMPLE EDITOR ── */
+    /* ── VISUAL EDITOR ── */
+    .visual-intro {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--sp-3);
+      margin-bottom: var(--sp-5);
+    }
+
+    .visual-intro-card {
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      background: var(--surface);
+      padding: var(--sp-4);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .visual-intro-card strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: var(--text-sm);
+    }
+
+    .visual-intro-card span {
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+      line-height: 1.55;
+    }
+
     details.simple-key-block {
       border: 1px solid var(--border);
       border-radius: var(--r-xl);
@@ -1250,14 +1277,15 @@
 
     .simple-key-body {
       padding: var(--sp-4) var(--sp-5);
+      background: var(--surface-2);
     }
 
     .simple-fieldset {
-      border: 1px solid var(--border-subtle);
+      border: 1px solid var(--border);
       border-radius: var(--r-lg);
-      padding: var(--sp-3) var(--sp-4);
+      padding: var(--sp-3);
       margin-bottom: var(--sp-3);
-      background: var(--surface-2);
+      background: var(--surface);
     }
 
     .simple-fieldset>legend {
@@ -1267,12 +1295,35 @@
       color: var(--text);
     }
 
+    .simple-form-mount.visual-object-form {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--sp-3);
+    }
+
+    .simple-form-mount.visual-object-form>.simple-fieldset,
+    .simple-form-mount.visual-object-form>.simple-row-wide,
+    .simple-form-mount.visual-object-form>.simple-missing {
+      grid-column: 1 / -1;
+    }
+
     .simple-row {
       display: grid;
-      grid-template-columns: minmax(140px, 220px) 1fr;
+      grid-template-columns: minmax(150px, 240px) 1fr;
       gap: var(--sp-3);
       align-items: start;
       margin-bottom: var(--sp-3);
+    }
+
+    .simple-form-mount.visual-object-form>.simple-row {
+      grid-template-columns: 1fr;
+      gap: var(--sp-2);
+      margin-bottom: 0;
+      padding: var(--sp-3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
     }
 
     .simple-row label {
@@ -1281,6 +1332,37 @@
       padding-top: 8px;
       word-break: break-word;
       font-weight: 500;
+    }
+
+    .simple-form-mount.visual-object-form>.simple-row label {
+      padding-top: 0;
+    }
+
+    .simple-label-title {
+      display: block;
+      color: var(--text);
+      font-size: var(--text-sm);
+      font-weight: 700;
+      margin-bottom: 3px;
+    }
+
+    .simple-label-code {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .simple-label-help {
+      display: block;
+      margin-top: 5px;
+      color: var(--text-faint);
+      font-size: var(--text-xs);
+      line-height: 1.45;
     }
 
     .simple-row input[type="text"],
@@ -1306,13 +1388,66 @@
       display: flex;
       align-items: center;
       gap: var(--sp-2);
-      margin-top: 4px;
+      min-height: 34px;
     }
 
-    .simple-check input {
+    .simple-check>input[type="checkbox"] {
       width: 18px;
       height: 18px;
-      accent-color: var(--accent)
+      accent-color: var(--accent);
+    }
+
+    .simple-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-2);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .simple-toggle input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .simple-toggle-track {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    }
+
+    .simple-toggle-track::before {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+      transition: transform var(--dur) var(--ease);
+    }
+
+    .simple-toggle input:checked+.simple-toggle-track {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .simple-toggle input:checked+.simple-toggle-track::before {
+      transform: translateX(20px);
+    }
+
+    .simple-toggle-text {
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+      font-weight: 700;
     }
 
     textarea.simple-json {
@@ -1354,6 +1489,19 @@
       color: var(--text-faint);
       margin-top: 4px;
       font-family: var(--font-mono);
+    }
+
+    .simple-cur-hint strong {
+      color: var(--text-muted);
+      font-family: var(--font-body);
+      font-weight: 700;
+    }
+
+    @media (max-width: 1100px) {
+      .visual-intro,
+      .simple-form-mount.visual-object-form {
+        grid-template-columns: 1fr;
+      }
     }
 
     .hint {
@@ -1791,6 +1939,552 @@
       width: 40%
     }
 
+    /* ── PROFILES & PLUGINS ── */
+    .pp-shell {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-5);
+    }
+
+    .pp-header-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      flex-wrap: wrap;
+    }
+
+    .pp-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      background: var(--surface-2);
+      flex-wrap: wrap;
+    }
+
+    .pp-tab {
+      border: 0;
+      border-radius: var(--r-md);
+      background: transparent;
+      color: var(--text-muted);
+      font: inherit;
+      font-size: var(--text-xs);
+      font-weight: 700;
+      padding: 7px 12px;
+      cursor: pointer;
+      transition: all var(--dur) var(--ease);
+    }
+
+    .pp-tab:hover {
+      color: var(--text);
+      background: var(--surface-3);
+    }
+
+    .pp-tab.active {
+      color: var(--accent);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .pp-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: var(--text-xs);
+      font-weight: 700;
+      background: var(--surface-2);
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .pp-status.good {
+      color: var(--ok);
+      background: rgba(16, 185, 129, .11);
+    }
+
+    .pp-status.bad {
+      color: var(--danger);
+      background: rgba(239, 68, 68, .11);
+    }
+
+    .pp-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      margin-bottom: var(--sp-4);
+      flex-wrap: wrap;
+    }
+
+    .pp-search {
+      position: relative;
+      flex: 1;
+      min-width: 240px;
+      max-width: 460px;
+    }
+
+    .pp-search svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      width: 15px;
+      height: 15px;
+      transform: translateY(-50%);
+      color: var(--text-faint);
+      pointer-events: none;
+    }
+
+    .pp-search input,
+    .pp-field input,
+    .pp-field select,
+    .pp-field textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: var(--text-sm);
+      padding: 9px 11px;
+      transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+    }
+
+    .pp-search input {
+      padding-left: 36px;
+    }
+
+    .pp-search input:focus,
+    .pp-field input:focus,
+    .pp-field select:focus,
+    .pp-field textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    .pp-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--sp-4);
+    }
+
+    .pp-stat,
+    .pp-card,
+    .pp-plugin-row {
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .pp-stat {
+      padding: var(--sp-4);
+    }
+
+    .pp-stat-value {
+      font-size: 1.7rem;
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 4px;
+    }
+
+    .pp-stat-label,
+    .pp-sub {
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+    }
+
+    .pp-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--sp-4);
+    }
+
+    .pp-card {
+      padding: var(--sp-4);
+      min-height: 190px;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+
+    .pp-card.pp-module-card {
+      min-height: 128px;
+      gap: var(--sp-2);
+    }
+
+    .pp-module-card .pp-card-actions {
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .pp-module-card .pp-sub {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+
+    .pp-source-groups {
+      display: grid;
+      gap: var(--sp-4);
+    }
+
+    .pp-source-group {
+      display: grid;
+      gap: var(--sp-3);
+    }
+
+    .pp-source-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      flex-wrap: wrap;
+    }
+
+    .pp-source-head h3 {
+      margin: 0;
+      font-size: var(--text-base);
+      font-weight: 800;
+    }
+
+    .pp-source-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .pp-card.pp-source-card {
+      min-height: 138px;
+      gap: var(--sp-2);
+    }
+
+    .pp-source-card .pp-card-actions {
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .pp-source-card .pp-sub {
+      overflow-wrap: anywhere;
+    }
+
+    .pp-card.add {
+      border-style: dashed;
+      min-height: 150px;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .pp-card.add button {
+      width: 100%;
+      min-height: 110px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .pp-card-head,
+    .pp-card-actions,
+    .pp-identity,
+    .pp-chip-row {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--sp-2);
+    }
+
+    .pp-card-head {
+      justify-content: space-between;
+    }
+
+    .pp-card-actions,
+    .pp-chip-row {
+      flex-wrap: wrap;
+    }
+
+    .pp-card-actions {
+      margin-top: auto;
+    }
+
+    .pp-card-actions .btn {
+      min-width: 0;
+    }
+
+    .pp-card.is-updating {
+      opacity: .72;
+      pointer-events: none;
+    }
+
+    .pp-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--r-md);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      overflow: hidden;
+      background: var(--surface-3);
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .pp-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .pp-title {
+      min-width: 0;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .pp-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pp-badge.good {
+      color: var(--ok);
+      background: rgba(16, 185, 129, .11);
+    }
+
+    .pp-badge.bad {
+      color: var(--danger);
+      background: rgba(239, 68, 68, .11);
+    }
+
+    .pp-badge.gold {
+      color: #8a5b00;
+      background: rgba(245, 158, 11, .16);
+    }
+
+    .pp-badge.warn {
+      color: var(--warning);
+      background: rgba(245, 158, 11, .12);
+    }
+
+    .pp-detail-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+
+    .pp-plugin-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-4);
+      padding: var(--sp-4);
+    }
+
+    .pp-switch {
+      position: relative;
+      display: inline-flex;
+      width: 42px;
+      height: 24px;
+      flex: 0 0 auto;
+    }
+
+    .pp-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .pp-slider {
+      position: absolute;
+      inset: 0;
+      cursor: pointer;
+      border-radius: 999px;
+      background: var(--surface-3);
+      transition: background var(--dur) var(--ease);
+    }
+
+    .pp-slider::before {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      top: 3px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+      transition: transform var(--dur) var(--ease);
+    }
+
+    .pp-switch input:checked + .pp-slider {
+      background: var(--accent);
+    }
+
+    .pp-switch input:checked + .pp-slider::before {
+      transform: translateX(18px);
+    }
+
+    .pp-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--sp-4);
+    }
+
+    .pp-field.full {
+      grid-column: 1 / -1;
+    }
+
+    .pp-field label {
+      display: block;
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+      font-weight: 700;
+      margin-bottom: var(--sp-2);
+    }
+
+    .pp-upload-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      flex-wrap: wrap;
+    }
+
+    .pp-upload-row input[type="file"] {
+      flex: 1 1 260px;
+      min-width: 0;
+    }
+
+    .pp-checks {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: var(--sp-2);
+      background: var(--surface-2);
+    }
+
+    .pp-check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      padding: var(--sp-2);
+      border-radius: var(--r-sm);
+    }
+
+    .pp-check-row:hover {
+      background: var(--surface-3);
+    }
+
+    .pp-empty {
+      padding: var(--sp-6);
+      border: 1px dashed var(--border);
+      border-radius: var(--r-md);
+      color: var(--text-muted);
+      text-align: center;
+      background: var(--surface);
+    }
+
+    .pp-modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-4);
+      background: rgba(15, 23, 42, .52);
+      backdrop-filter: blur(4px);
+    }
+
+    .pp-modal-overlay.open {
+      display: flex;
+    }
+
+    .pp-modal {
+      width: min(760px, 100%);
+      max-height: min(860px, calc(100dvh - 32px));
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      background: var(--surface);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .pp-modal-head,
+    .pp-modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      padding: var(--sp-4);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .pp-modal-foot {
+      justify-content: flex-end;
+      border-top: 1px solid var(--border);
+      border-bottom: 0;
+    }
+
+    .pp-modal-body {
+      padding: var(--sp-4);
+    }
+
+    .pp-build-log {
+      margin: var(--sp-3) 0 0;
+      padding: var(--sp-3);
+      min-height: 96px;
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text-muted);
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 1100px) {
+      .pp-grid,
+      .pp-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .pp-grid,
+      .pp-stats,
+      .pp-form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .pp-plugin-row,
+      .pp-card-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+    }
+
     /* ── STATUS BAR ── */
     .status-bar {
       display: flex;
@@ -1814,7 +2508,380 @@
     .status-bar .spacer {
       flex: 1
     }
-  </style>
+
+/* ── ADMIN JS EDITOR TEST ── */
+.admin-js-editor {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 620px;
+}
+.admin-js-sidebar,
+.admin-js-main {
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  background: rgba(255,255,255,.035);
+  overflow: hidden;
+}
+.admin-js-sidebar-head,
+.admin-js-main-head {
+  padding: 14px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.admin-js-filter {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(0,0,0,.18);
+  color: inherit;
+  outline: none;
+}
+.admin-js-list {
+  padding: 10px;
+  max-height: 620px;
+  overflow: auto;
+}
+.admin-js-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 14px;
+  background: rgba(255,255,255,.045);
+  color: inherit;
+  padding: 10px 12px;
+  margin: 0 0 8px;
+  cursor: pointer;
+}
+.admin-js-item:hover,
+.admin-js-item.active {
+  background: rgba(255,255,255,.10);
+  border-color: rgba(255,255,255,.24);
+}
+.admin-js-item strong {
+  display: block;
+  font-size: 14px;
+}
+.admin-js-item small {
+  display: block;
+  margin-top: 4px;
+  opacity: .65;
+  font-size: 12px;
+  word-break: break-all;
+}
+.admin-js-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.admin-js-meta {
+  padding: 10px 14px;
+  opacity: .75;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  font-size: 13px;
+  word-break: break-all;
+}
+#adminJsCode {
+  display: block;
+  width: 100%;
+  min-height: 560px;
+  box-sizing: border-box;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  padding: 14px;
+  background: rgba(0,0,0,.28);
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.admin-js-state {
+  padding: 10px 14px;
+  min-height: 20px;
+  border-top: 1px solid rgba(255,255,255,.08);
+  opacity: .85;
+}
+.admin-js-state.ok {
+  color: #8be28b;
+}
+.admin-js-state.err {
+  color: #ff8f8f;
+}
+@media (max-width: 900px) {
+  .admin-js-editor {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ── ADMIN JS EDITOR VISUAL FIX v2 ── */
+
+:root {
+  --admin-js-bg: #f5f7fb;
+  --admin-js-card: #ffffff;
+  --admin-js-card-soft: #f7f9fc;
+  --admin-js-border: #d7dfec;
+  --admin-js-border-strong: #22c7d6;
+  --admin-js-text: #101828;
+  --admin-js-muted: #667085;
+  --admin-js-active-bg: #e8fbfd;
+  --admin-js-active-border: #22c7d6;
+  --admin-js-code-bg: #ffffff;
+  --admin-js-code-text: #101828;
+  --admin-js-code-border: #22c7d6;
+}
+
+html.dark,
+body.dark,
+[data-theme="dark"],
+.theme-dark {
+  --admin-js-bg: #0f141c;
+  --admin-js-card: #151b26;
+  --admin-js-card-soft: #1a2230;
+  --admin-js-border: #293447;
+  --admin-js-border-strong: #27d8e8;
+  --admin-js-text: #f4f7fb;
+  --admin-js-muted: #91a0b8;
+  --admin-js-active-bg: rgba(39, 216, 232, .13);
+  --admin-js-active-border: #27d8e8;
+  --admin-js-code-bg: #101722;
+  --admin-js-code-text: #eef5ff;
+  --admin-js-code-border: #27d8e8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --admin-js-bg: #0f141c;
+    --admin-js-card: #151b26;
+    --admin-js-card-soft: #1a2230;
+    --admin-js-border: #293447;
+    --admin-js-border-strong: #27d8e8;
+    --admin-js-text: #f4f7fb;
+    --admin-js-muted: #91a0b8;
+    --admin-js-active-bg: rgba(39, 216, 232, .13);
+    --admin-js-active-border: #27d8e8;
+    --admin-js-code-bg: #101722;
+    --admin-js-code-text: #eef5ff;
+    --admin-js-code-border: #27d8e8;
+  }
+}
+
+#panel-js-editor {
+  color: var(--admin-js-text);
+}
+
+#panel-js-editor .panel-head {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+#panel-js-editor .admin-js-editor {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 640px;
+}
+
+#panel-js-editor .admin-js-sidebar,
+#panel-js-editor .admin-js-main {
+  background: var(--admin-js-card);
+  border: 1px solid var(--admin-js-border);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+#panel-js-editor .admin-js-sidebar {
+  min-height: 640px;
+}
+
+#panel-js-editor .admin-js-sidebar-head,
+#panel-js-editor .admin-js-main-head {
+  background: var(--admin-js-card-soft);
+  border-bottom: 1px solid var(--admin-js-border);
+  padding: 14px;
+}
+
+#panel-js-editor .admin-js-filter {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  border: 1px solid var(--admin-js-border);
+  border-radius: 13px;
+  padding: 0 13px;
+  background: var(--admin-js-card);
+  color: var(--admin-js-text);
+  outline: none;
+}
+
+#panel-js-editor .admin-js-filter::placeholder {
+  color: var(--admin-js-muted);
+}
+
+#panel-js-editor .admin-js-filter:focus {
+  border-color: var(--admin-js-border-strong);
+  box-shadow: 0 0 0 2px rgba(34, 199, 214, .16);
+}
+
+#panel-js-editor .admin-js-list {
+  padding: 10px;
+  max-height: 610px;
+  overflow: auto;
+}
+
+#panel-js-editor .admin-js-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  border: 1px solid var(--admin-js-border);
+  border-radius: 14px;
+  background: var(--admin-js-card);
+  color: var(--admin-js-text);
+  padding: 11px 12px;
+  margin: 0 0 8px;
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, transform .12s ease, box-shadow .12s ease;
+}
+
+#panel-js-editor .admin-js-item:hover {
+  border-color: var(--admin-js-border-strong);
+  background: var(--admin-js-card-soft);
+}
+
+#panel-js-editor .admin-js-item.active {
+  background: var(--admin-js-active-bg);
+  border-color: var(--admin-js-active-border);
+  box-shadow: inset 3px 0 0 var(--admin-js-active-border);
+}
+
+#panel-js-editor .admin-js-item strong {
+  display: block;
+  color: var(--admin-js-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+#panel-js-editor .admin-js-item small {
+  display: block;
+  color: var(--admin-js-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 5px;
+  word-break: break-word;
+}
+
+#panel-js-editor .admin-js-main-head strong {
+  display: block;
+  color: var(--admin-js-text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#panel-js-editor .admin-js-meta {
+  background: var(--admin-js-card);
+  border-bottom: 1px solid var(--admin-js-border);
+  color: var(--admin-js-muted);
+  padding: 10px 14px;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+#panel-js-editor #adminJsCode {
+  display: block;
+  width: 100%;
+  min-height: 560px;
+  box-sizing: border-box;
+  border: 0;
+  border-top: 0;
+  outline: none;
+  resize: vertical;
+  padding: 16px;
+  background: var(--admin-js-code-bg);
+  color: var(--admin-js-code-text);
+  caret-color: var(--admin-js-border-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.48;
+  tab-size: 2;
+}
+
+#panel-js-editor #adminJsCode:focus {
+  box-shadow: inset 0 0 0 2px var(--admin-js-code-border);
+}
+
+#panel-js-editor .admin-js-state {
+  min-height: 20px;
+  padding: 10px 14px;
+  background: var(--admin-js-card-soft);
+  border-top: 1px solid var(--admin-js-border);
+  color: var(--admin-js-muted);
+  font-size: 13px;
+}
+
+#panel-js-editor .admin-js-state.ok {
+  color: #16a34a;
+}
+
+#panel-js-editor .admin-js-state.err {
+  color: #ef4444;
+}
+
+#panel-js-editor .admin-js-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  #panel-js-editor .admin-js-editor {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  #panel-js-editor .admin-js-sidebar {
+    min-height: 260px;
+  }
+
+  #panel-js-editor .admin-js-list {
+    max-height: 320px;
+  }
+
+  #panel-js-editor #adminJsCode {
+    min-height: 460px;
+    font-size: 12px;
+  }
+
+  #panel-js-editor .admin-js-toolbar {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  #panel-js-editor .admin-js-sidebar-head,
+  #panel-js-editor .admin-js-main-head,
+  #panel-js-editor .admin-js-meta,
+  #panel-js-editor .admin-js-state {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  #panel-js-editor .admin-js-item {
+    padding: 10px;
+  }
+
+  #panel-js-editor #adminJsCode {
+    padding: 12px;
+    min-height: 420px;
+  }
+}
+
+</style>
 </head>
 
 <body>
@@ -1865,7 +2932,7 @@
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
-            Редактор
+            Визуальные группы
           </button>
           <button type="button" class="tab" data-panel="init" role="tab">
             <svg style="width:12px;height:12px;margin-right:4px;vertical-align:-1px" viewBox="0 0 24 24" fill="none"
@@ -1883,7 +2950,7 @@
             </svg>
             current.conf
           </button>
-          <button type="button" class="tab" data-panel="users" role="tab">
+          <button type="button" class="tab" data-panel="profiles-plugins" role="tab">
             <svg style="width:12px;height:12px;margin-right:4px;vertical-align:-1px" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -1891,7 +2958,10 @@
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
-            users.json
+            Профили и плагины
+          </button>
+          <button type="button" class="tab" data-panel="js-editor" role="tab">
+            JS-редактор
           </button>
         </div>
 
@@ -1929,10 +2999,11 @@
       <!-- MOBILE TABS (visible < 900px) -->
       <div class="mobile-tabs" id="mobileTabs">
         <button type="button" class="tab active" data-panel="sections">Группы</button>
-        <button type="button" class="tab" data-panel="simple">Редактор</button>
+        <button type="button" class="tab" data-panel="simple">Визуально</button>
         <button type="button" class="tab" data-panel="init">init.conf</button>
         <button type="button" class="tab" data-panel="current">current</button>
-        <button type="button" class="tab" data-panel="users">users</button>
+        <button type="button" class="tab" data-panel="profiles-plugins">Профили/плагины</button>
+          <button type="button" class="tab" data-panel="js-editor">JS</button>
       </div>
     </div>
 
@@ -1973,7 +3044,7 @@
 
         <div id="sidebarSimpleNav" hidden>
           <div class="nav-section">
-            <div class="nav-h">Каталог групп</div>
+            <div class="nav-h">Визуальные группы</div>
             <div id="navCatalog"></div>
           </div>
           <div class="nav-section">
@@ -2039,13 +3110,26 @@
           </div>
         </div>
 
-        <!-- PANEL: Simple Editor -->
+        <!-- PANEL: Visual Groups -->
         <div class="panel" id="panel-simple" data-panel="simple">
           <div class="panel-header">
             <div class="panel-header-info">
-              <h2>Простой редактор</h2>
-              <p>Поля формы по структуре <code>current.conf</code> + <code>init.conf</code>. Значения берутся из init,
-                подсказки — из current. Массивы и вложенные объекты — JSON-блоки.</p>
+              <h2>Визуальные группы</h2>
+              <p>Настройки из <code>init.conf</code> в виде переключателей, чисел и обычных полей. Сложные значения остаются JSON-полями, а сохранение меняет нужную секцию в init.conf.</p>
+            </div>
+          </div>
+          <div class="visual-intro">
+            <div class="visual-intro-card">
+              <strong>Переключатели вместо true/false</strong>
+              <span>Включение источников, прокси и режимов меняется тумблером.</span>
+            </div>
+            <div class="visual-intro-card">
+              <strong>Поля вместо структурного JSON</strong>
+              <span>Порт, адреса, токены и таймауты редактируются отдельными строками.</span>
+            </div>
+            <div class="visual-intro-card">
+              <strong>JSON остаётся рядом</strong>
+              <span>Вкладки «Группы» и «init.conf» остаются технической базой и точкой контроля.</span>
             </div>
           </div>
           <div class="search-bar">
@@ -2053,7 +3137,7 @@
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input type="search" class="filter-input" id="keyFilterSimple" placeholder="Поиск по ключу..."
+            <input type="search" class="filter-input" id="keyFilterSimple" placeholder="Поиск настройки..."
               autocomplete="off" spellcheck="false">
             <button class="search-clear" id="keyFilterSimpleClear" type="button">&times;</button>
             <div class="filter-count" id="keyFilterSimpleCount"></div>
@@ -2176,6 +3260,67 @@
             </div>
           </div>
         </div>
+
+        <!-- PANEL: profiles and plugins -->
+        <div class="panel" id="panel-profiles-plugins" data-panel="profiles-plugins">
+          <div class="pp-shell">
+            <div class="panel-header">
+              <div class="panel-header-info">
+                <h2>Профили и плагины</h2>
+                <p id="ppMeta">Настройки профилей, плагинов и модулей.</p>
+              </div>
+              <div class="pp-header-actions">
+                <span class="pp-status" id="ppStatus">Lampac status</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="ppReloadBtn">Обновить</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ppRestartBtn">Перезапустить</button>
+              </div>
+            </div>
+            <div class="pp-tabs" role="tablist" aria-label="Профили и плагины">
+              <button type="button" class="pp-tab active" data-pp-view="profiles">Профили</button>
+              <button type="button" class="pp-tab" data-pp-view="plugins">Плагины</button>
+              <button type="button" class="pp-tab" data-pp-view="sources">Источники</button>
+              <button type="button" class="pp-tab" data-pp-view="modules">Модули</button>
+            </div>
+            <div id="profilesPluginsMount" aria-live="polite">
+              <div class="pp-empty">Загрузка...</div>
+            </div>
+          </div>
+        </div>
+
+
+<div class="panel" id="panel-js-editor" data-panel="js-editor">
+  <div class="panel-head">
+    <div>
+      <h2>JS-редактор</h2>
+      <p>Редактирование JS-плагинов через backend AdminPanel без перехода в legacy-версию.</p>
+    </div>
+    <div class="admin-js-toolbar">
+      <button type="button" class="btn btn-ghost btn-sm" id="adminJsReloadBtn">Обновить список</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="adminJsValidateBtn">Проверить JS</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="adminJsCopyBtn">Копировать</button>
+      <button type="button" class="btn btn-primary btn-sm" id="adminJsSaveBtn">Сохранить JS</button>
+    </div>
+  </div>
+
+  <div class="admin-js-editor">
+    <aside class="admin-js-sidebar">
+      <div class="admin-js-sidebar-head">
+        <input id="adminJsFilter" class="admin-js-filter" type="search" placeholder="Фильтр JS-файлов">
+      </div>
+      <div id="adminJsList" class="admin-js-list" aria-live="polite"></div>
+    </aside>
+
+    <section class="admin-js-main">
+      <div class="admin-js-main-head">
+        <strong id="adminJsTitle">Файл не выбран</strong>
+      </div>
+      <div id="adminJsMeta" class="admin-js-meta">Выберите JS-файл слева.</div>
+      <textarea id="adminJsCode" spellcheck="false" placeholder="Код выбранного JS-файла появится здесь"></textarea>
+      <div id="adminJsState" class="admin-js-state"></div>
+    </section>
+  </div>
+</div>
+
       </main>
     </div>
   </div>
@@ -2189,6 +3334,17 @@
         <button type="button" class="btn btn-ghost btn-sm" id="confirmCancel">Отмена</button>
         <button type="button" class="btn btn-primary btn-sm" id="confirmOk">Подтвердить</button>
       </div>
+    </div>
+  </div>
+
+  <div class="pp-modal-overlay" id="ppModal" aria-hidden="true">
+    <div class="pp-modal" role="dialog" aria-modal="true">
+      <div class="pp-modal-head">
+        <h3 id="ppModalTitle">Редактор</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="ppModalClose">Закрыть</button>
+      </div>
+      <div class="pp-modal-body" id="ppModalBody"></div>
+      <div class="pp-modal-foot" id="ppModalFoot"></div>
     </div>
   </div>
 
@@ -2249,6 +3405,928 @@
         return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
       }
 
+      const visualLabels = {
+        enable: 'Включить',
+        enabled: 'Включить',
+        disabled: 'Отключить',
+        port: 'Порт',
+        ip: 'IP-адрес',
+        scheme: 'Схема',
+        version: 'Версия',
+        compression: 'Compression',
+        sock: 'Socket',
+        host: 'Хост',
+        linkhost: 'Адрес сервиса',
+        localhost: 'Локальный режим',
+        secret_token: 'Секретный токен',
+        streamproxy: 'Stream proxy',
+        rchub: 'RC Hub',
+        rchub_fallback: 'RC Hub fallback',
+        spider: 'Spider',
+        kit: 'Kit',
+        reserve: 'Резерв',
+        apihost: 'API host',
+        apn: 'APN',
+        apnstream: 'APN stream',
+        cache_time: 'Время кэша',
+        client_type: 'Тип клиента',
+        cookie: 'Cookie',
+        corseu: 'CORS EU',
+        displayindex: 'Порядок показа',
+        timeout: 'Таймаут',
+        url: 'URL',
+        token: 'Токен',
+        login: 'Логин',
+        passwd: 'Пароль',
+        password: 'Пароль'
+      };
+
+      const visualHelp = {
+        enable: 'Основной переключатель секции или источника.',
+        enabled: 'Основной переключатель секции или источника.',
+        port: 'TCP-порт, на котором слушает Lampac.',
+        ip: 'Адрес интерфейса. Обычно any или 0.0.0.0.',
+        scheme: 'http или https, если секция это поддерживает.',
+        streamproxy: 'Проксировать поток через Lampac.',
+        rchub: 'Использовать RC Hub для источника.',
+        rchub_fallback: 'Пробовать fallback через RC Hub.',
+        secret_token: 'Секретное значение, не публикуйте его наружу.',
+        linkhost: 'Внешний адрес сервиса или API.',
+        cache_time: 'Время хранения результата в кэше.',
+        displayindex: 'Чем меньше число, тем выше элемент в списке.'
+      };
+
+      function visualTitleFromKey(key) {
+        if (visualLabels[key]) return visualLabels[key];
+        return String(key)
+          .replace(/[_-]+/g, ' ')
+          .replace(/([a-zа-яё])([A-ZА-ЯЁ])/g, '$1 $2')
+          .replace(/^./, c => c.toUpperCase());
+      }
+
+      function visualHelpForKey(key) {
+        return visualHelp[key] || '';
+      }
+
+      const ppState = {
+        view: 'profiles',
+        profiles: [],
+        plugins: [],
+        sources: [],
+        overview: null,
+        initConf: null,
+        currentConf: null,
+        status: null,
+        query: '',
+        selectedProfile: null
+      };
+
+      async function ppApi(path, opts) {
+        const options = Object.assign({ credentials: 'same-origin' }, opts || {});
+        if (options.body && !options.headers)
+          options.headers = { 'Content-Type': 'application/json' };
+        const res = await fetch(path, options);
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+        if (!res.ok) {
+          const msg = data && data.error ? data.error : ('HTTP ' + res.status);
+          throw new Error(msg + (data && data.detail ? ': ' + data.detail : ''));
+        }
+        return data;
+      }
+
+      function ppSetView(view) {
+        ppState.view = view;
+        ppState.selectedProfile = null;
+        ppState.query = '';
+        $$('.pp-tab').forEach(t => t.classList.toggle('active', t.dataset.ppView === view));
+        ppRender();
+      }
+
+      function ppUpdateStatus() {
+        const el = $('#ppStatus');
+        if (!el) return;
+        const active = ppState.status && String(ppState.status.active || '').trim() === 'active';
+        el.className = 'pp-status ' + (active ? 'good' : 'bad');
+        el.textContent = active ? 'Lampac active' : 'Lampac status unknown';
+      }
+
+      function ppBuiltinName(key) {
+        const names = {
+          backup: 'Backup',
+          bookmark: 'Bookmarks',
+          catalog: 'Catalog',
+          cubProxy: 'CUB Proxy',
+          dlna: 'DLNA',
+          dorama: 'Dorama',
+          jacred: 'JacRed',
+          online: 'Online',
+          pirate_store: 'Pirate Store',
+          sisi: 'SISI',
+          sync: 'Sync',
+          timecode: 'Timecode',
+          tmdbProxy: 'TMDB Proxy',
+          torrserver: 'TorrServer',
+          tracks: 'Tracks',
+          transcoding: 'Transcoding',
+          watch_together: 'Watch Together'
+        };
+        return names[key] || key;
+      }
+
+      function ppBuiltinId(key) {
+        return 'builtin:' + key;
+      }
+
+      function ppBuildBuiltinPlugins(initConf, currentConf) {
+        const initPlugins = (((initConf || {}).LampaWeb || {}).initPlugins) || {};
+        const currentPlugins = (((currentConf || {}).LampaWeb || {}).initPlugins) || {};
+        const keys = Array.from(new Set(Object.keys(currentPlugins).concat(Object.keys(initPlugins)))).sort();
+
+        return keys.map(key => {
+          const hasOverride = Object.prototype.hasOwnProperty.call(initPlugins, key);
+          const enabled = hasOverride ? !!initPlugins[key] : !!currentPlugins[key];
+          return {
+            id: ppBuiltinId(key),
+            key,
+            kind: 'builtin',
+            builtin: true,
+            profileSwitchable: false,
+            name: ppBuiltinName(key),
+            url: 'LampaWeb.initPlugins.' + key,
+            author: 'Lampac',
+            description: 'Стандартный плагин LampaWeb',
+            status: enabled ? 1 : 0,
+            enabled,
+            profiles: []
+          };
+        });
+      }
+
+      function ppMergePlugins(customPlugins, initConf, currentConf) {
+        const custom = (customPlugins || []).map(p => Object.assign({
+          kind: 'custom',
+          builtin: false,
+          profileSwitchable: true
+        }, p));
+
+        return ppBuildBuiltinPlugins(initConf, currentConf).concat(custom);
+      }
+
+      function ppNormalizePlugins(plugins) {
+        return (plugins || []).map(p => Object.assign({
+          kind: 'custom',
+          builtin: false,
+          profileSwitchable: true,
+          deletable: true
+        }, p));
+      }
+
+      async function ppRefreshPluginsSources() {
+        const [plugins, sources] = await Promise.all([
+          ppApi('/adminpanel/api/plugins'),
+          ppApi('/adminpanel/api/sources').catch(() => [])
+        ]);
+        ppState.plugins = ppNormalizePlugins(plugins);
+        ppState.sources = sources || [];
+        ppRender();
+      }
+
+      async function ppLoadAll() {
+        const [overview, profiles, plugins, sources, status, initConf, currentConf] = await Promise.all([
+          ppApi('/adminpanel/api/overview'),
+          ppApi('/adminpanel/api/profiles'),
+          ppApi('/adminpanel/api/plugins'),
+          ppApi('/adminpanel/api/sources').catch(() => []),
+          ppApi('/adminpanel/api/lampac/status').catch(() => null),
+          ppApi('/adminpanel/api/init').catch(() => null),
+          ppApi('/adminpanel/api/current').catch(() => null)
+        ]);
+        ppState.overview = overview || {};
+        ppState.profiles = profiles || [];
+        ppState.initConf = initConf || {};
+        ppState.currentConf = currentConf || {};
+        ppState.plugins = ppNormalizePlugins(plugins);
+        ppState.sources = sources || [];
+        ppState.status = status;
+        if (ppState.selectedProfile)
+          ppState.selectedProfile = ppState.profiles.find(p => p.id === ppState.selectedProfile.id) || null;
+        ppUpdateStatus();
+        ppRender();
+      }
+
+      function ppMetaText() {
+        if (ppState.selectedProfile) return 'Настройки профиля и переключатели плагинов';
+        if (ppState.view === 'profiles') return ppState.profiles.length + ' профилей';
+        if (ppState.view === 'plugins') return ppPluginItems().length + ' плагинов';
+        if (ppState.view === 'modules') return ppModuleItems().length + ' модулей';
+        if (ppState.view === 'sources') return ppSourceItems().length + ' источников';
+        const ov = ppState.overview || {};
+        return (ov.profiles || 0) + ' профилей, ' + (ov.plugins || 0) + ' плагинов';
+      }
+
+      function ppMainScroller() {
+        return $('main') || document.scrollingElement || document.documentElement;
+      }
+
+      function ppClampMainScroll() {
+        const scroller = ppMainScroller();
+        if (!scroller) return;
+        const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        if (scroller.scrollTop > max)
+          scroller.scrollTop = max;
+      }
+
+      function ppRender() {
+        const mount = $('#profilesPluginsMount');
+        if (!mount) return;
+        const meta = $('#ppMeta');
+        if (meta) meta.textContent = ppMetaText();
+        if (ppState.selectedProfile)
+          mount.innerHTML = ppRenderProfileDetail(ppState.selectedProfile);
+        else if (ppState.view === 'profiles')
+          mount.innerHTML = ppRenderProfiles();
+        else if (ppState.view === 'plugins')
+          mount.innerHTML = ppRenderPlugins();
+        else if (ppState.view === 'modules')
+          mount.innerHTML = ppRenderModules();
+        else if (ppState.view === 'sources')
+          mount.innerHTML = ppRenderSources();
+        else
+          mount.innerHTML = ppRenderOverview();
+        requestAnimationFrame(ppClampMainScroll);
+      }
+
+      function ppInitials(name) {
+        return String(name || '?').trim().slice(0, 2).toUpperCase();
+      }
+
+      function ppAvatar(profile) {
+        const value = profile.avatar || '';
+        if (/^https?:\/\//i.test(value))
+          return '<div class="pp-avatar"><img src="' + esc(value) + '" alt=""></div>';
+        return '<div class="pp-avatar">' + esc(value || ppInitials(profile.name || profile.id)) + '</div>';
+      }
+
+      function ppProfileName(id) {
+        const p = ppState.profiles.find(x => x.id === id);
+        return p ? (p.name || p.id) : id;
+      }
+
+      function ppPluginItems() {
+        return ppState.plugins.filter(p => p.kind !== 'module');
+      }
+
+      function ppModuleItems() {
+        return ppState.plugins.filter(p => p.kind === 'module');
+      }
+
+      function ppSourceItems() {
+        return (ppState.sources || []).slice().sort((a, b) => {
+          const ga = String(a.groupTitle || a.group || '');
+          const gb = String(b.groupTitle || b.group || '');
+          if (ga !== gb) return ga.localeCompare(gb, 'ru');
+          if (!!a.master !== !!b.master) return a.master ? -1 : 1;
+          return String(a.name || a.key || '').localeCompare(String(b.name || b.key || ''), 'ru');
+        });
+      }
+
+      function ppPluginEnabledForProfile(profile, plugin) {
+        if (!plugin.profileSwitchable) return false;
+        if (!plugin.enabled) return false;
+        if (!profile.pluginMap || !(plugin.id in profile.pluginMap)) return true;
+        return !!profile.pluginMap[plugin.id];
+      }
+
+      function ppRenderOverview() {
+        const ov = ppState.overview || {};
+        return [
+          '<div class="pp-stats">',
+          '<div class="pp-stat"><div class="pp-stat-value">' + (ov.profiles || 0) + '</div><div class="pp-stat-label">Профили</div></div>',
+          '<div class="pp-stat"><div class="pp-stat-value">' + (ov.plugins || 0) + '</div><div class="pp-stat-label">Плагины</div></div>',
+          '<div class="pp-stat"><div class="pp-stat-value">' + (ov.activePlugins || 0) + '</div><div class="pp-stat-label">Глобально включены</div></div>',
+          '</div>',
+          '<div class="pp-toolbar">',
+          '<button class="btn btn-primary btn-sm" type="button" data-pp-action="view" data-view="profiles">Открыть профили</button>',
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-action="view" data-view="plugins">Открыть плагины</button>',
+          '</div>',
+          '<div class="pp-grid">',
+          ppState.profiles.slice(0, 4).map(ppProfileCard).join(''),
+          ppPluginItems().slice(0, 4).map(ppPluginCard).join(''),
+          '</div>'
+        ].join('');
+      }
+
+      function ppToolbar(placeholder, action, label) {
+        const button = action ? '<button class="btn btn-primary btn-sm" type="button" data-pp-action="' + action + '">' + esc(label) + '</button>' : '';
+        return [
+          '<div class="pp-toolbar">',
+          '<div class="pp-search">',
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>',
+          '<input id="ppQuery" type="search" placeholder="' + esc(placeholder) + '" value="' + esc(ppState.query) + '">',
+          '</div>',
+          button,
+          '</div>'
+        ].join('');
+      }
+
+      function ppRenderProfiles() {
+        const q = ppState.query.trim().toLowerCase();
+        const items = ppState.profiles.filter(p => !q || ((p.name || '') + ' ' + (p.id || '')).toLowerCase().includes(q));
+        return [
+          ppToolbar('Поиск профилей', 'new-profile', '+ Профиль'),
+          '<div class="pp-grid">',
+          '<article class="pp-card add"><button type="button" data-pp-action="new-profile"><strong>Создать профиль</strong><div class="pp-sub">Новая запись в users.json</div></button></article>',
+          items.length ? items.map(ppProfileCard).join('') : '<div class="pp-empty">Профили не найдены</div>',
+          '</div>'
+        ].join('');
+      }
+
+      function ppRenderPlugins() {
+        const q = ppState.query.trim().toLowerCase();
+        const items = ppPluginItems().filter(p => !q || ((p.name || '') + ' ' + (p.url || '') + ' ' + (p.key || '') + ' ' + (p.kind || '')).toLowerCase().includes(q));
+        return [
+          ppToolbar('Поиск плагинов', 'new-plugin', '+ Плагин'),
+          '<div class="pp-grid">',
+          '<article class="pp-card add"><button type="button" data-pp-action="new-plugin"><strong>Добавить плагин</strong><div class="pp-sub">URL онлайн-источника или расширения</div></button></article>',
+          items.length ? items.map(ppPluginCard).join('') : '<div class="pp-empty">Плагины не найдены</div>',
+          '</div>'
+        ].join('');
+      }
+
+      function ppRenderModules() {
+        const q = ppState.query.trim().toLowerCase();
+        const items = ppModuleItems().filter(p => !q || ((p.name || '') + ' ' + (p.url || '') + ' ' + (p.key || '')).toLowerCase().includes(q));
+        return [
+          ppToolbar('Поиск модулей', 'install-module', '+ Модуль'),
+          '<div class="pp-grid">',
+          items.length ? items.map(ppModuleRow).join('') : '<div class="pp-empty">Модули не найдены</div>',
+          '</div>'
+        ].join('');
+      }
+
+      function ppSourceGroupOrder() {
+        return ['anime', 'english', 'ukrainian', 'georgian', 'russian', 'paid'];
+      }
+
+      function ppSourceGroupTitle(key, items) {
+        const names = {
+          anime: 'Аниме',
+          english: 'Английские',
+          ukrainian: 'Украинские',
+          georgian: 'Грузинские',
+          russian: 'Русские',
+          paid: 'Платные'
+        };
+        const sample = (items || []).find(x => x.group === key && x.groupTitle);
+        return names[key] || (sample ? sample.groupTitle : key);
+      }
+
+      function ppSourceGroups(items) {
+        const map = new Map();
+        items.forEach(source => {
+          const key = source.group || 'other';
+          if (!map.has(key))
+            map.set(key, []);
+          map.get(key).push(source);
+        });
+        map.forEach(list => {
+          list.sort((a, b) => {
+            if (!!a.master !== !!b.master)
+              return a.master ? -1 : 1;
+            return String(a.name || a.key || '').localeCompare(String(b.name || b.key || ''), 'ru', { sensitivity: 'base' });
+          });
+        });
+        const order = ppSourceGroupOrder();
+        return order.filter(key => map.has(key))
+          .concat(Array.from(map.keys()).filter(key => !order.includes(key)).sort())
+          .map(key => ({ key, title: ppSourceGroupTitle(key, items), items: map.get(key) }));
+      }
+
+      function ppRenderSources() {
+        const q = ppState.query.trim().toLowerCase();
+        const items = ppSourceItems().filter(source => {
+          if (!q) return true;
+          const keys = Array.isArray(source.configKeys) ? source.configKeys.join(' ') : '';
+          return ((source.name || '') + ' ' + (source.key || '') + ' ' + (source.groupTitle || '') + ' ' + (source.moduleName || '') + ' ' + keys).toLowerCase().includes(q);
+        });
+        const groups = ppSourceGroups(items);
+        return [
+          ppToolbar('Поиск источников', '', ''),
+          groups.length ? '<div class="pp-source-groups">' + groups.map(group => [
+            '<section class="pp-source-group">',
+            '<div class="pp-source-head"><h3>' + esc(group.title) + '</h3><span class="pp-badge gold">' + group.items.length + ' источников</span></div>',
+            '<div class="pp-grid pp-source-grid">',
+            group.items.map(ppSourceCard).join(''),
+            '</div>',
+            '</section>'
+          ].join('')).join('') + '</div>' : '<div class="pp-empty">Источники не найдены</div>'
+        ].join('');
+      }
+
+      function ppSourceCard(source) {
+        const id = source.id || source.key || '';
+        const keys = Array.isArray(source.configKeys) ? source.configKeys.filter(Boolean) : [];
+        const sub = source.master
+          ? (keys.length ? 'Управляет: ' + keys.join(', ') : (source.moduleName || source.key || ''))
+          : (source.moduleName ? 'module/' + source.moduleName : (source.key || 'init.conf'));
+        return [
+          '<article class="pp-card pp-source-card">',
+          '<div class="pp-card-head">',
+          '<div style="min-width:0"><div class="pp-title">' + esc(source.name || source.key || id) + '</div><div class="pp-sub">' + esc(sub) + '</div></div>',
+          '<span class="pp-badge ' + (source.enabled ? 'good' : 'bad') + '">' + (source.enabled ? 'Включён' : 'Отключён') + '</span>',
+          '</div>',
+          '<div class="pp-chip-row"><span class="pp-badge">' + esc(source.groupTitle || source.group || '') + '</span><span class="pp-badge">' + (source.master ? 'Группа' : 'Источник') + '</span></div>',
+          '<div class="pp-card-actions">',
+          '<span class="pp-sub">' + esc(source.key || id) + '</span>',
+          '<label class="pp-switch"><input type="checkbox" data-source-toggle="' + esc(id) + '" ' + (source.enabled ? 'checked' : '') + '><span class="pp-slider"></span></label>',
+          '</div>',
+          '</article>'
+        ].join('');
+      }
+
+      function ppModuleRow(module) {
+        return [
+          '<article class="pp-card pp-module-card">',
+          '<div class="pp-card-head">',
+          '<div style="min-width:0"><div class="pp-title">' + esc(module.name || module.key || module.id) + '</div><div class="pp-sub">' + esc(module.url || module.key || '') + '</div></div>',
+          '</div>',
+          '<div class="pp-card-actions">',
+          '<span class="pp-badge ' + (module.enabled ? 'good' : 'bad') + '">' + (module.enabled ? 'Включен' : 'Отключен') + '</span>',
+          '<label class="pp-switch"><input type="checkbox" data-module-toggle="' + esc(module.id) + '" ' + (module.enabled ? 'checked' : '') + '><span class="pp-slider"></span></label>',
+          '</div>',
+          '</article>'
+        ].join('');
+      }
+
+      function ppProfileCard(profile) {
+        return [
+          '<article class="pp-card">',
+          '<div class="pp-card-head">',
+          '<div class="pp-identity">' + ppAvatar(profile) + '<div style="min-width:0"><div class="pp-title">' + esc(profile.name || profile.id) + '</div><div class="pp-sub">' + esc(profile.id) + '</div></div></div>',
+          '<span class="pp-badge ' + (profile.ban ? 'bad' : 'good') + '">' + (profile.ban ? 'Забанен' : 'Активен') + '</span>',
+          '</div>',
+          '<div class="pp-chip-row"><span class="pp-badge gold">' + (profile.activePlugins || 0) + ' плагинов</span><span class="pp-badge">' + (profile.idsCount || 0) + ' устройств</span></div>',
+          '<div class="pp-sub">До: ' + esc(profile.expires || 'не указано') + '</div>',
+          '<div class="pp-card-actions">',
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-action="open-profile" data-id="' + esc(profile.id) + '">Открыть</button>',
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-action="edit-profile" data-id="' + esc(profile.id) + '">Править</button>',
+          '<button class="btn btn-danger btn-sm" type="button" data-pp-action="delete-profile" data-id="' + esc(profile.id) + '">Удалить</button>',
+          '</div>',
+          '</article>'
+        ].join('');
+      }
+
+      function ppPluginCard(plugin) {
+        const isModule = plugin.kind === 'module';
+        const typeChip = isModule ? 'Модуль' : (plugin.builtin ? 'Стандартный' : 'Плагин');
+        const profileChips = plugin.profileSwitchable
+          ? (plugin.profiles || []).slice(0, 5).map(id => '<span class="pp-badge">' + esc(ppProfileName(id)) + '</span>').join('')
+          : '<span class="pp-badge">Глобальный</span>';
+        const more = plugin.profileSwitchable && plugin.profiles && plugin.profiles.length > 5 ? '<span class="pp-badge">+' + (plugin.profiles.length - 5) + '</span>' : '';
+        const chips = '<span class="pp-badge">' + typeChip + '</span>' + profileChips;
+        const urlText = plugin.url || (plugin.key || plugin.id);
+        const actions = [
+          plugin.editablePath ? '<button class="btn btn-primary btn-sm" type="button" data-pp-action="edit-plugin-js" data-id="' + esc(plugin.id) + '" title="Редактировать JS" aria-label="Редактировать JS">JS</button>' : '',
+          plugin.profileSwitchable ? '<button class="btn btn-ghost btn-sm" type="button" data-pp-action="edit-plugin" data-id="' + esc(plugin.id) + '">Править</button>' : '',
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-action="toggle-plugin" data-id="' + esc(plugin.id) + '">' + (plugin.enabled ? 'Отключить' : 'Включить') + '</button>',
+          plugin.deletable === false || plugin.builtin || isModule ? '' : '<button class="btn btn-danger btn-sm" type="button" data-pp-action="delete-plugin" data-id="' + esc(plugin.id) + '">Удалить</button>'
+        ].filter(Boolean).join('');
+        return [
+          '<article class="pp-card">',
+          '<div class="pp-card-head">',
+          '<div style="min-width:0"><div class="pp-title">' + esc(plugin.name) + '</div><div class="pp-sub">' + esc(urlText) + '</div></div>',
+          '<span class="pp-badge ' + (plugin.enabled ? 'good' : 'bad') + '">' + (plugin.enabled ? 'Включен' : 'Отключен') + '</span>',
+          '</div>',
+          '<div class="pp-chip-row">' + (chips || '<span class="pp-badge warn">Нет профилей</span>') + more + '</div>',
+          '<div class="pp-card-actions">',
+          actions,
+          '</div>',
+          '</article>'
+        ].join('');
+      }
+
+      function ppRenderProfileDetail(profile) {
+        return [
+          '<div class="pp-toolbar">',
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-action="view" data-view="profiles">Назад</button>',
+          '<button class="btn btn-primary btn-sm" type="button" data-pp-action="save-profile-plugins" data-id="' + esc(profile.id) + '">Сохранить плагины</button>',
+          '</div>',
+          '<div class="pp-detail-list">',
+          ppState.plugins.filter(plugin => plugin.profileSwitchable).map(plugin => [
+            '<div class="pp-plugin-row">',
+            '<div><strong>' + esc(plugin.name) + '</strong><div class="pp-sub">' + esc(plugin.url) + '</div></div>',
+            '<label class="pp-switch"><input type="checkbox" data-plugin-toggle="' + esc(plugin.id) + '" ' + (ppPluginEnabledForProfile(profile, plugin) ? 'checked' : '') + ' ' + (plugin.enabled ? '' : 'disabled') + '><span class="pp-slider"></span></label>',
+            '</div>'
+          ].join('')).join('') || '<div class="pp-empty">Плагины не добавлены</div>',
+          '</div>'
+        ].join('');
+      }
+
+      function ppProfileChecks(selected) {
+        const selectedSet = new Set(selected || []);
+        return ppState.profiles.map(p => [
+          '<label class="pp-check-row">',
+          '<span><strong>' + esc(p.name || p.id) + '</strong><span class="pp-sub"> ' + esc(p.id) + '</span></span>',
+          '<input type="checkbox" data-profile-check="' + esc(p.id) + '" ' + (selectedSet.has(p.id) ? 'checked' : '') + '>',
+          '</label>'
+        ].join('')).join('') || '<div class="pp-empty">Профили не добавлены</div>';
+      }
+
+      function ppOpenModal(title, body, foot) {
+        $('#ppModalTitle').textContent = title;
+        $('#ppModalBody').innerHTML = body;
+        $('#ppModalFoot').innerHTML = foot;
+        $('#ppModal').classList.add('open');
+        $('#ppModal').setAttribute('aria-hidden', 'false');
+      }
+
+      function ppCloseModal() {
+        $('#ppModal').classList.remove('open');
+        $('#ppModal').setAttribute('aria-hidden', 'true');
+      }
+
+      function ppOpenModuleInstallModal() {
+        ppOpenModal('Установить модуль', [
+          '<div class="pp-form-grid">',
+          '<div class="pp-field"><label>Название</label><input id="ppModuleName" placeholder="WatchTogether"></div>',
+          '<div class="pp-field"><label>Файл</label><input id="ppModuleFile" type="file" accept=".zip,.cs,.csproj,.json,.js,text/plain"></div>',
+          '<div class="pp-field full"><label>Редактор</label><textarea id="ppModuleContent" rows="12" spellcheck="false" placeholder="// FILE: MyModule.csproj&#10;&lt;Project Sdk=&quot;Microsoft.NET.Sdk&quot;&gt;...&#10;// FILE: ModInit.cs&#10;using Shared; ..."></textarea></div>',
+          '<div class="pp-field full"><label><input id="ppModuleRestart" type="checkbox" checked> Перезапустить Lampac после успешной установки</label></div>',
+          '<div class="pp-field full"><pre class="pp-build-log" id="ppModuleBuildLog">Готов к сборке</pre></div>',
+          '</div>'
+        ].join(''), [
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-modal-action="close">Отмена</button>',
+          '<button class="btn btn-primary btn-sm" type="button" data-pp-modal-action="install-module">Собрать и установить</button>'
+        ].join(''));
+      }
+
+      async function ppInstallModule() {
+        const name = ($('#ppModuleName')?.value || '').trim();
+        const content = $('#ppModuleContent')?.value || '';
+        const file = $('#ppModuleFile')?.files?.[0] || null;
+        const log = $('#ppModuleBuildLog');
+        if (!file && !content.trim()) {
+          showToast('Выберите файл модуля или вставьте код', 'err');
+          return;
+        }
+
+        const form = new FormData();
+        form.append('name', name);
+        form.append('content', content);
+        form.append('autoRestart', $('#ppModuleRestart')?.checked ? 'true' : 'false');
+        if (file)
+          form.append('file', file);
+
+        if (log)
+          log.textContent = 'Сборка модуля...';
+
+        const res = await fetch('/adminpanel/api/modules/install', {
+          method: 'POST',
+          body: form,
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { }
+        if (!data)
+          throw new Error(text || ('HTTP ' + res.status));
+
+        const output = data.output || data.detail || data.error || '';
+        if (log)
+          log.textContent = output || (data.ok ? 'Сборка успешна' : 'Ошибка сборки');
+
+        if (!res.ok || data.error || data.ok === false)
+          throw new Error(data.error || 'module compilation failed');
+
+        showToast('Модуль установлен' + (data.restarted ? ', Lampac перезапускается' : ''), 'ok');
+        setTimeout(() => ppLoadAll().catch(e => showToast(e.message || String(e), 'err')), data.restarted ? 9000 : 500);
+      }
+
+      function ppOpenProfileModal(id) {
+        const p = id ? ppState.profiles.find(x => x.id === id) : null;
+        const idsText = p && Array.isArray(p.ids) ? p.ids.join('\n') : (p ? p.id : '');
+        ppOpenModal(p ? 'Редактировать профиль' : 'Создать профиль', [
+          '<div class="pp-form-grid">',
+          '<div class="pp-field"><label>ID</label><input id="ppProfileId" value="' + esc(p ? p.id : '') + '" placeholder="profile-id"></div>',
+          '<div class="pp-field"><label>Имя</label><input id="ppProfileName" value="' + esc(p ? p.name || '' : '') + '"></div>',
+          '<div class="pp-field full"><label>UID / устройства</label><textarea id="ppProfileIds" rows="4" placeholder="по одному UID в строке">' + esc(idsText) + '</textarea></div>',
+          '<div class="pp-field"><label>Аватар или иконка</label><input id="ppProfileAvatar" value="' + esc(p ? p.avatar || '' : '') + '"></div>',
+          '<div class="pp-field"><label>Загрузить аватар</label><div class="pp-upload-row"><input id="ppProfileAvatarFile" type="file" accept=".png,.svg,image/png,image/svg+xml"><button class="btn btn-ghost btn-sm" type="button" id="ppProfileAvatarUploadBtn">Загрузить</button></div><div class="pp-sub" id="ppProfileAvatarUploadHint">PNG или безопасный SVG.</div></div>',
+          '<div class="pp-field"><label>Группа</label><input id="ppProfileGroup" type="number" value="' + esc(p ? p.group || 0 : 0) + '"></div>',
+          '<div class="pp-field"><label>Срок</label><input id="ppProfileExpires" value="' + esc(p ? p.expires || '' : '2099-12-31T23:59:59') + '"></div>',
+          '<div class="pp-field"><label>Статус</label><select id="ppProfileBan"><option value="false">Активен</option><option value="true" ' + (p && p.ban ? 'selected' : '') + '>Забанен</option></select></div>',
+          '</div>'
+        ].join(''), [
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-modal-action="close">Отмена</button>',
+          '<button class="btn btn-primary btn-sm" type="button" data-pp-modal-action="save-profile" data-id="' + esc(id || '') + '">Сохранить</button>'
+        ].join(''));
+        const avatarUploadBtn = $('#ppProfileAvatarUploadBtn');
+        const avatarFileInput = $('#ppProfileAvatarFile');
+        if (avatarUploadBtn)
+          avatarUploadBtn.addEventListener('click', () => ppUploadProfileAvatar().catch(e => showToast(e.message || String(e), 'err')));
+        if (avatarFileInput)
+          avatarFileInput.addEventListener('change', () => {
+            const hint = $('#ppProfileAvatarUploadHint');
+            if (hint && avatarFileInput.files && avatarFileInput.files[0])
+              hint.textContent = avatarFileInput.files[0].name;
+          });
+      }
+
+      async function ppSaveProfile(originalId) {
+        const payload = {
+          id: $('#ppProfileId').value.trim(),
+          name: $('#ppProfileName').value.trim(),
+          avatar: $('#ppProfileAvatar').value.trim(),
+          group: Number($('#ppProfileGroup').value || 0),
+          expires: $('#ppProfileExpires').value.trim(),
+          ban: $('#ppProfileBan').value === 'true'
+        };
+        payload.ids = ($('#ppProfileIds').value || '').split(/[\n,;]/).map(x => x.trim()).filter(Boolean);
+        if (!payload.id) {
+          showToast('Укажите ID профиля', 'err');
+          return;
+        }
+        if (!payload.ids.some(x => x.toLowerCase() === payload.id.toLowerCase()))
+          payload.ids.unshift(payload.id);
+        if (originalId)
+          await ppApi('/adminpanel/api/profiles/' + encodeURIComponent(originalId), { method: 'POST', body: JSON.stringify(payload) });
+        else
+          await ppApi('/adminpanel/api/profiles', { method: 'POST', body: JSON.stringify(payload) });
+        ppCloseModal();
+        await ppLoadAll();
+        showToast('Профиль сохранён', 'ok');
+      }
+
+      async function ppUploadProfileAvatar() {
+        const input = $('#ppProfileAvatarFile');
+        const hint = $('#ppProfileAvatarUploadHint');
+        if (!input || !input.files || !input.files[0]) {
+          showToast('Выберите PNG или SVG', 'err');
+          return;
+        }
+
+        const form = new FormData();
+        form.append('file', input.files[0]);
+        if (hint)
+          hint.textContent = 'Загружаю...';
+
+        const res = await fetch('/adminpanel/api/profiles/upload-avatar', {
+          method: 'POST',
+          body: form,
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { }
+        if (!res.ok || !data || data.error)
+          throw new Error((data && (data.error || data.detail)) || text || ('HTTP ' + res.status));
+
+        $('#ppProfileAvatar').value = data.url || '';
+        if (hint)
+          hint.textContent = 'Готово: ' + (data.url || data.fileName || '');
+        showToast('Аватар загружен', 'ok');
+      }
+
+      function ppOpenPluginModal(id) {
+        const p = id ? ppState.plugins.find(x => x.id === id) : null;
+        if (p && !p.profileSwitchable) {
+          showToast('Модуль можно включить или отключить кнопкой на карточке', 'err');
+          return;
+        }
+        const selectedProfiles = p ? (p.profiles || []) : ppState.profiles.map(x => x.id);
+        if (p && p.builtin) {
+          ppOpenModal('Профили плагина', [
+            '<div class="pp-form-grid">',
+            '<div class="pp-field full"><label>Плагин</label><input value="' + esc((p.name || '') + ' — ' + (p.url || '')) + '" disabled></div>',
+            '<div class="pp-field"><label>Статус</label><select id="ppPluginEnabled"><option value="true">Включен</option><option value="false" ' + (!p.enabled ? 'selected' : '') + '>Отключен</option></select></div>',
+            '<div class="pp-field full"><label>Профили</label><div class="pp-checks">' + ppProfileChecks(selectedProfiles) + '</div></div>',
+            '</div>'
+          ].join(''), [
+            '<button class="btn btn-ghost btn-sm" type="button" data-pp-modal-action="close">Отмена</button>',
+            '<button class="btn btn-primary btn-sm" type="button" data-pp-modal-action="save-plugin" data-id="' + esc(id || '') + '">Сохранить</button>'
+          ].join(''));
+          return;
+        }
+        ppOpenModal(p ? 'Редактировать плагин' : 'Добавить плагин', [
+          '<div class="pp-form-grid">',
+          '<div class="pp-field"><label>Название</label><input id="ppPluginName" value="' + esc(p ? p.name || '' : '') + '"></div>',
+          '<div class="pp-field"><label>Автор</label><input id="ppPluginAuthor" value="' + esc(p ? p.author || 'admin' : 'admin') + '"></div>',
+          '<div class="pp-field full"><label>URL</label><input id="ppPluginUrl" value="' + esc(p ? p.url || '' : '') + '" placeholder="https://example.com/plugin.js"></div>',
+          '<div class="pp-field full"><label>JS-файл</label><input id="ppPluginFile" type="file" accept=".js,text/javascript,application/javascript"><div class="pp-sub" id="ppPluginUploadHint">Выберите файл, и плагин добавится автоматически.</div></div>',
+          '<div class="pp-field full"><label>Описание</label><input id="ppPluginDescription" value="' + esc(p ? p.description || '' : '') + '"></div>',
+          '<div class="pp-field"><label>Статус</label><select id="ppPluginEnabled"><option value="true">Включен</option><option value="false" ' + (p && !p.enabled ? 'selected' : '') + '>Отключен</option></select></div>',
+          '<div class="pp-field full"><label>Профили</label><div class="pp-checks">' + ppProfileChecks(selectedProfiles) + '</div></div>',
+          '</div>'
+        ].join(''), [
+          '<button class="btn btn-ghost btn-sm" type="button" data-pp-modal-action="close">Отмена</button>',
+          '<button class="btn btn-primary btn-sm" type="button" data-pp-modal-action="save-plugin" data-id="' + esc(id || '') + '">Сохранить</button>'
+        ].join(''));
+        const fileInput = $('#ppPluginFile');
+        if (fileInput)
+          fileInput.addEventListener('change', () => ppUploadPluginFile(id).catch(e => showToast(e.message || String(e), 'err')));
+      }
+
+      async function ppUploadPluginFile(id) {
+        const input = $('#ppPluginFile');
+        const hint = $('#ppPluginUploadHint');
+        if (!input || !input.files || !input.files[0]) {
+          showToast('Выберите JS-файл', 'err');
+          return;
+        }
+
+        const form = new FormData();
+        form.append('file', input.files[0]);
+        if (hint)
+          hint.textContent = 'Проверяю и загружаю...';
+
+        const res = await fetch('/adminpanel/api/plugins/upload-js', {
+          method: 'POST',
+          body: form,
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { }
+        if (!res.ok || !data || data.error)
+          throw new Error((data && (data.error || data.detail)) || text || ('HTTP ' + res.status));
+
+        const uploadedUrl = data.url || (data.path ? '/' + String(data.path).replace(/\\\\/g, '/').replace(/^wwwroot\//, '') : '');
+        if (!uploadedUrl)
+          throw new Error('Сервер загрузил файл, но не вернул URL');
+
+        const urlInput = $('#ppPluginUrl');
+        const nameInput = $('#ppPluginName');
+        const descrInput = $('#ppPluginDescription');
+
+        if (urlInput) {
+          urlInput.value = uploadedUrl;
+          urlInput.setAttribute('value', uploadedUrl);
+          urlInput.dispatchEvent(new Event('input', { bubbles: true }));
+          urlInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        if (nameInput && !nameInput.value.trim()) {
+          nameInput.value = data.name || data.fileName || 'plugin';
+          nameInput.setAttribute('value', nameInput.value);
+        }
+        if (descrInput && !descrInput.value.trim()) {
+          descrInput.value = 'Загружен через админку';
+          descrInput.setAttribute('value', descrInput.value);
+        }
+        const profiles = $$('[data-profile-check]:checked', $('#ppModalBody')).map(x => x.dataset.profileCheck);
+        const payload = {
+          name: nameInput && nameInput.value.trim() ? nameInput.value.trim() : (data.name || data.fileName || 'plugin'),
+          author: $('#ppPluginAuthor') && $('#ppPluginAuthor').value.trim() ? $('#ppPluginAuthor').value.trim() : 'admin',
+          url: uploadedUrl,
+          description: descrInput && descrInput.value.trim() ? descrInput.value.trim() : 'Загружен через админку',
+          enabled: $('#ppPluginEnabled') ? $('#ppPluginEnabled').value === 'true' : true,
+          profiles
+        };
+
+        if (hint)
+          hint.textContent = 'Сохраняю плагин...';
+
+        if (id)
+          await ppApi('/adminpanel/api/plugins/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify(payload) });
+        else
+          await ppApi('/adminpanel/api/plugins', { method: 'POST', body: JSON.stringify(payload) });
+
+        ppCloseModal();
+        await ppLoadAll();
+        showToast('JS-плагин загружен и добавлен', 'ok');
+      }
+
+      async function ppOpenPluginJs(id) {
+        const plugin = ppState.plugins.find(x => x.id === id);
+        if (!plugin || !plugin.editablePath) {
+          showToast('У этого плагина нет локального JS-файла для редактирования', 'err');
+          return;
+        }
+
+        switchPanel('js-editor');
+        if (window.adminJsOpenFile)
+          await window.adminJsOpenFile(plugin.editablePath);
+        else
+          showToast('JS-редактор ещё загружается', 'err');
+      }
+
+      async function ppSavePlugin(id) {
+        const current = id ? ppState.plugins.find(x => x.id === id) : null;
+        const profiles = $$('[data-profile-check]:checked', $('#ppModalBody')).map(x => x.dataset.profileCheck);
+        if (current && current.builtin) {
+          await ppApi('/adminpanel/api/plugins/' + encodeURIComponent(id), {
+            method: 'POST',
+            body: JSON.stringify({
+              enabled: $('#ppPluginEnabled').value === 'true',
+              profiles
+            })
+          });
+          ppCloseModal();
+          await ppLoadAll();
+          showToast('Профили плагина сохранены', 'ok');
+          return;
+        }
+        const payload = {
+          name: $('#ppPluginName').value.trim(),
+          author: $('#ppPluginAuthor').value.trim(),
+          url: $('#ppPluginUrl').value.trim(),
+          description: $('#ppPluginDescription').value.trim(),
+          enabled: $('#ppPluginEnabled').value === 'true',
+          profiles
+        };
+        if (!payload.name || !payload.url) {
+          showToast('Укажите название и URL плагина', 'err');
+          return;
+        }
+        if (id)
+          await ppApi('/adminpanel/api/plugins/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify(payload) });
+        else
+          await ppApi('/adminpanel/api/plugins', { method: 'POST', body: JSON.stringify(payload) });
+        ppCloseModal();
+        await ppLoadAll();
+        showToast('Плагин сохранён', 'ok');
+      }
+
+      async function ppTogglePlugin(id) {
+        const p = ppState.plugins.find(x => x.id === id);
+        if (!p) return;
+        const nextEnabled = !p.enabled;
+        const payload = (p.builtin || p.kind === 'module') ? { enabled: nextEnabled } : Object.assign({}, p, { enabled: nextEnabled });
+        await ppApi('/adminpanel/api/plugins/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify(payload) });
+
+        p.enabled = nextEnabled;
+        p.status = nextEnabled ? 1 : 0;
+
+        const initPlugins = (((ppState.initConf || {}).LampaWeb || {}).initPlugins);
+        if ((p.builtin || p.kind === 'module') && initPlugins && p.key)
+          initPlugins[p.key] = nextEnabled;
+
+        ppRender();
+        showToast(p.kind === 'module' ? 'Статус модуля изменён' : 'Статус плагина изменён', 'ok');
+      }
+
+      async function ppToggleSource(id) {
+        const source = (ppState.sources || []).find(x => x.id === id || x.key === id);
+        if (!source) return;
+        const nextEnabled = !source.enabled;
+        await ppApi('/adminpanel/api/sources/' + encodeURIComponent(id), {
+          method: 'POST',
+          body: JSON.stringify({ enabled: nextEnabled })
+        });
+        await ppRefreshPluginsSources();
+        showToast(source.master ? 'Статус группы источников изменён' : 'Статус источника изменён', 'ok');
+      }
+
+      async function ppDeletePlugin(id) {
+        const p = ppState.plugins.find(x => x.id === id);
+        if (!p) return;
+        if (p.builtin || p.kind === 'module' || p.deletable === false) {
+          showToast('Эту запись нельзя удалить, только отключить', 'err');
+          return;
+        }
+        const ok = await showConfirm('Удалить плагин?', 'Плагин «' + (p.name || id) + '» будет удалён из init.conf.');
+        if (!ok) return;
+        await ppApi('/adminpanel/api/plugins/' + encodeURIComponent(id) + '/delete', { method: 'POST', body: '{}' });
+        await ppLoadAll();
+        showToast('Плагин удалён', 'ok');
+      }
+
+      async function ppDeleteProfile(id) {
+        const p = ppState.profiles.find(x => x.id === id);
+        if (!p) return;
+        const ok = await showConfirm('Удалить профиль?', 'Профиль «' + (p.name || id) + '» будет удалён из users.json.');
+        if (!ok) return;
+        await ppApi('/adminpanel/api/profiles/' + encodeURIComponent(id) + '/delete', { method: 'POST', body: '{}' });
+        await ppLoadAll();
+        showToast('Профиль удалён', 'ok');
+      }
+
+      function ppOpenProfileDetail(id) {
+        ppState.selectedProfile = ppState.profiles.find(p => p.id === id) || null;
+        ppRender();
+      }
+
+      async function ppSaveProfilePlugins(id) {
+        const enabled = $$('[data-plugin-toggle]:checked', $('#profilesPluginsMount')).map(x => x.dataset.pluginToggle);
+        await ppApi('/adminpanel/api/profiles/' + encodeURIComponent(id) + '/plugins', { method: 'POST', body: JSON.stringify(enabled) });
+        await ppLoadAll();
+        ppState.selectedProfile = ppState.profiles.find(p => p.id === id) || null;
+        ppRender();
+        showToast('Плагины профиля сохранены', 'ok');
+      }
+
+      async function ppRestartLampac() {
+        const ok = await showConfirm('Перезапустить Lampac?', 'Будет выполнен перезапуск lampac.service.');
+        if (!ok) return;
+        await ppApi('/adminpanel/api/lampac/restart', { method: 'POST', body: '{}' });
+        showToast('Перезапуск запланирован', 'ok');
+        setTimeout(() => ppLoadAll().catch(e => showToast(e.message || String(e), 'err')), 9000);
+      }
+
       /* ── Theme (same key as /stats/dashboard.html + /weblog/weblog.html) ── */
       const LAMPAC_THEME_STORAGE_KEY = 'lampac-theme';
 
@@ -2298,7 +4376,7 @@
           } else if (id === 'sections') {
             sj.hidden = false;
             ss.hidden = true;
-          } else if (id === 'users') {
+          } else if (id === 'users' || id === 'profiles-plugins') {
             sj.hidden = true;
             ss.hidden = true;
           } else {
@@ -2306,6 +4384,8 @@
             ss.hidden = true;
           }
         }
+        if (id === 'profiles-plugins' && !ppState.overview)
+          ppLoadAll().catch(e => showToast(e.message || String(e), 'err'));
       }
 
       function activePanelId() {
@@ -3009,21 +5089,37 @@
         if (sk === 'bool') {
           const wrap = document.createElement('div');
           wrap.className = 'simple-check';
+          const toggle = document.createElement('label');
+          toggle.className = 'simple-toggle';
           const inp = document.createElement('input');
           inp.type = 'checkbox';
           inp.checked = spec.init === true;
           inp.dataset.scalarKind = 'bool';
           if (isRoot) inp.dataset.formRootScalar = '1';
           else inp.dataset.formPath = spec.path;
-          wrap.appendChild(inp);
+          const track = document.createElement('span');
+          track.className = 'simple-toggle-track';
+          const text = document.createElement('span');
+          text.className = 'simple-toggle-text';
+          const syncText = () => { text.textContent = inp.checked ? 'Включено' : 'Выключено'; };
+          inp.addEventListener('change', syncText);
+          syncText();
+          toggle.appendChild(inp);
+          toggle.appendChild(track);
+          toggle.appendChild(text);
+          wrap.appendChild(toggle);
           return wrap;
         }
         const inp = document.createElement('input');
-        inp.type = 'text';
+        inp.type = sk === 'num' ? 'number' : 'text';
         inp.dataset.scalarKind = sk === 'num' ? 'num' : 'str';
+        if (sk === 'num') {
+          inp.step = 'any';
+          inp.inputMode = 'decimal';
+        }
         if (spec.init !== undefined && spec.init !== null) inp.value = String(spec.init);
         if (spec.init === null) inp.placeholder = 'null';
-        else if (spec.current !== undefined) inp.placeholder = 'current: ' + formatHintValue(spec.current);
+        else if (spec.current !== undefined) inp.placeholder = formatHintValue(spec.current);
         if (isRoot) inp.dataset.formRootScalar = '1';
         else inp.dataset.formPath = spec.path;
         if (sk === 'num') inp.dataset.scalarKind = 'num';
@@ -3034,13 +5130,27 @@
         const row = document.createElement('div');
         row.className = 'simple-row';
         const lab = document.createElement('label');
-        lab.textContent = labelText;
+        const title = document.createElement('span');
+        title.className = 'simple-label-title';
+        title.textContent = visualTitleFromKey(labelText);
+        const code = document.createElement('span');
+        code.className = 'simple-label-code';
+        code.textContent = labelText;
+        lab.appendChild(title);
+        lab.appendChild(code);
+        const help = visualHelpForKey(labelText);
+        if (help) {
+          const h = document.createElement('span');
+          h.className = 'simple-label-help';
+          h.textContent = help;
+          lab.appendChild(h);
+        }
         const cell = document.createElement('div');
         cell.appendChild(makeScalarControl(spec, false));
         if (spec.current !== undefined) {
           const hint = document.createElement('div');
           hint.className = 'simple-cur-hint';
-          hint.textContent = 'current: ' + formatHintValue(spec.current);
+          hint.innerHTML = '<strong>Сейчас:</strong> ' + esc(formatHintValue(spec.current));
           cell.appendChild(hint);
         }
         row.appendChild(lab);
@@ -3050,10 +5160,10 @@
 
       function renderJsonBlock(spec, labelText) {
         const wrap = document.createElement('div');
-        wrap.className = 'simple-row';
+        wrap.className = 'simple-row simple-row-wide';
         wrap.style.display = 'block';
         const lab = document.createElement('label');
-        lab.textContent = labelText + ' (JSON)';
+        lab.innerHTML = '<span class="simple-label-title">' + esc(visualTitleFromKey(labelText)) + '</span><span class="simple-label-code">' + esc(labelText) + '</span><span class="simple-label-help">Сложная структура: пока редактируется как JSON.</span>';
         lab.style.display = 'block';
         lab.style.marginBottom = 'var(--sp-2)';
         const ta = document.createElement('textarea');
@@ -3068,7 +5178,7 @@
         if (spec.current !== undefined) {
           const h = document.createElement('div');
           h.className = 'simple-cur-hint';
-          h.textContent = 'Образец из current: ' + formatHintValue(spec.current);
+          h.innerHTML = '<strong>Сейчас:</strong> ' + esc(formatHintValue(spec.current));
           wrap.appendChild(h);
         }
         return wrap;
@@ -3105,6 +5215,7 @@
 
       function renderSimpleForm(mount, spec, sectionKey) {
         mount.innerHTML = '';
+        mount.classList.toggle('visual-object-form', spec.type === 'object');
         if (spec.type === 'missing') {
           const p = document.createElement('p');
           p.className = 'simple-missing';
@@ -3116,13 +5227,13 @@
           const row = document.createElement('div');
           row.className = 'simple-row';
           const lab = document.createElement('label');
-          lab.textContent = 'Значение («' + sectionKey + '»)';
+          lab.innerHTML = '<span class="simple-label-title">Значение</span><span class="simple-label-code">' + esc(sectionKey) + '</span>';
           const cell = document.createElement('div');
           cell.appendChild(makeScalarControl(spec, true));
           if (spec.current !== undefined) {
             const hint = document.createElement('div');
             hint.className = 'simple-cur-hint';
-            hint.textContent = 'current: ' + formatHintValue(spec.current);
+            hint.innerHTML = '<strong>Сейчас:</strong> ' + esc(formatHintValue(spec.current));
             cell.appendChild(hint);
           }
           row.appendChild(lab);
@@ -3132,7 +5243,7 @@
         }
         if (spec.type === 'json') {
           const lab = document.createElement('label');
-          lab.textContent = 'Секция (JSON)';
+          lab.innerHTML = '<span class="simple-label-title">Секция целиком</span><span class="simple-label-code">' + esc(sectionKey) + '</span><span class="simple-label-help">Сложная структура: пока редактируется как JSON.</span>';
           lab.style.display = 'block';
           lab.style.marginBottom = 'var(--sp-2)';
           lab.style.fontSize = 'var(--text-xs)';
@@ -3148,7 +5259,7 @@
           if (spec.current !== undefined) {
             const h = document.createElement('div');
             h.className = 'simple-cur-hint';
-            h.textContent = 'Образец из current: ' + formatHintValue(spec.current);
+            h.innerHTML = '<strong>Сейчас:</strong> ' + esc(formatHintValue(spec.current));
             mount.appendChild(h);
           }
           return;
@@ -3303,7 +5414,7 @@
           showToast(err, 'err');
           return;
         }
-        showToast('«' + key + '» сохранено (простой редактор)', 'ok');
+        showToast('«' + key + '» сохранено через визуальные группы', 'ok');
         await refresh();
       }
 
@@ -3368,6 +5479,10 @@
       async function saveActiveConfig() {
         if (activePanelId() === 'users')
           return saveUsersJson();
+        if (activePanelId() === 'profiles-plugins') {
+          showToast('На этой вкладке изменения сохраняются кнопками профиля или плагина', 'warn');
+          return;
+        }
         return saveFullInit();
       }
 
@@ -3392,6 +5507,7 @@
           renderCatalogNav();
           await loadConfigs();
           await loadUsersJson();
+          await ppLoadAll();
           renderSections();
           renderSimpleSections();
         } catch (e) {
@@ -3451,6 +5567,99 @@
       $('#usersFormFromJsonBtn').addEventListener('click', () => {
         usersRefreshFormFromTextarea();
         showToast('Форма обновлена из JSON', 'ok');
+      });
+
+      $('#ppReloadBtn').addEventListener('click', () => {
+        ppLoadAll().catch(e => showToast(e.message || String(e), 'err'));
+      });
+
+      $('#ppRestartBtn').addEventListener('click', () => {
+        ppRestartLampac().catch(e => showToast(e.message || String(e), 'err'));
+      });
+
+      $$('.pp-tab').forEach(btn => {
+        btn.addEventListener('click', () => ppSetView(btn.dataset.ppView));
+      });
+
+      $('#profilesPluginsMount').addEventListener('click', e => {
+        const btn = e.target.closest('[data-pp-action]');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const action = btn.dataset.ppAction;
+        const id = btn.dataset.id || '';
+        const card = btn.closest('.pp-card');
+        const run = async () => {
+          if ((action === 'toggle-plugin' || action === 'toggle-source') && card) {
+            card.classList.add('is-updating');
+            btn.disabled = true;
+          }
+          if (action === 'view') ppSetView(btn.dataset.view || 'overview');
+          else if (action === 'new-profile') ppOpenProfileModal('');
+          else if (action === 'edit-profile') ppOpenProfileModal(id);
+          else if (action === 'open-profile') ppOpenProfileDetail(id);
+          else if (action === 'delete-profile') await ppDeleteProfile(id);
+          else if (action === 'save-profile-plugins') await ppSaveProfilePlugins(id);
+          else if (action === 'new-plugin') ppOpenPluginModal('');
+          else if (action === 'install-module') ppOpenModuleInstallModal();
+          else if (action === 'edit-plugin') ppOpenPluginModal(id);
+          else if (action === 'edit-plugin-js') await ppOpenPluginJs(id);
+          else if (action === 'toggle-plugin') await ppTogglePlugin(id);
+          else if (action === 'toggle-source') await ppToggleSource(id);
+          else if (action === 'delete-plugin') await ppDeletePlugin(id);
+        };
+        run().catch(err => showToast(err.message || String(err), 'err')).finally(() => {
+          if (card) card.classList.remove('is-updating');
+          btn.disabled = false;
+          requestAnimationFrame(ppClampMainScroll);
+        });
+      });
+
+      $('#profilesPluginsMount').addEventListener('change', e => {
+        const input = e.target.closest('[data-module-toggle], [data-source-toggle]');
+        if (!input) return;
+        const card = input.closest('.pp-card');
+        if (card) card.classList.add('is-updating');
+        input.disabled = true;
+        const job = input.dataset.sourceToggle ? ppToggleSource(input.dataset.sourceToggle) : ppTogglePlugin(input.dataset.moduleToggle);
+        job.catch(err => {
+          showToast(err.message || String(err), 'err');
+          ppLoadAll().catch(() => {});
+        }).finally(() => {
+          if (card) card.classList.remove('is-updating');
+          input.disabled = false;
+          requestAnimationFrame(ppClampMainScroll);
+        });
+      });
+
+      $('#profilesPluginsMount').addEventListener('input', e => {
+        if (e.target.id !== 'ppQuery') return;
+        const pos = e.target.selectionStart;
+        ppState.query = e.target.value;
+        ppRender();
+        const next = $('#ppQuery');
+        if (next) {
+          next.focus();
+          try { next.setSelectionRange(pos, pos); } catch (err) { }
+        }
+      });
+
+      $('#ppModalClose').addEventListener('click', ppCloseModal);
+      $('#ppModal').addEventListener('click', e => {
+        if (e.target.id === 'ppModal') ppCloseModal();
+      });
+      $('#ppModalFoot').addEventListener('click', e => {
+        const btn = e.target.closest('[data-pp-modal-action]');
+        if (!btn) return;
+        const action = btn.dataset.ppModalAction;
+        const id = btn.dataset.id || '';
+        const run = async () => {
+          if (action === 'close') ppCloseModal();
+          else if (action === 'save-profile') await ppSaveProfile(id);
+          else if (action === 'save-plugin') await ppSavePlugin(id);
+          else if (action === 'install-module') await ppInstallModule();
+        };
+        run().catch(err => showToast(err.message || String(err), 'err'));
       });
 
       // Tabs (только верхняя полоса и мобильные — не внутренние вкладки users.json)
@@ -3523,6 +5732,7 @@
           renderCatalogNav();
           await loadConfigs();
           await loadUsersJson();
+          await ppLoadAll();
           renderSections();
           renderSimpleSections();
         } catch (e) {
@@ -3531,6 +5741,218 @@
       })();
     })();
   </script>
+
+<script>
+(function () {
+  'use strict';
+
+  const qs = (sel, root = document) => root.querySelector(sel);
+  const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  let adminJsFiles = [];
+  let adminJsSelectedPath = null;
+  let adminJsLoaded = false;
+
+  function adminJsSetState(text, kind) {
+    const el = qs('#adminJsState');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.remove('ok', 'err');
+    if (kind) el.classList.add(kind);
+  }
+
+  function adminJsEsc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  async function adminJsFetchJson(url, options) {
+    const res = await fetch(url, Object.assign({
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }, options || {}));
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      let msg = text || ('HTTP ' + res.status);
+      try {
+        const parsed = JSON.parse(text);
+        msg = parsed.error || parsed.message || msg;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+
+    return text ? JSON.parse(text) : null;
+  }
+
+  function adminJsNormalizeItem(item) {
+    if (typeof item === 'string') {
+      return { path: item, name: item.split('/').pop(), group: '' };
+    }
+
+    const path = item.path || item.file || item.id || item.url || '';
+    return {
+      path: path,
+      name: item.name || item.title || path.split('/').pop() || path,
+      group: item.group || item.source || item.root || item.scope || '',
+      url: item.url || item.publicUrl || '',
+      size: item.size,
+      modified: item.modified
+    };
+  }
+
+  function adminJsRenderList() {
+    const mount = qs('#adminJsList');
+    if (!mount) return;
+
+    const filter = (qs('#adminJsFilter')?.value || '').trim().toLowerCase();
+
+    const items = adminJsFiles
+      .map(adminJsNormalizeItem)
+      .filter(item => {
+        const hay = (item.path + ' ' + item.name + ' ' + item.group).toLowerCase();
+        return !filter || hay.includes(filter);
+      });
+
+    if (!items.length) {
+      mount.innerHTML = '<div class="admin-js-item"><strong>Файлы не найдены</strong><small>Проверьте /wwwroot, /plugins, /module</small></div>';
+      return;
+    }
+
+    mount.innerHTML = items.map(item => {
+      const active = item.path === adminJsSelectedPath ? ' active' : '';
+      return '<button type="button" class="admin-js-item' + active + '" data-js-path="' + adminJsEsc(item.path) + '">' +
+        '<strong>' + adminJsEsc(item.name) + '</strong>' +
+        '<small>' + adminJsEsc(item.url || item.path) + '</small>' +
+      '</button>';
+    }).join('');
+
+    qsa('[data-js-path]', mount).forEach(btn => {
+      btn.addEventListener('click', () => adminJsLoadFile(btn.getAttribute('data-js-path')));
+    });
+  }
+
+  async function adminJsLoadList() {
+    adminJsSetState('Загружаю список JS-файлов...', '');
+    const data = await adminJsFetchJson('/adminpanel/api/js-plugins');
+    adminJsFiles = Array.isArray(data) ? data : (data && Array.isArray(data.files) ? data.files : []);
+    adminJsLoaded = true;
+    adminJsRenderList();
+    adminJsSetState('Найдено JS-файлов: ' + adminJsFiles.length, adminJsFiles.length ? 'ok' : '');
+  }
+
+  async function adminJsLoadFile(path) {
+    if (!path) return;
+    adminJsSelectedPath = path;
+    adminJsSetState('Загружаю файл: ' + path, '');
+
+    const data = await adminJsFetchJson('/adminpanel/api/js-plugin?path=' + encodeURIComponent(path));
+    const content = data && typeof data.content === 'string' ? data.content : '';
+
+    const code = qs('#adminJsCode');
+    if (code) code.value = content;
+
+    const title = qs('#adminJsTitle');
+    if (title) title.textContent = data.path || path;
+
+    const meta = qs('#adminJsMeta');
+    if (meta) {
+      const parts = [];
+      if (data.size != null) parts.push('size: ' + data.size);
+      if (data.modified) parts.push('modified: ' + data.modified);
+      if (data.valid === false) parts.push('invalid: ' + (data.error || 'syntax error'));
+      meta.textContent = parts.length ? parts.join(' · ') : path;
+    }
+
+    adminJsRenderList();
+    adminJsSetState(data.valid === false ? ('JS содержит ошибку: ' + (data.error || 'syntax error')) : 'Файл загружен', data.valid === false ? 'err' : 'ok');
+  }
+
+  async function adminJsValidate() {
+    const content = qs('#adminJsCode')?.value || '';
+    adminJsSetState('Проверяю JS...', '');
+
+    const data = await adminJsFetchJson('/adminpanel/api/js-plugin/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+
+    if (data && data.ok) {
+      adminJsSetState('JavaScript синтаксис корректен.', 'ok');
+    } else {
+      adminJsSetState('Ошибка JS: ' + ((data && data.error) || 'invalid javascript'), 'err');
+    }
+  }
+
+  async function adminJsSave() {
+    if (!adminJsSelectedPath) {
+      adminJsSetState('Сначала выберите JS-файл слева.', 'err');
+      return;
+    }
+
+    const content = qs('#adminJsCode')?.value || '';
+
+    adminJsSetState('Сохраняю: ' + adminJsSelectedPath, '');
+
+    const data = await adminJsFetchJson('/adminpanel/api/js-plugin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: adminJsSelectedPath,
+        content: content
+      })
+    });
+
+    adminJsSetState('JS сохранён' + (data && data.backup ? '. Backup: ' + data.backup : ''), 'ok');
+
+    await adminJsLoadFile(adminJsSelectedPath);
+  }
+
+  window.adminJsOpenFile = async function (path) {
+    if (!path) return;
+    if (!adminJsLoaded)
+      await adminJsLoadList();
+    await adminJsLoadFile(path);
+  };
+
+  function adminJsBind() {
+    qs('#adminJsReloadBtn')?.addEventListener('click', () => adminJsLoadList().catch(e => adminJsSetState(e.message || String(e), 'err')));
+    qs('#adminJsValidateBtn')?.addEventListener('click', () => adminJsValidate().catch(e => adminJsSetState(e.message || String(e), 'err')));
+    qs('#adminJsSaveBtn')?.addEventListener('click', () => adminJsSave().catch(e => adminJsSetState(e.message || String(e), 'err')));
+    qs('#adminJsCopyBtn')?.addEventListener('click', () => {
+      const code = qs('#adminJsCode');
+      if (!code) return;
+      code.select();
+      document.execCommand('copy');
+      adminJsSetState('Код скопирован.', 'ok');
+    });
+    qs('#adminJsFilter')?.addEventListener('input', adminJsRenderList);
+
+    qsa('[data-panel="js-editor"]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        setTimeout(() => {
+          if (!adminJsLoaded) {
+            adminJsLoadList().catch(e => adminJsSetState(e.message || String(e), 'err'));
+          }
+        }, 50);
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', adminJsBind);
+  } else {
+    adminJsBind();
+  }
+})();
+</script>
+
 </body>
 
 </html>

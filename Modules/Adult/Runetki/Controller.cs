@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Shared;
 using Shared.Attributes;
 using Shared.Models.SISI.Base;
-using Shared.PlaywrightCore;
+using Shared.Services.HTTP;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -12,8 +12,7 @@ public class RunetkiController : BaseSisiController
 {
     public RunetkiController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("runetki")]
     async public Task<ActionResult> Index(string search, string sort, int pg = 1)
     {
@@ -42,9 +41,10 @@ public class RunetkiController : BaseSisiController
             {
                 var headers = httpHeaders(init);
 
-                string html = await PlaywrightBrowser.Get(init, init.cors(url, headers, requestInfo), headers, proxy_data);
-
-                playlists = RunetkiTo.Playlist(html, out total_pages);
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(url, headers, requestInfo), span =>
+                {
+                    playlists = RunetkiTo.Playlist(span, out total_pages);
+                }, headers, proxy_data);
             }
 
             if (playlists == null || playlists.Count == 0)

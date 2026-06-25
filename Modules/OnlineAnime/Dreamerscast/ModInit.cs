@@ -53,8 +53,9 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
         conf = ModuleInvoke.Init("Dreamerscast", new OnlinesSettings("Dreamerscast", "https://dreamerscast.com")
         {
             displayindex = 130,
-            rch_access = "apk",
+            rch_access = "apk,cors,web",
             stream_access = "apk,cors",
+            rhub = false,
             rchstreamproxy = "web"
         });
     }

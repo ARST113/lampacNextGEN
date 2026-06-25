@@ -16,10 +16,9 @@ public class MikaiController : BaseOnlineController
 {
     public MikaiController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/mikai")]
-    async public Task<ActionResult> Index(string title, string original_title, int year, int animeid = 0, int t = -1, bool rjson = false)
+    async public Task<ActionResult> Index(string title, string original_title, short year, int animeid = 0, short t = -1, bool rjson = false)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -132,7 +131,7 @@ public class MikaiController : BaseOnlineController
         var currentVoice = voices[t];
 
         var vtpl = new VoiceTpl(voices.Count);
-        for (int i = 0; i < voices.Count; i++)
+        for (short i = 0; i < voices.Count; i++)
         {
             vtpl.Append(
                 voices[i].title,

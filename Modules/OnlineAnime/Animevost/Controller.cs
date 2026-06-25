@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
@@ -17,10 +17,9 @@ public class AnimevostController : BaseOnlineController
 {
     public AnimevostController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/animevost")]
-    async public Task<ActionResult> Index(string title, int year, string uri, int s, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(string title, int year, string uri, short s, bool rjson = false, bool similar = false)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -156,7 +155,7 @@ public class AnimevostController : BaseOnlineController
                     etpl.Append(
                         l.episode,
                         title,
-                        s.ToString(),
+                        s,
                         Regex.Match(l.episode,
                         "^([0-9]+)").Groups[1].Value,
                         link,
@@ -172,7 +171,7 @@ public class AnimevostController : BaseOnlineController
     }
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/animevost/video")]
     async public Task<ActionResult> Video(int id, string title, bool play)
     {
@@ -186,11 +185,11 @@ public class AnimevostController : BaseOnlineController
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
 
             if (rch.IsNotSupport(out string rch_error))
                 return ShowError(rch_error);
@@ -226,13 +225,18 @@ public class AnimevostController : BaseOnlineController
 
         return OnResult(cache, () =>
         {
-            return VideoTpl.ToJson(
+            string json = VideoTpl.ToJson(
                 "play",
                 HostStreamProxy(cache.Value[0].l),
                 title,
                 vast: init.vast,
                 httpContext: HttpContext
             );
+
+            var root = Newtonsoft.Json.Linq.JObject.Parse(json);
+            root["translate"] = "AnimeVost";
+            root["voice_name"] = "AnimeVost";
+            return root.ToString(Newtonsoft.Json.Formatting.None);
         });
     }
     #endregion

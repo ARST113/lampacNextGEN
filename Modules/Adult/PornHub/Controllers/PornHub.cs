@@ -25,11 +25,8 @@ public class PornHubController : BaseSisiController
         };
     }
 
-    [HttpGet]
-    [Staticache(11)]
-    [Route("phub")]
-    [Route("phubgay")]
-    [Route("phubsml")]
+    [HttpGet, Staticache(11)]
+    [Route("phub"), Route("phubgay"), Route("phubsml")]
     async public Task<ActionResult> Index(string search, string model, string sort, int c, int pg = 1)
     {
         if (await IsRequestBlocked(rch: true, rch_keepalive: -1))
@@ -54,7 +51,7 @@ public class PornHubController : BaseSisiController
                     return OnError();
             }
 
-            entryCache = await hybridCache.EntryAsync(semaphoreKey, jsonType: jsonContext.PlaylistAndPage);
+            entryCache = await hybridCache.EntryAsync(semaphoreKey, jsonContext.PlaylistAndPage);
 
             // fallback cache
             if (!entryCache.success)
@@ -65,7 +62,7 @@ public class PornHubController : BaseSisiController
                 if (!next)
                 {
                     // user cache разделенный по ip
-                    entryCache = await hybridCache.EntryAsync(userKey, jsonType: jsonContext.PlaylistAndPage);
+                    entryCache = await hybridCache.EntryAsync(userKey, jsonContext.PlaylistAndPage);
                     if (entryCache.success)
                         StatiCacheDisabled = true;
 
@@ -125,10 +122,9 @@ public class PornHubController : BaseSisiController
     }
 
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("phub/vidosik")]
-    async public Task<ActionResult> Index(string vkey, bool related)
+    async public Task<ActionResult> Vidosik(string vkey, bool related)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;

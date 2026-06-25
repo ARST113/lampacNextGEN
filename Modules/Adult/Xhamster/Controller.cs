@@ -28,9 +28,7 @@ public class XhamsterController : BaseSisiController
 
     [HttpGet]
     [Staticache(11)]
-    [Route("xmr")]
-    [Route("xmrgay")]
-    [Route("xmrsml")]
+    [Route("xmr"), Route("xmrgay"), Route("xmrsml")]
     async public Task<ActionResult> Index(string search, string c, string q, string sort = "newest", int pg = 1)
     {
         if (await IsRequestBlocked(rch: true, rch_keepalive: -1))
@@ -56,7 +54,7 @@ public class XhamsterController : BaseSisiController
                     return OnError();
             }
 
-            entryCache = await hybridCache.EntryAsync(semaphoreKey, jsonType: jsonContext.ListPlaylistItem);
+            entryCache = await hybridCache.EntryAsync(semaphoreKey, jsonContext.ListPlaylistItem);
 
             // fallback cache
             if (!entryCache.success)
@@ -67,7 +65,7 @@ public class XhamsterController : BaseSisiController
                 if (!next)
                 {
                     // user cache разделенный по ip
-                    entryCache = await hybridCache.EntryAsync(userKey, jsonType: jsonContext.ListPlaylistItem);
+                    entryCache = await hybridCache.EntryAsync(userKey, jsonContext.ListPlaylistItem);
                     if (entryCache.success)
                         StatiCacheDisabled = true;
                     next = !entryCache.success;
@@ -119,10 +117,9 @@ public class XhamsterController : BaseSisiController
         );
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("xmr/vidosik")]
-    async public Task<ActionResult> Index(string uri, bool related)
+    async public Task<ActionResult> Vidosik(string uri, bool related)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;

@@ -1,0 +1,9 @@
+{
+  "enable": true,
+  "dynamic": true,
+  "tree": [
+    "DddSyncController.cs",
+    "DddSyncStore.cs",
+    "ModInit.cs"
+  ]
+}

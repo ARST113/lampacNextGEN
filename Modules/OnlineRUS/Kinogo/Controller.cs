@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Online.Settings;
 using Shared.Models.Templates;
 using Shared.PlaywrightCore;
+using Shared.Services.HTTP;
 using Shared.Services.RxEnumerate;
 using Shared.Services.Utilities;
 using System;
@@ -20,11 +22,11 @@ public class KinogoController : BaseOnlineController
 {
     public KinogoController() : base(ModInit.conf) { }
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/kinogo")]
-    async public Task<ActionResult> Index(string title, string original_title, int year, bool rjson, string href, bool similar, int s = -1, int t = -1)
+    async public Task<ActionResult> Index(string title, string original_title, short year, bool rjson, string href, bool similar, short s = -1, int t = -1)
     {
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
         #region search
@@ -36,11 +38,22 @@ public class KinogoController : BaseOnlineController
         reset_search:
             var search = await InvokeCacheResult<SearchModel>($"kinogo:search:{title}:{year}", TimeSpan.FromHours(4), async e =>
             {
-                string search = rch?.enable == true
-                    ? await rch.Get($"{init.host}/search/{title}")
-                    : await PlaywrightBrowser.Get(init, $"{init.host}/search/{title}", proxy: proxy_data);
+                SearchModel result = null;
 
-                var result = SearchResult(search, title, year);
+                if (rch?.enable == true)
+                {
+                    await rch.GetSpan($"{init.host}/search/{title}", html =>
+                    {
+                        result = SearchResult(html, title, year);
+                    });
+                }
+                else
+                {
+                    await PlaywrightHttp.GetSpan(init.plugin, $"{init.host}/search/{title}", html =>
+                    {
+                        result = SearchResult(html, title, year);
+                    }, proxy: proxy_data);
+                }
 
                 if (result == null)
                     return e.Fail("search-result", refresh_proxy: true);
@@ -71,21 +84,28 @@ public class KinogoController : BaseOnlineController
 
         var embed = await InvokeCacheResult<string>($"kinogo:{href}", TimeSpan.FromHours(4), async e =>
         {
-            string embedUrl = null;
+            string iframeUri = null;
             string targetHref = $"{init.host}/{href}";
 
-            string iframe = rch?.enable == true
-               ? await rch.Get(init.cors(targetHref))
-               : await PlaywrightBrowser.Get(init, init.cors(targetHref));
+            if (rch?.enable == true)
+            {
+                await rch.GetSpan(init.cors(targetHref), html =>
+                {
+                    iframeUri = Rx.Match(html, "<iframe [^>]+(?:data-src|src)=\"([^\"]+)\"");
+                });
+            }
+            else
+            {
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(targetHref), html =>
+                {
+                    iframeUri = Rx.Match(html, "<iframe [^>]+(?:data-src|src)=\"([^\"]+)\"");
+                });
+            }
 
-            if (iframe == null)
-                return e.Fail("iframe", refresh_proxy: true);
-
-            string iframeUri = Regex.Match(iframe, "<iframe [^>]+data-src=\"([^\"]+)\"").Groups[1].Value;
-            if (string.IsNullOrEmpty(iframeUri))
+            if (iframeUri == null)
                 return e.Fail("iframeUri", refresh_proxy: true);
 
-            embedUrl = iframeUri.StartsWith("//") ? $"https:{iframeUri}" : iframeUri;
+            string embedUrl = iframeUri.StartsWith("//") ? $"https:{iframeUri}" : iframeUri;
 
             if (string.IsNullOrEmpty(embedUrl))
                 return e.Fail("embedUrl", refresh_proxy: true);
@@ -105,18 +125,48 @@ public class KinogoController : BaseOnlineController
 
         var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"kinogo:{embed.Value}"), 20, async e =>
         {
+            string fileEncode = null;
+            string directFile = null;
             var embedHeaders = httpHeaders(init, HeadersModel.Init("referer", $"{init.host}/{href}"));
 
-            string embedHtml = rch?.enable == true
-                ? await rch.Get(init.cors(embed.Value), embedHeaders)
-                : await PlaywrightBrowser.Get(init, init.cors(embed.Value), headers: embedHeaders, proxy_data);
+            void parsePlayer(ReadOnlySpan<char> html)
+            {
+                fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
+                if (string.IsNullOrEmpty(fileEncode))
+                    fileEncode = Rx.Match(html, "file\\s*:\\s*['\"]([^'\"]+)");
 
-            if (embedHtml == null)
-                return e.Fail("embed");
+                if (!string.IsNullOrEmpty(fileEncode) && (fileEncode.Contains(".m3u8") || fileEncode.Contains(".mp4") || fileEncode.StartsWith("//") || fileEncode.StartsWith("http")))
+                    directFile = fileEncode.Replace("\\/", "/");
 
-            string fileEncode = Regex.Match(embedHtml, "\"file\":\"([^\"]+)\"").Groups[1].Value;
+                if (string.IsNullOrEmpty(directFile))
+                    directFile = Rx.Match(html, "(https?://[^\"'<>]+\\.(?:m3u8|mp4)[^\"'<>]*)")?.Replace("\\/", "/");
+            }
+
+            if (rch?.enable == true)
+            {
+                await rch.GetSpan(init.cors(embed.Value), html =>
+                {
+                    parsePlayer(html);
+                }, embedHeaders);
+            }
+            else
+            {
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(embed.Value), html =>
+                {
+                    parsePlayer(html);
+                }, headers: embedHeaders, proxy_data);
+            }
+
+            if (!string.IsNullOrEmpty(directFile))
+            {
+                if (directFile.StartsWith("//"))
+                    directFile = "https:" + directFile;
+
+                return e.Success(new List<PlaylistItem>() { new PlaylistItem() { title = "По умолчанию", file = directFile } });
+            }
+
             if (string.IsNullOrEmpty(fileEncode))
-                return e.Fail("fileEncode");
+                return e.Fail("fileEncode", refresh_proxy: true);
 
             string playlistJson = await DecodeFile(init, fileEncode);
             if (string.IsNullOrEmpty(playlistJson))
@@ -147,7 +197,7 @@ public class KinogoController : BaseOnlineController
 
 
     #region BuildResult
-    ITplResult BuildResult(List<PlaylistItem> playlist, string title, string original_title, int year, int s, int t, bool rjson, string href)
+    ITplResult BuildResult(List<PlaylistItem> playlist, string title, string original_title, short year, short s, int t, bool rjson, string href)
     {
         if (!string.IsNullOrEmpty(playlist.FirstOrDefault()?.file))
         {
@@ -282,7 +332,7 @@ public class KinogoController : BaseOnlineController
                     etpl.Append(
                         name,
                         title ?? original_title,
-                        s.ToString(),
+                        s,
                         Regex.Match(name, " ([0-9]+)$").Groups[1].Value,
                         HostStreamProxy(file),
                         subtitles: subtitles,
@@ -302,7 +352,11 @@ public class KinogoController : BaseOnlineController
         if (html.IsEmpty)
             return null;
 
-        var rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+        var rx = Rx.Matches("<div class=\"short-title2\">(.*?)<div class=\"short\">(.*?)(?=<div class=\"short-title2\">|<div class=\"navigation\">|</article>|</body>)", html, 0, RegexOptions.Singleline);
+
+        if (rx.Count == 0)
+            rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+
         if (rx.Count == 0)
             return null;
 
@@ -313,24 +367,34 @@ public class KinogoController : BaseOnlineController
 
         foreach (var row in rx.Rows())
         {
-            string href = row.Match("<a href=\"https?://[^/]+/([^\"#]+)");
+            string href = row.Match("<a[^>]+class=\"short-title\"[^>]+href=\"https?://[^/]+/([^\"#]+)");
+            if (string.IsNullOrEmpty(href))
+                href = row.Match("data-href=\"https?://[^/]+/([^\"#]+)");
+            if (string.IsNullOrEmpty(href))
+                href = row.Match("<a href=\"https?://[^/]+/([^\"#]+)");
             if (string.IsNullOrEmpty(href))
                 continue;
 
-            string name = row.Match("<h2>([^<]+)</h2>");
+            string name = row.Match("<a[^>]+class=\"short-title\"[^>]*>([^<]+)</a>");
+            if (string.IsNullOrEmpty(name))
+                name = row.Match("<h2>([^<]+)</h2>");
             if (string.IsNullOrEmpty(name))
                 continue;
 
-            string blockYear = row.Match("Год выпуска:</b><a[^>]*>([0-9]{4})");
+            string blockYear = row.Match("<span>Год выхода:</span>\\s*([0-9]{4})");
+            if (string.IsNullOrEmpty(blockYear))
+                blockYear = row.Match("Год выпуска:</b><a[^>]*>([0-9]{4})");
 
-            string img = row.Match("<img\\s+data-src=\"([^\"]+)\"");
-            if (!string.IsNullOrEmpty(img))
-                img = ModInit.conf.host + img;
+            string img = row.Match("<img[^>]+(?:data-src|src)=\"([^\"]+)\"");
+            if (!string.IsNullOrEmpty(img) && img.StartsWith("//"))
+                img = "https:" + img;
+            else if (!string.IsNullOrEmpty(img) && img.StartsWith("/"))
+                img = ModInit.conf.host.TrimEnd('/') + img;
 
             string uri = $"{host}/lite/kinogo?href={HttpUtility.UrlEncode(href)}";
             similar.Append(name, blockYear, string.Empty, uri, PosterApi.Size(img));
 
-            if (SearchNameTo.Contains(name, stitle) && blockYear == year.ToString())
+            if (SearchNameTo.Contains(name, stitle) && (year == 0 || blockYear == year.ToString()))
                 link = href;
         }
 

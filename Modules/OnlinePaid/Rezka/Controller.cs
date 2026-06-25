@@ -1,12 +1,15 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Shared;
+using Shared.Attributes;
+using Shared.Models;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.Services;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -66,9 +69,9 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
     }
 
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/rezka")]
-    async public Task<ActionResult> Index(string title, string original_title, int clarification, int year, int s = -1, string href = null, bool rjson = false, int serial = -1, bool similar = false, string source = null, string id = null)
+    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, byte clarification, short year, short s = -1, string href = null, bool rjson = false, short serial = -1, bool similar = false, string source = null, string id = null)
     {
         if (await IsRequestBlocked(rch: true, rch_check: false))
             return badInitMsg;
@@ -80,7 +83,7 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
         if (rch != null)
         {
             if (rch.IsNotConnected() || rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
 
             if (rch.enable)
             {
@@ -111,24 +114,56 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
 
         if (string.IsNullOrEmpty(href))
         {
-            var search = await InvokeCacheResult<SearchModel>($"rezka:search:{title}:{original_title}:{clarification}:{year}", 240, textJson: true, onget: async e =>
+            CacheResult<SearchModel> search;
+
+            string _kp = kinopoisk_id.ToString();
+
+            var matches = ModInit.database
+                ?.Where(e => (imdb_id != null && e.Value.imdb == imdb_id) || (_kp != "0" && e.Value.kp == _kp))
+                ?.ToList();
+
+            if (matches?.Count > 0)
             {
-                var content = await oninvk.Search(title, original_title, clarification, year);
-
-                if (content.IsError)
-                    return e.Fail(string.Empty, refresh_proxy: true);
-
-                if (content.IsEmpty)
+                var model = new SearchModel()
                 {
-                    if (rch.enable || content.content != null)
-                        return e.Fail(content.content ?? "content");
+                    similar = new List<SimilarModel>()
+                };
+
+                foreach (var entry in matches)
+                {
+                    model.similar.Add(new SimilarModel()
+                    {
+                        title = entry.Value.title,
+                        year = entry.Value.year,
+                        href = entry.Value.href,
+                        img = entry.Value.img
+                    });
                 }
 
-                return e.Success(content);
-            });
+                if (model.similar.Count == 1)
+                    model.href = model.similar[0].href;
 
-            if (search.ErrorMsg != null)
-                return ShowError(string.IsNullOrEmpty(search.ErrorMsg) ? "поиск не дал результатов" : search.ErrorMsg);
+                search = new CacheResult<SearchModel>()
+                {
+                    IsSuccess = true,
+                    Value = model
+                };
+            }
+            else
+            {
+                search = await InvokeCacheResult<SearchModel>($"rezka:search:{title}:{original_title}:{clarification}:{year}", 240, textJson: true, onget: async e =>
+                {
+                    var content = await oninvk.Search(title, original_title, clarification, year);
+
+                    if (content.IsError || content.IsEmpty)
+                        return e.Fail(content.content ?? string.Empty, refresh_proxy: true);
+
+                    return e.Success(content);
+                });
+            }
+
+            if (!search.IsSuccess)
+                return ShowError(search.ErrorMsg);
 
             if (similar || string.IsNullOrEmpty(search.Value?.href))
             {
@@ -166,7 +201,7 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
         }
         #endregion
 
-        var cache = await InvokeCacheResult($"rezka:{href}:{init.login}:{init.cookie}", 10,
+        var cache = await InvokeCacheResult(ipkey($"rezka:{href}:{init.login}:{init.cookie}"), 10,
             () => oninvk.Embed(href, search_uri),
             textJson: true
         );
@@ -181,9 +216,9 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
 
 
     #region Serial
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/rezka/serial")]
-    async public Task<ActionResult> Serial(string title, string original_title, string href, long id, int t, int s = -1, bool rjson = false)
+    async public Task<ActionResult> Serial(string title, string original_title, string href, long id, int t, short s = -1, bool rjson = false)
     {
         if (string.IsNullOrEmpty(href))
             return OnError();
@@ -191,7 +226,7 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
 
-        Episodes root = await InvokeCache($"rezka:view:serial:{id}:{t}", 20,
+        Episodes root = await InvokeCache(ipkey($"rezka:view:serial:{id}:{t}"), 20,
             () => oninvk.SerialEmbed(id, t),
             textJson: true
         );
@@ -199,7 +234,7 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
         if (root == null)
             return OnError();
 
-        var cache = await InvokeCache($"rezka:{href}:{init.login}:{init.cookie}", 20,
+        var cache = await InvokeCache(ipkey($"rezka:{href}:{init.login}:{init.cookie}"), 20,
             () => oninvk.Embed(href, null),
             textJson: true
         );
@@ -215,7 +250,7 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
     #endregion
 
     #region Movie
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/rezka/movie")]
     [Route("lite/rezka/movie.m3u8")]
     async public Task<ActionResult> Movie(string title, string original_title, string voice, long id, int t, int director = 0, int s = -1, int e = -1, string favs = null, bool play = false)
@@ -230,11 +265,11 @@ public class RezkaController : BaseOnlineController<RezkaSettings>
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
         }
 
         MovieModel md = null;

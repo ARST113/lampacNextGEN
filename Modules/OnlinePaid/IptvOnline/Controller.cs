@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.Services;
@@ -40,9 +41,9 @@ public class IptvOnlineController : BaseOnlineController
     }
     #endregion
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/iptvonline")]
-    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, int serial = -1, int s = -1, bool rjson = false)
+    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short serial = -1, short s = -1, bool rjson = false)
     {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
@@ -146,7 +147,6 @@ public class IptvOnlineController : BaseOnlineController
                 else
                 {
                     var etpl = new EpisodeTpl();
-                    string sArhc = s.ToString();
 
                     foreach (var episode in cache.Value["medias"].First(i => i.Value<int>("season") == s).Value<JArray>("episodes"))
                     {
@@ -160,8 +160,8 @@ public class IptvOnlineController : BaseOnlineController
                         etpl.Append(
                             name ?? $"{episode.Value<int>("episode")} серия",
                             title ?? original_title,
-                            sArhc,
-                            episode.Value<int>("episode").ToString(),
+                            s,
+                            episode.Value<short>("episode"),
                             stream,
                             vast: init.vast
                         );

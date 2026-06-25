@@ -18,10 +18,9 @@ public class HDVBController : BaseOnlineController
 {
     public HDVBController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/hdvb")]
-    async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, int t = -1, int s = -1, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, short t = -1, short s = -1, bool rjson = false, bool similar = false)
     {
         if (similar || kinopoisk_id == 0)
             return await RouteSpiderSearch(title, rjson);
@@ -102,7 +101,7 @@ public class HDVBController : BaseOnlineController
                 #region Перевод
                 var vtpl = new VoiceTpl();
 
-                for (int i = 0; i < data.Count; i++)
+                for (short i = 0; i < data.Count; i++)
                 {
                     if (data[i].serial_episodes?.FirstOrDefault(i => i.season_number == s) == null)
                         continue;
@@ -122,15 +121,15 @@ public class HDVBController : BaseOnlineController
                 string iframe = HttpUtility.UrlEncode(fixframe(init.host, data[t].iframe_url));
                 string translator = HttpUtility.UrlEncode(data[t].translator);
 
-                foreach (int episode in data[t].serial_episodes.FirstOrDefault(i => i.season_number == s).episodes ?? new List<int>())
+                foreach (short episode in data[t].serial_episodes.FirstOrDefault(i => i.season_number == s).episodes ?? new List<short>())
                 {
                     string link = $"{host}/lite/hdvb/serial?title={enc_title}&original_title={enc_original_title}&iframe={iframe}&t={translator}&s={s}&e={episode}";
 
                     etpl.Append(
                         $"{episode} серия",
                         title ?? original_title,
-                        s.ToString(),
-                        episode.ToString(),
+                        s,
+                        episode,
                         link,
                         "call",
                         streamlink: accsArgs($"{link.Replace("/serial", "/serial.m3u8")}&play=true")
@@ -145,7 +144,7 @@ public class HDVBController : BaseOnlineController
 
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/hdvb/video")]
     [Route("lite/hdvb/video.m3u8")]
     async public Task<ActionResult> Video(string iframe, string title, string original_title, bool play)
@@ -160,11 +159,11 @@ public class HDVBController : BaseOnlineController
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
 
             if (rch.IsNotSupport(out string rch_error))
                 return ShowError(rch_error);
@@ -262,7 +261,7 @@ public class HDVBController : BaseOnlineController
     #endregion
 
     #region Serial
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/hdvb/serial")]
     [Route("lite/hdvb/serial.m3u8")]
     async public Task<ActionResult> Serial(string iframe, string t, string s, string e, string title, string original_title, bool play)
@@ -277,11 +276,11 @@ public class HDVBController : BaseOnlineController
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
 
             if (rch.IsNotSupport(out string rch_error))
                 return ShowError(rch_error);
@@ -423,7 +422,7 @@ public class HDVBController : BaseOnlineController
     #endregion
 
     #region SpiderSearch
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/hdvb-search")]
     async public Task<ActionResult> RouteSpiderSearch(string title, bool rjson = false)
     {
@@ -476,25 +475,30 @@ public class HDVBController : BaseOnlineController
 
 
     #region search
-    async ValueTask<List<Video>> search(long kinopoisk_id)
+    ValueTask<List<Video>> search(long kinopoisk_id)
     {
         string memKey = $"hdvb:view:{kinopoisk_id}";
 
-        if (!hybridCache.TryGetValue(memKey, out List<Video> root))
+        if (hybridCache.TryGetValue(memKey, out List<Video> root))
+            return ValueTask.FromResult(root);
+
+        return searchAsync(memKey, kinopoisk_id);
+    }
+
+    async ValueTask<List<Video>> searchAsync(string memKey, long kinopoisk_id)
+    {
+        var newheaders = HeadersModel.Init(Http.defaultFullHeaders);
+        var root = await httpHydra.Get<List<Video>>($"{init.cors(init.apihost)}/api/videos.json?token={init.token}&id_kp={kinopoisk_id}", safety: true, newheaders: newheaders);
+
+        if (root == null)
         {
-            var newheaders = HeadersModel.Init(Http.defaultFullHeaders);
-            root = await httpHydra.Get<List<Video>>($"{init.cors(init.apihost)}/api/videos.json?token={init.token}&id_kp={kinopoisk_id}", safety: true, newheaders: newheaders);
-
-            if (root == null)
-            {
-                proxyManager?.Refresh();
-                return null;
-            }
-
-            proxyManager?.Success();
-
-            hybridCache.Set(memKey, root, TimeSpan.FromHours(4), inmemory: false);
+            proxyManager?.Refresh();
+            return null;
         }
+
+        proxyManager?.Success();
+
+        hybridCache.Set(memKey, root, TimeSpan.FromHours(4), inmemory: false);
 
         if (root.Count == 0)
             return null;
@@ -503,9 +507,6 @@ public class HDVBController : BaseOnlineController
     }
     #endregion
 
-
     static string fixframe(string _h, string iframe)
-    {
-        return Regex.Replace(iframe, "^https?://[^/]+", _h);
-    }
+        => Regex.Replace(iframe, "^https?://[^/]+", _h);
 }

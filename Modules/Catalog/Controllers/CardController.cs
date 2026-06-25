@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Shared.Attributes;
 using Shared.Models.Events;
-using Shared.PlaywrightCore;
+using Shared.Services.HTTP;
 using Shared.Services.Pools.Json;
 using System.Net.Http;
 
@@ -8,7 +9,7 @@ namespace Catalog;
 
 public class CardController : BaseController
 {
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("catalog/card")]
     public async Task<ActionResult> Index(string plugin, string uri, string type)
     {
@@ -58,7 +59,7 @@ public class CardController : BaseController
                 {
                     html = rch.enable
                         ? await rch.Get(url, headers, useDefaultHeaders: init.useDefaultHeaders)
-                        : init.priorityBrowser == "playwright" ? await PlaywrightBrowser.Get(init, url, headers, proxy.data, cookies: init.cookies)
+                        : init.priorityBrowser == "playwright" ? await PlaywrightHttp.Get(init, url, headers, proxy.data, cookies: init.cookies)
                         : await Http.Get(url, headers: headers, proxy: proxy.proxy, timeoutSeconds: init.timeout, httpversion: init.httpversion, useDefaultHeaders: init.useDefaultHeaders);
                 }
 

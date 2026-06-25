@@ -34,10 +34,9 @@ public class iRemuxController : BaseOnlineController
         };
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/remux")]
-    async public Task<ActionResult> Index(string title, string original_title, int year, string href, bool rjson = false)
+    async public Task<ActionResult> Index(string title, string original_title, short year, string href, bool rjson = false)
     {
         if (string.IsNullOrWhiteSpace(title ?? original_title) || year == 0)
             return OnError();
@@ -59,8 +58,7 @@ public class iRemuxController : BaseOnlineController
     }
 
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/remux/movie")]
     async public Task<ActionResult> Movie(string linkid, string quality, string title, string original_title)
     {
@@ -83,22 +81,27 @@ public class iRemuxController : BaseOnlineController
 
 
     #region getCookie
-    async static ValueTask<string> getCookie(BaseSettings init, IMemoryCache memoryCache)
+    static ValueTask<string> getCookie(BaseSettings init, IMemoryCache memoryCache)
     {
         if (!string.IsNullOrWhiteSpace(init.cookie))
-            return init.cookie.Trim();
+            return ValueTask.FromResult(init.cookie);
 
         if (string.IsNullOrWhiteSpace(init.login) || string.IsNullOrWhiteSpace(init.passwd))
-            return null;
+            return default;
 
         string keyCookie = $"{init.host}:{init.login}:{init.passwd}";
 
         if (authCookie.TryGetValue(keyCookie, out string _cook))
-            return _cook;
+            return ValueTask.FromResult(_cook);
 
         if (memoryCache.TryGetValue($"iremux:login:{init.login}", out _))
-            return null;
+            return default;
 
+        return getCookieAsync(keyCookie, init, memoryCache);
+    }
+
+    async static ValueTask<string> getCookieAsync(string keyCookie, BaseSettings init, IMemoryCache memoryCache)
+    {
         memoryCache.Set($"iremux:login:{init.login}", 0, TimeSpan.FromMinutes(2));
 
         try

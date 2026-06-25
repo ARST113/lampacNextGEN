@@ -19,10 +19,9 @@ public class LeProductionController : BaseOnlineController
 {
     public LeProductionController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/leproduction")]
-    async public Task<ActionResult> Index(string title, string original_title, int clarification, bool similar = false, int serial = 0, string href = null)
+    async public Task<ActionResult> Index(string title, string original_title, byte clarification, byte serial, bool similar = false, string href = null)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;

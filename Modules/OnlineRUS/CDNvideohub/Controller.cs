@@ -26,10 +26,9 @@ public class CDNvideohubController : BaseOnlineController
         };
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/cdnvideohub")]
-    async public Task<ActionResult> Index(string title, string original_title, long kinopoisk_id, string t, int s = -1, bool rjson = false)
+    async public Task<ActionResult> Index(string title, string original_title, long kinopoisk_id, string t, short s = -1, bool rjson = false)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -111,7 +110,7 @@ public class CDNvideohubController : BaseOnlineController
                     #endregion
 
                     var etpl = new EpisodeTpl(vtpl);
-                    var tmpEpisode = new HashSet<int>();
+                    var tmpEpisode = new HashSet<short>();
 
                     foreach (var video in cache.Value.items.OrderBy(i => i.episode))
                     {
@@ -122,7 +121,7 @@ public class CDNvideohubController : BaseOnlineController
                         if (string.IsNullOrEmpty(vkId))
                             continue;
 
-                        int episode = video.episode;
+                        short episode = video.episode;
 
                         if (tmpEpisode.Add(episode))
                         {
@@ -131,8 +130,8 @@ public class CDNvideohubController : BaseOnlineController
                             etpl.Append(
                                 $"{episode} серия",
                                 title ?? original_title,
-                                s.ToString(),
-                                episode.ToString(),
+                                s,
+                                episode,
                                 link,
                                 "call",
                                 streamlink: accsArgs($"{link}&play=true"),
@@ -168,7 +167,7 @@ public class CDNvideohubController : BaseOnlineController
 
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/cdnvideohub/video.m3u8")]
     async public Task<ActionResult> Video(string vkId, string title, bool play)
     {
@@ -182,11 +181,11 @@ public class CDNvideohubController : BaseOnlineController
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
 
             if (rch.IsNotSupport(out string rch_error))
                 return ShowError(rch_error);
@@ -225,7 +224,10 @@ public class CDNvideohubController : BaseOnlineController
             link,
             title,
             vast: init.vast,
-            httpContext: HttpContext
+            httpContext: HttpContext,
+            headers: init.streamproxy
+                ? null
+                : httpHeaders(init.host, init.headers_stream)
         ));
     }
     #endregion
