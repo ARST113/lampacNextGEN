@@ -4,7 +4,6 @@ using Shared.Models.Base;
 using Shared.Models.Events;
 using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
-using System.Threading.Tasks;
 
 namespace MsxNative;
 
@@ -31,7 +30,7 @@ public class ModInit : IModuleLoaded
     }
 
 
-    async Task<bool> Middleware(bool first, EventMiddleware e)
+    bool Middleware(bool first, EventMiddleware e)
     {
         if (first &&
             CoreInit.conf.accsdb.enable &&
@@ -46,7 +45,7 @@ public class ModInit : IModuleLoaded
         return true;
     }
 
-    Task<ActionResult> BadInitialization(EventBadInitialization e)
+    ActionResult BadInitialization(EventBadInitialization e)
     {
         if (Utilities.IsMsxPlayer(e.httpContext))
         {
@@ -54,6 +53,6 @@ public class ModInit : IModuleLoaded
             e.init.streamproxy = true;
         }
 
-        return Task.FromResult<ActionResult>(default);
+        return default;
     }
 }

@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Shared;
+using Shared.Attributes;
 using Shared.Services;
 using Shared.Services.Pools;
 using Shared.Services.Pools.Json;
@@ -21,19 +22,17 @@ public class StorageController : BaseController
     const long maxRequestSize = 10 * 1024 * 1024;
 
     #region backup.js
-    [HttpGet]
-    [AllowAnonymous]
+    [HttpGet, AllowAnonymous]
+    [Staticache(cacheMinutes: 10, always: true, setHeadersNoCache: true)]
     [Route("backup.js")]
     [Route("backup/js/{token}")]
     public ActionResult Backup(string token)
     {
-        SetHeadersNoCache();
-
         string plugin = FileCache.ReadAllText($"{ModInit.modpath}/backup.js", "backup.js")
             .Replace("{localhost}", host)
             .Replace("{token}", HttpUtility.UrlEncode(token));
 
-        return Content(plugin, "application/javascript; charset=utf-8");
+        return ContentTo(plugin, "application/javascript; charset=utf-8");
     }
     #endregion
 
@@ -121,19 +120,12 @@ public class StorageController : BaseController
                     return ContentTo("{\"success\": false, \"msg\": \"semaphore\"}");
                 }
 
+                msm.Position = 0;
                 await using (var fileStream = new FileStream(outFile, FileMode.Create, FileAccess.Write, FileShare.None,
-                    bufferSize: PoolInvk.bufferSize,
+                    bufferSize: 0,
                     options: FileOptions.Asynchronous))
                 {
-                    using (var nbuf = new BufferPool())
-                    {
-                        int bytesRead;
-                        var memBuf = nbuf.Memory;
-
-                        msm.Position = 0;
-                        while ((bytesRead = msm.Read(memBuf.Span)) > 0)
-                            await fileStream.WriteAsync(memBuf.Slice(0, bytesRead)).ConfigureAwait(false);
-                    }
+                    await msm.CopyToAsync(fileStream).ConfigureAwait(false);
                 }
             }
             catch
@@ -254,19 +246,12 @@ public class StorageController : BaseController
                     return ContentTo("{\"success\": false, \"msg\": \"semaphore\"}");
                 }
 
+                msm.Position = 0;
                 await using (var fileStream = new FileStream(outFile, FileMode.Create, FileAccess.Write, FileShare.None,
                     bufferSize: PoolInvk.bufferSize,
                     options: FileOptions.Asynchronous))
                 {
-                    using (var nbuf = new BufferPool())
-                    {
-                        int bytesRead;
-                        var memBuf = nbuf.Memory;
-
-                        msm.Position = 0;
-                        while ((bytesRead = msm.Read(memBuf.Span)) > 0)
-                            await fileStream.WriteAsync(memBuf.Slice(0, bytesRead)).ConfigureAwait(false);
-                    }
+                    await msm.CopyToAsync(fileStream).ConfigureAwait(false);
                 }
             }
             catch

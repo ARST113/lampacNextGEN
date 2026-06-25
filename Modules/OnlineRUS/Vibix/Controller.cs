@@ -3,6 +3,7 @@ using Microsoft.Playwright;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.PlaywrightCore;
@@ -20,9 +21,9 @@ public class VibixController : BaseOnlineController
 {
     public VibixController() : base(ModInit.conf) { }
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/vibix")]
-    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, int s = -1, bool rjson = false)
+    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short s = -1, bool rjson = false)
     {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
@@ -134,7 +135,6 @@ public class VibixController : BaseOnlineController
             else
             {
                 var etpl = new EpisodeTpl();
-                string sArhc = s.ToString();
 
                 foreach (var season in cache.Value)
                 {
@@ -171,7 +171,7 @@ public class VibixController : BaseOnlineController
                             etpl.Append(
                                 name,
                                 title ?? original_title,
-                                sArhc,
+                                s,
                                 Regex.Match(name, "([0-9]+)").Groups[1].Value,
                                 accsArgs(episode.streams[0].link),
                                 streamquality: new StreamQualityTpl(episode.streams, linkPredicate: accsArgs),
@@ -189,7 +189,7 @@ public class VibixController : BaseOnlineController
 
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/vibix/video.m3u8")]
     async public Task<ActionResult> Video(string id)
     {

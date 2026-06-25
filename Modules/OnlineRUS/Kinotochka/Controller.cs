@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json.Linq;
 using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
@@ -29,15 +30,14 @@ public class KinotochkaController : BaseOnlineController
         };
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/kinotochka")]
-    async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, int serial, string newsuri, int s = -1)
+    async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, short serial, string newsuri, short s = -1)
     {
         if (string.IsNullOrWhiteSpace(title))
             return OnError();
 
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
         // enable 720p
@@ -188,7 +188,6 @@ public class KinotochkaController : BaseOnlineController
 
                 return ContentTpl(cache, () =>
                 {
-                    string sArch = s.ToString();
                     var etpl = new EpisodeTpl(cache.Value.Count);
 
                     foreach (var l in cache.Value)
@@ -196,7 +195,7 @@ public class KinotochkaController : BaseOnlineController
                         etpl.Append(
                             l.comment,
                             title,
-                            sArch,
+                            s,
                             Regex.Match(l.comment, "^([0-9]+)").Groups[1].Value,
                             HostStreamProxy(l.file),
                             vast: init.vast
@@ -219,7 +218,11 @@ public class KinotochkaController : BaseOnlineController
             {
                 string file = null;
 
-                await httpHydra.GetSpan($"{init.host}/embed/kinopoisk/{kinopoisk_id}", addheaders: HeadersModel.Init("cookie", cookie), safety: !string.IsNullOrEmpty(cookie), spanAction: embed =>
+                var root = await httpHydra.Get<JArray>($"{init.host}/api/find-by-kinopoisk.php?kinopoisk={kinopoisk_id}");
+                if (root == null || root.Count == 0)
+                    return e.Fail("root");
+
+                await httpHydra.GetSpan(root.First.Value<string>("url"), addheaders: HeadersModel.Init("cookie", cookie), safety: !string.IsNullOrEmpty(cookie), spanAction: embed =>
                 {
                     file = Rx.Match(embed, "id:\"playerjshd\", file:\"(https?://[^\"]+)\"");
                     if (string.IsNullOrEmpty(file))

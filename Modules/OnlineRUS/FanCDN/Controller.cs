@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Shared;
+using Shared.Attributes;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -44,14 +45,14 @@ public class FanCDNController : BaseOnlineController
         };
     }
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/fancdn")]
-    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, int year, int serial)
+    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, byte serial)
     {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
-        if (kinopoisk_id == 0 || serial == 1 || cookies == null)
+        if (string.IsNullOrWhiteSpace(title) || year == 0 || serial == 0)
             return OnError();
 
         var oninvk = new FanCDNInvoke

@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Shared.Models.Events;
 using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
@@ -45,19 +45,19 @@ public class ModInit : IModuleLoaded
     }
 
 
-    Task<bool> Middleware(bool first, EventMiddleware e)
+    bool Middleware(bool first, EventMiddleware e)
     {
         if (Utilities.IsForkPlayer(e.httpContext) && e.httpContext.Request.Path.Value == "/")
         {
             string args = Utilities.ClearArgs(e.httpContext.Request.Query);
             e.httpContext.Response.Redirect("/fxml" + (!string.IsNullOrEmpty(args) ? $"?{args.Substring(0, 1)}" : string.Empty));
-            return Task.FromResult(false);
+            return false;
         }
 
-        return Task.FromResult(true);
+        return true;
     }
 
-    Task<ActionResult> BadInitialization(EventBadInitialization e)
+    ActionResult BadInitialization(EventBadInitialization e)
     {
         if (Utilities.IsForkPlayer(e.httpContext))
         {
@@ -65,7 +65,7 @@ public class ModInit : IModuleLoaded
 
             /*
              * пример реализации
-             * 
+             *
             string platform = "apk"; // cors, web
             if (e.init.rchstreamproxy != null && e.init.rchstreamproxy.Contains(platform))
             {
@@ -83,6 +83,6 @@ public class ModInit : IModuleLoaded
             e.init.streamproxy = true;
         }
 
-        return Task.FromResult<ActionResult>(default);
+        return default;
     }
 }

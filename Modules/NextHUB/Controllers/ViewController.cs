@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Playwright;
 using Newtonsoft.Json;
+using Shared.Attributes;
 using Shared.Models.CSharpGlobals;
 using Shared.Models.SISI.NextHUB;
 using Shared.PlaywrightCore;
@@ -16,6 +17,7 @@ public class ViewController : BaseSisiController<NxtSettings>
     public ViewController() : base(default) { }
 
     [HttpGet]
+    [Staticache(manually: true)]
     [Route("nexthub/vidosik")]
     async public Task<ActionResult> Index(string uri, bool related)
     {
@@ -455,11 +457,11 @@ public class ViewController : BaseSisiController<NxtSettings>
                     if (init.view.NetworkIdle)
                     {
                         string contetnt = await page.ContentAsync().ConfigureAwait(false);
-                        cache.recomends = ListController.goPlaylist(requestInfo, host, init.view.relatedParse ?? init.contentParse, init, contetnt, plugin);
+                        cache.recomends = ListController.goPlaylist(requestInfo, host, init.view.relatedParse ?? init.contentParse, init, contetnt, null, plugin);
                     }
                     else
                     {
-                        cache.recomends = ListController.goPlaylist(requestInfo, host, init.view.relatedParse ?? init.contentParse, init, html, plugin);
+                        cache.recomends = ListController.goPlaylist(requestInfo, host, init.view.relatedParse ?? init.contentParse, init, html, null, plugin);
                     }
                 }
                 #endregion
@@ -470,7 +472,7 @@ public class ViewController : BaseSisiController<NxtSettings>
 
             return cache;
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             Serilog.Log.Error(ex, "CatchId={CatchId}", "id_7049566f");
             if (init.debug)
@@ -500,7 +502,6 @@ public class ViewController : BaseSisiController<NxtSettings>
 
         resetGotoAsync:
             string html = await httpHydra.Get(url);
-
             if (string.IsNullOrEmpty(html))
                 return default;
 
@@ -521,18 +522,11 @@ public class ViewController : BaseSisiController<NxtSettings>
             if (init.view.nodeFile != null)
             {
                 #region nodeFile
-                string goFile(string _content)
-                {
-                    var doc = new HtmlDocument();
-                    doc.LoadHtml(_content);
-                    var videoNode = doc.DocumentNode.SelectSingleNode(init.view.nodeFile.node);
-                    if (videoNode != null)
-                        return (!string.IsNullOrEmpty(init.view.nodeFile.attribute) ? videoNode.GetAttributeValue(init.view.nodeFile.attribute, null) : videoNode.InnerText)?.Trim();
-
-                    return null;
-                }
-
-                cache.file = goFile(html);
+                var doc = new HtmlDocument();
+                doc.LoadHtml(html);
+                var videoNode = doc.DocumentNode.SelectSingleNode(init.view.nodeFile.node);
+                if (videoNode != null)
+                    cache.file = (!string.IsNullOrEmpty(init.view.nodeFile.attribute) ? videoNode.GetAttributeValue(init.view.nodeFile.attribute, null) : videoNode.InnerText)?.Trim();
 
                 PlaywrightBase.ConsoleLog(() => $"Playwright: SET {cache.file}");
                 #endregion
@@ -573,7 +567,18 @@ public class ViewController : BaseSisiController<NxtSettings>
             }
 
             if (init.view.related && cache.recomends == null)
-                cache.recomends = ListController.goPlaylist(requestInfo, host, init.view.relatedParse ?? init.contentParse, init, html, plugin);
+            {
+                string memKeyRelated = $"related:{memKey}";
+                var cacheRelated = await hybridCache.EntryAsync<List<PlaylistItem>>(memKeyRelated);
+                if (cacheRelated.success)
+                    cache.recomends = cacheRelated.value;
+                else
+                {
+                    cache.recomends = ListController.goPlaylist(requestInfo, host, init.view.relatedParse ?? init.contentParse, init, html, null, plugin);
+                    if (cache.recomends != null && cache.recomends.Count > 0)
+                        hybridCache.Set(memKeyRelated, cache.recomends, TimeSpan.FromHours(36));
+                }
+            }
 
             proxyManager?.Success();
 
@@ -581,7 +586,7 @@ public class ViewController : BaseSisiController<NxtSettings>
 
             return cache;
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             Serilog.Log.Error(ex, "CatchId={CatchId}", "id_5f5d9c49");
             if (init.debug)

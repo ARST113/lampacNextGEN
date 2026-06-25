@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
-using Shared.Attributes;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.SISI.Base;
-using Shared.PlaywrightCore;
+using Shared.Services.HTTP;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -12,8 +12,7 @@ public class BongaCamsController : BaseSisiController
 {
     public BongaCamsController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("bgs")]
     async public Task<ActionResult> Index(string search, string sort, int pg = 1)
     {
@@ -40,9 +39,12 @@ public class BongaCamsController : BaseSisiController
             }
             else
             {
-                string html = await PlaywrightBrowser.Get(init, init.cors(url), httpHeaders(init), proxy_data);
+                var headers = httpHeaders(init);
 
-                playlists = BongaCamsTo.Playlist(html, out total_pages);
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(url, headers, requestInfo), span =>
+                {
+                    playlists = BongaCamsTo.Playlist(span, out total_pages);
+                }, headers, proxy_data);
             }
 
             if (playlists == null || playlists.Count == 0)

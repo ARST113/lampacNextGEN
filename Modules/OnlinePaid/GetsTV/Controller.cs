@@ -69,10 +69,9 @@ public class GetsTVController : BaseOnlineController
     }
     #endregion
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/getstv")]
-    async public Task<ActionResult> Index(string orid, string title, string original_title, int year, int t = -1, int s = -1, bool rjson = false, bool similar = false, string source = null, string id = null)
+    async public Task<ActionResult> Index(string orid, string title, string original_title, short year, int t = -1, short s = -1, bool rjson = false, bool similar = false, string source = null, string id = null)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -149,7 +148,7 @@ public class GetsTVController : BaseOnlineController
 
                     foreach (var season in cache.Value.seasons)
                     {
-                        int seasonNum = season.seasonNum;
+                        short seasonNum = season.seasonNum;
 
                         tpl.Append(
                             $"{seasonNum} сезон",
@@ -188,7 +187,6 @@ public class GetsTVController : BaseOnlineController
                     #endregion
 
                     var etpl = new EpisodeTpl(vtpl);
-                    string sArhc = s.ToString();
 
                     foreach (var episode in episodes)
                     {
@@ -196,14 +194,14 @@ public class GetsTVController : BaseOnlineController
                         {
                             if (tr.trId == t)
                             {
-                                int e = episode.episodeNum;
+                                short e = episode.episodeNum;
                                 string link = $"{host}/lite/getstv/video.m3u8?id={tr._id}";
 
                                 etpl.Append(
                                     $"{e} серия",
                                     title ?? original_title,
-                                    sArhc,
-                                    e.ToString(),
+                                    s,
+                                    e,
                                     link,
                                     "call",
                                     streamlink: accsArgs($"{link}&play=true")
@@ -222,7 +220,7 @@ public class GetsTVController : BaseOnlineController
     }
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/getstv/video.m3u8")]
     async public Task<ActionResult> Video(string id, bool play)
     {
@@ -296,7 +294,7 @@ public class GetsTVController : BaseOnlineController
     #endregion
 
     #region SpiderSearch
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/getstv-search")]
     async public Task<ActionResult> SpiderSearch(string title, bool rjson = false)
     {
@@ -316,7 +314,7 @@ public class GetsTVController : BaseOnlineController
 
 
     #region search
-    async ValueTask<(string id, SimilarTpl similar)> search(string title, string original_title, int year)
+    async Task<(string id, SimilarTpl similar)> search(string title, string original_title, int year)
     {
         if (string.IsNullOrWhiteSpace(title) || string.IsNullOrEmpty(init.token))
             return default;

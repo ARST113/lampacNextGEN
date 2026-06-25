@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Shared.Attributes;
 using Shared.Services.RxEnumerate;
 using System.Text.Json;
+using System.Text;
 using Shared;
 using Shared.Models.Base;
 using Shared.Models.Templates;
@@ -18,12 +19,11 @@ public class DreamerscastController : BaseOnlineController
 {
     public DreamerscastController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/dreamerscast")]
-    async public Task<ActionResult> Index(string title, int year, string uri, int s = 1, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(string title, short year, string uri, short s = 1, bool rjson = false, bool similar = false)
     {
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
         if (string.IsNullOrWhiteSpace(uri))
@@ -103,40 +103,84 @@ public class DreamerscastController : BaseOnlineController
             var cache = await InvokeCacheResult<List<Episode>>($"dreamerscast:release:{uri}", 20, textJson: true, onget: async e =>
             {
                 var episodes = new List<Episode>();
+                string failReason = "episodes";
 
-                await httpHydra.GetSpan(init.host + uri, html =>
+                string html = await httpHydra.Get(init.host + uri);
+                if (string.IsNullOrEmpty(html))
                 {
-                    string base64 = Rx.Slice(html, "Playerjs(\"#2", "\");").ToString();
-                    string json = CrypTo.DecodeBase64(Regex.Replace(base64, "//[^=]+==", ""));
+                    failReason = "html";
+                }
+                else
+                {
+                    string base64 = Regex.Match(html, "Playerjs\\(\"#2([^\"]+)\"\\);").Groups[1].Value;
+                    if (string.IsNullOrEmpty(base64))
+                    {
+                        failReason = "playerjs";
+                        goto finishDreamerscastParse;
+                    }
+
+                    string cleanBase64 = Regex.Replace(base64, "//[^=]+==", "");
+                    int remainder = cleanBase64.Length % 4;
+                    if (remainder > 0)
+                        cleanBase64 = cleanBase64.PadRight(cleanBase64.Length + 4 - remainder, '=');
+
+                    string json = Encoding.UTF8.GetString(Convert.FromBase64String(cleanBase64));
                     if (string.IsNullOrEmpty(json))
-                        return;
+                    {
+                        failReason = "json";
+                        goto finishDreamerscastParse;
+                    }
 
                     try
                     {
-                        var root = JsonSerializer.Deserialize<PlayerRoot>(json, new JsonSerializerOptions
+                        using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
                         {
                             AllowTrailingCommas = true
                         });
 
-                        foreach (var item in root.file)
+                        if (doc.RootElement.TryGetProperty("file", out var fileElement))
                         {
-                            string hls = getHls(item.file);
-                            if (hls == null)
-                                continue;
-
-                            episodes.Add(new Episode
+                            if (fileElement.ValueKind == JsonValueKind.String)
                             {
-                                name = item.title,
-                                episode = Regex.Match(item.title ?? string.Empty, "([0-9]+)").Groups[1].Value,
-                                hls = hls
-                            });
+                                string hls = getHls(fileElement.GetString());
+                                if (hls != null)
+                                {
+                                    episodes.Add(new Episode
+                                    {
+                                        name = "1 \u0441\u0435\u0440\u0438\u044F",
+                                        episode = "1",
+                                        hls = hls
+                                    });
+                                    failReason = null;
+                                }
+                            }
+                            else if (fileElement.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var item in fileElement.EnumerateArray())
+                                {
+                                    string itemTitle = item.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null;
+                                    string itemFile = item.TryGetProperty("file", out var itemFileElement) ? itemFileElement.GetString() : null;
+                                    string hls = getHls(itemFile);
+                                    if (hls == null)
+                                        continue;
+
+                                    episodes.Add(new Episode
+                                    {
+                                        name = itemTitle,
+                                        episode = Regex.Match(itemTitle ?? string.Empty, "([0-9]+)").Groups[1].Value,
+                                        hls = hls
+                                    });
+                                    failReason = null;
+                                }
+                            }
                         }
                     }
-                    catch { }
-                });
+                    catch (Exception ex) { failReason = "parse:" + ex.GetType().Name; }
+                }
 
+            finishDreamerscastParse:
                 if (episodes.Count == 0)
-                    return e.Fail("episodes", refresh_proxy: true);
+                    return e.Fail(failReason ?? "episodes", refresh_proxy: true);
 
                 return e.Success(episodes);
             });
@@ -146,7 +190,6 @@ public class DreamerscastController : BaseOnlineController
 
             return ContentTpl(cache, () =>
             {
-                string season = s.ToString();
                 var etpl = new EpisodeTpl(cache.Value.Count);
 
                 foreach (var item in cache.Value)
@@ -156,7 +199,7 @@ public class DreamerscastController : BaseOnlineController
                     etpl.Append(
                         string.IsNullOrWhiteSpace(item.name) ? $"{ep} серия" : item.name,
                         title,
-                        season,
+                        s,
                         ep,
                         HostStreamProxy(item.hls)
                     );

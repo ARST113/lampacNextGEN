@@ -73,7 +73,7 @@ public struct VideoDBInvoke
     #endregion
 
     #region Html
-    public ITplResult Tpl(EmbedModel root, string args, string uri, string title, string original_title, string t, int s, int sid, bool rjson, bool rhub = false)
+    public ITplResult Tpl(EmbedModel root, string args, string uri, string title, string original_title, string t, short s, short sid, bool rjson, bool rhub = false)
     {
         if (root?.pl == null || root.pl.Length == 0)
             return default;
@@ -106,7 +106,7 @@ public struct VideoDBInvoke
                             continue;
 
                         pl.streams.Add(new(
-                            host + $"lite/videodb/manifest.m3u8?link={CrypTo.EncryptQuery(link)}",
+                            host + $"lite/videodb/manifest.m3u8?link={AesTo.Encrypt(link)}",
                             file.Contains("2160p") ? "2160" : file.Contains("1080p") ? "1080" : file.Contains("720p") ? "720" : "480"
                         ));
                     }
@@ -178,8 +178,6 @@ public struct VideoDBInvoke
 
                 var hashvoices = new HashSet<string>(20);
 
-                string sArhc = s.ToString();
-
                 foreach (var episode in season)
                 {
                     var episodes = episode.folder;
@@ -224,7 +222,7 @@ public struct VideoDBInvoke
                                     continue;
 
                                 pl.streams.Add(new(
-                                    host + $"lite/videodb/manifest.m3u8?serial=true&link={CrypTo.EncryptQuery(link)}",
+                                    host + $"lite/videodb/manifest.m3u8?serial=true&link={AesTo.Encrypt(link)}",
                                     $"{m.Groups[1].Value}p"
                                 ));
                             }
@@ -244,7 +242,7 @@ public struct VideoDBInvoke
                                 etpl.Append(
                                     episode.title,
                                     title ?? original_title,
-                                    sArhc,
+                                    s,
                                     Regex.Match(episode.title, "^([0-9]+)").Groups[1].Value,
                                     streamlink.Replace("/manifest.m3u8", "/manifest"),
                                     "call",
@@ -257,7 +255,7 @@ public struct VideoDBInvoke
                             etpl.Append(
                                 episode.title,
                                 title ?? original_title,
-                                sArhc,
+                                s,
                                 Regex.Match(episode.title, "^([0-9]+)").Groups[1].Value,
                                 pl.streams[0].link + args,
                                 streamquality: new StreamQualityTpl(pl.streams, linkPredicate: link => link + args)

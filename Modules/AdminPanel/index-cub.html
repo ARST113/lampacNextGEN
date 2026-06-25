@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>Lampac Admin</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --panel-2: #f9fafb;
+      --text: #17202a;
+      --muted: #6b7280;
+      --line: #dfe5ec;
+      --accent: #b68b2d;
+      --accent-2: #2563eb;
+      --good: #12805c;
+      --bad: #c24155;
+      --warn: #a16207;
+      --shadow: 0 12px 34px rgba(25, 31, 42, .08);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+    }
+
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    code { font-family: "JetBrains Mono", Consolas, monospace; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 264px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: #ffffff;
+      border-right: 1px solid var(--line);
+      padding: 22px 16px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 8px 22px;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: #fff;
+      background: linear-gradient(135deg, #1f2937, #b68b2d);
+      font-weight: 800;
+    }
+
+    .brand-title { font-size: 18px; font-weight: 750; }
+    .brand-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      border: 0;
+      background: transparent;
+      color: #374151;
+      text-align: left;
+      border-radius: 8px;
+      padding: 11px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+    }
+
+    .nav button:hover { background: #f1f4f7; }
+    .nav button.active {
+      background: #17202a;
+      color: #fff;
+    }
+
+    .nav svg { width: 18px; height: 18px; flex: 0 0 18px; }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      min-height: 74px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 18px 26px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(244, 246, 248, .86);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .page-title { margin: 0; font-size: 24px; }
+    .page-meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .content {
+      padding: 24px 26px 34px;
+      display: grid;
+      gap: 22px;
+    }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 12px;
+      min-width: min(390px, 100%);
+      height: 42px;
+    }
+
+    .search input {
+      border: 0;
+      outline: 0;
+      background: transparent;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      min-width: 0;
+    }
+
+    .card.add {
+      border-style: dashed;
+      background: #fbfcfd;
+      display: grid;
+      place-items: center;
+      min-height: 174px;
+      color: var(--muted);
+      box-shadow: none;
+    }
+
+    .card.add button {
+      width: 100%;
+      min-height: 132px;
+      border: 0;
+      background: transparent;
+      display: grid;
+      place-items: center;
+      color: inherit;
+    }
+
+    .add-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #eef2f7;
+      color: #111827;
+      margin-bottom: 10px;
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 13px;
+    }
+
+    .identity {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .avatar {
+      width: 46px;
+      height: 46px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #e8edf4;
+      color: #17202a;
+      font-weight: 750;
+      flex: 0 0 46px;
+      overflow: hidden;
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .title {
+      font-size: 16px;
+      font-weight: 750;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 3px;
+      overflow-wrap: anywhere;
+    }
+
+    .metrics {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 12px 0;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      line-height: 1;
+      background: #edf2f7;
+      color: #334155;
+      max-width: 100%;
+    }
+
+    .badge.good { background: #e7f7ef; color: var(--good); }
+    .badge.bad { background: #fdecef; color: var(--bad); }
+    .badge.warn { background: #fff6d7; color: var(--warn); }
+    .badge.gold { background: #fff6d7; color: #6f4d0b; }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      min-height: 38px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--text);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .btn:hover { background: #f8fafc; }
+    .btn.primary {
+      background: #17202a;
+      color: #fff;
+      border-color: #17202a;
+    }
+
+    .btn.gold {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .btn.danger {
+      color: var(--bad);
+      border-color: #f4c5cf;
+      background: #fff8f9;
+    }
+
+    .btn.icon {
+      width: 38px;
+      padding: 0;
+      flex: 0 0 38px;
+    }
+
+    .btn svg { width: 17px; height: 17px; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 14px;
+    }
+
+    .stat {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .stat-value { font-size: 32px; font-weight: 800; }
+    .stat-label { color: var(--muted); margin-top: 4px; }
+
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field.full { grid-column: 1 / -1; }
+    label { font-weight: 650; font-size: 13px; }
+
+    input, textarea, select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      min-height: 42px;
+      padding: 9px 11px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 180px;
+      resize: vertical;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+    }
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid #edf1f5;
+    }
+
+    .switch-row:last-child { border-bottom: 0; }
+
+    .switch {
+      position: relative;
+      width: 44px;
+      height: 26px;
+      flex: 0 0 44px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #cbd5e1;
+      border-radius: 999px;
+      transition: .18s;
+    }
+
+    .slider:before {
+      content: "";
+      position: absolute;
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 999px;
+      transition: .18s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .2);
+    }
+
+    .switch input:checked + .slider { background: var(--good); }
+    .switch input:checked + .slider:before { transform: translateX(18px); }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      background: rgba(15, 23, 42, .52);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: min(760px, 100%);
+      max-height: min(86vh, 840px);
+      overflow: auto;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .22);
+    }
+
+    .modal-head, .modal-foot {
+      padding: 16px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-foot {
+      border-bottom: 0;
+      border-top: 1px solid var(--line);
+      justify-content: flex-end;
+      position: sticky;
+      bottom: 0;
+      background: #fff;
+    }
+
+    .modal-body { padding: 18px; }
+    .modal-title { margin: 0; font-size: 18px; }
+
+    .empty {
+      padding: 34px;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 100;
+      display: grid;
+      gap: 10px;
+      width: min(410px, calc(100vw - 44px));
+    }
+
+    .toast-item {
+      border-radius: 8px;
+      background: #111827;
+      color: #fff;
+      box-shadow: var(--shadow);
+      padding: 12px 14px;
+      font-size: 14px;
+    }
+
+    .toast-item.error { background: #991b1b; }
+    .toast-item.success { background: #065f46; }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar {
+        position: relative;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .header { position: relative; align-items: flex-start; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      .content, .header { padding-left: 16px; padding-right: 16px; }
+      .grid { grid-template-columns: 1fr; }
+      .header { flex-direction: column; }
+      .header-actions { justify-content: flex-start; width: 100%; }
+      .btn { width: 100%; }
+      .btn.icon { width: 38px; }
+      .nav { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">L</div>
+        <div>
+          <div class="brand-title">Lampac Admin</div>
+          <div class="brand-subtitle">profiles & plugins</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <button data-view="overview" class="active" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 13h8V3H3v10Zm10 8h8V3h-8v18ZM3 21h8v-6H3v6Z"/></svg>
+          Обзор
+        </button>
+        <button data-view="profiles" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 11a4 4 0 1 0-8 0"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+          Профили
+        </button>
+        <button data-view="plugins" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 8h8v8H8z"/><path d="M3 8h2m14 0h2M3 16h2m14 0h2M8 3v2m8-2v2M8 19v2m8-2v2"/></svg>
+          Плагины
+        </button>
+        <button data-view="settings" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .6 2 2 0 0 1-4 0 1.8 1.8 0 0 0-1-.6 1.8 1.8 0 0 0-1.98.36l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-.6-1 2 2 0 0 1 0-4 1.8 1.8 0 0 0 .6-1 1.8 1.8 0 0 0-.36-1.98l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.8 1.8 0 0 0 9 4.6a1.8 1.8 0 0 0 1-.6 2 2 0 0 1 4 0 1.8 1.8 0 0 0 1 .6 1.8 1.8 0 0 0 1.98-.36l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.8 1.8 0 0 0 19.4 9a1.8 1.8 0 0 0 .6 1 2 2 0 0 1 0 4 1.8 1.8 0 0 0-.6 1Z"/></svg>
+          Настройки
+        </button>
+        <button data-view="logs" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
+          Логи
+        </button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="header">
+        <div>
+          <h1 class="page-title" id="pageTitle">Обзор</h1>
+          <div class="page-meta" id="pageMeta">Загрузка...</div>
+        </div>
+        <div class="header-actions">
+          <span class="badge" id="statusBadge">status</span>
+          <button class="btn" type="button" id="refreshBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>
+            Обновить
+          </button>
+          <button class="btn gold" type="button" id="restartBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v7h-7"/></svg>
+            Перезапустить
+          </button>
+        </div>
+      </header>
+      <section class="content" id="content"></section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head">
+        <h2 class="modal-title" id="modalTitle"></h2>
+        <button class="btn icon" type="button" id="modalClose" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot" id="modalFoot"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = {
+      view: 'overview',
+      profiles: [],
+      plugins: [],
+      overview: null,
+      status: null,
+      query: '',
+      selectedProfile: null,
+      usersRaw: '',
+      initRaw: ''
+    };
+
+    const titleByView = {
+      overview: 'Обзор',
+      profiles: 'Профили',
+      plugins: 'Плагины',
+      settings: 'Настройки',
+      logs: 'Логи'
+    };
+
+    const api = async (path, options = {}) => {
+      const res = await fetch(path, Object.assign({ credentials: 'same-origin' }, options));
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+      if (!res.ok) {
+        const message = data && data.error ? data.error : ('HTTP ' + res.status);
+        throw new Error(message + (data && data.detail ? ': ' + data.detail : ''));
+      }
+      return data;
+    };
+
+    const esc = (value) => String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    const icon = {
+      plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
+      edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21H3v-4L16.5 3.5Z"/></svg>',
+      trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/></svg>',
+      open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M8 7h9v9"/></svg>',
+      save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>'
+    };
+
+    function toast(message, type = '') {
+      const box = document.createElement('div');
+      box.className = 'toast-item ' + type;
+      box.textContent = message;
+      document.getElementById('toast').appendChild(box);
+      setTimeout(() => box.remove(), 4600);
+    }
+
+    function setView(view) {
+      state.view = view;
+      state.selectedProfile = null;
+      document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+      render();
+    }
+
+    async function loadAll() {
+      const [overview, profiles, plugins, status] = await Promise.all([
+        api('/adminpanel/api/overview'),
+        api('/adminpanel/api/profiles'),
+        api('/adminpanel/api/plugins'),
+        api('/adminpanel/api/lampac/status').catch(() => null)
+      ]);
+      state.overview = overview;
+      state.profiles = profiles || [];
+      state.plugins = plugins || [];
+      state.status = status;
+      updateStatus();
+      render();
+    }
+
+    function updateStatus() {
+      const badge = document.getElementById('statusBadge');
+      const active = state.status && (state.status.active || '').trim() === 'active';
+      badge.className = 'badge ' + (active ? 'good' : 'bad');
+      badge.textContent = active ? 'Lampac active' : 'Lampac status unknown';
+    }
+
+    function profileName(id) {
+      const p = state.profiles.find(x => x.id === id);
+      return p ? p.name : id;
+    }
+
+    function initials(name) {
+      return (name || '?').trim().slice(0, 2).toUpperCase();
+    }
+
+    function avatar(profile) {
+      const value = profile.avatar || '';
+      if (/^https?:\/\//i.test(value)) return '<div class="avatar"><img src="' + esc(value) + '" alt=""></div>';
+      return '<div class="avatar">' + esc(value || initials(profile.name || profile.id)) + '</div>';
+    }
+
+    function pluginEnabledForProfile(profile, plugin) {
+      if (!plugin.enabled) return false;
+      if (!profile.pluginMap || !(plugin.id in profile.pluginMap)) return true;
+      return !!profile.pluginMap[plugin.id];
+    }
+
+    function render() {
+      document.getElementById('pageTitle').textContent = state.selectedProfile ? state.selectedProfile.name : titleByView[state.view];
+      document.getElementById('pageMeta').textContent = metaText();
+      const content = document.getElementById('content');
+      if (state.selectedProfile) content.innerHTML = renderProfileDetail(state.selectedProfile);
+      else if (state.view === 'overview') content.innerHTML = renderOverview();
+      else if (state.view === 'profiles') content.innerHTML = renderProfiles();
+      else if (state.view === 'plugins') content.innerHTML = renderPlugins();
+      else if (state.view === 'settings') content.innerHTML = renderSettings();
+      else if (state.view === 'logs') content.innerHTML = renderLogs();
+    }
+
+    function metaText() {
+      if (state.selectedProfile) return 'Настройки профиля и переключатели плагинов';
+      if (state.view === 'profiles') return state.profiles.length + ' профилей';
+      if (state.view === 'plugins') return state.plugins.length + ' плагинов';
+      if (state.view === 'settings') return 'users.json и init.conf';
+      if (state.view === 'logs') return 'lampac.service';
+      const ov = state.overview || {};
+      return (ov.profiles || 0) + ' профилей, ' + (ov.plugins || 0) + ' плагинов';
+    }
+
+    function renderOverview() {
+      const ov = state.overview || {};
+      return `
+        <div class="stats">
+          <div class="stat"><div class="stat-value">${ov.profiles || 0}</div><div class="stat-label">Профили</div></div>
+          <div class="stat"><div class="stat-value">${ov.plugins || 0}</div><div class="stat-label">Плагины</div></div>
+          <div class="stat"><div class="stat-value">${ov.activePlugins || 0}</div><div class="stat-label">Глобально включены</div></div>
+        </div>
+        <div class="toolbar">
+          <button class="btn primary" type="button" onclick="setView('profiles')">${icon.open} Открыть профили</button>
+          <button class="btn" type="button" onclick="setView('plugins')">${icon.open} Открыть плагины</button>
+        </div>
+        <div class="grid">
+          ${state.profiles.slice(0, 4).map(profileCard).join('')}
+          ${state.plugins.slice(0, 4).map(pluginCard).join('')}
+        </div>
+      `;
+    }
+
+    function renderProfiles() {
+      const items = state.profiles.filter(p => !state.query || (p.name + ' ' + p.id).toLowerCase().includes(state.query.toLowerCase()));
+      return `
+        ${toolbar('Поиск профилей', 'openProfileModal()')}
+        <div class="grid">
+          <div class="card add"><button type="button" onclick="openProfileModal()"><div><div class="add-icon">${icon.plus}</div><strong>Создать профиль</strong></div></button></div>
+          ${items.length ? items.map(profileCard).join('') : '<div class="empty">Профили не найдены</div>'}
+        </div>
+      `;
+    }
+
+    function renderPlugins() {
+      const items = state.plugins.filter(p => !state.query || (p.name + ' ' + p.url).toLowerCase().includes(state.query.toLowerCase()));
+      return `
+        ${toolbar('Поиск плагинов', 'openPluginModal()')}
+        <div class="grid">
+          <div class="card add"><button type="button" onclick="openPluginModal()"><div><div class="add-icon">${icon.plus}</div><strong>Добавить плагин</strong></div></button></div>
+          ${items.length ? items.map(pluginCard).join('') : '<div class="empty">Плагины не найдены</div>'}
+        </div>
+      `;
+    }
+
+    function toolbar(placeholder, addAction) {
+      return `
+        <div class="toolbar">
+          <div class="search">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input placeholder="${esc(placeholder)}" value="${esc(state.query)}" oninput="state.query=this.value; render()">
+          </div>
+          <button class="btn primary" type="button" onclick="${addAction}">${icon.plus} Добавить</button>
+        </div>
+      `;
+    }
+
+    function profileCard(profile) {
+      return `
+        <article class="card">
+          <div class="card-head">
+            <div class="identity">
+              ${avatar(profile)}
+              <div style="min-width:0">
+                <div class="title">${esc(profile.name || profile.id)}</div>
+                <div class="sub">${esc(profile.id)}</div>
+              </div>
+            </div>
+            <span class="badge ${profile.ban ? 'bad' : 'good'}">${profile.ban ? 'Забанен' : 'Активен'}</span>
+          </div>
+          <div class="metrics">
+            <span class="badge gold">${profile.activePlugins || 0} плагинов</span>
+            <span class="badge">${profile.idsCount || 0} устройств</span>
+          </div>
+          <div class="sub">До: ${esc(profile.expires || 'не указано')}</div>
+          <div class="actions">
+            <button class="btn" type="button" onclick="openProfileDetail('${esc(profile.id)}')">${icon.open} Открыть</button>
+            <button class="btn" type="button" onclick="openProfileModal('${esc(profile.id)}')">${icon.edit} Править</button>
+            <button class="btn danger" type="button" onclick="deleteProfile('${esc(profile.id)}')">${icon.trash} Удалить</button>
+          </div>
+        </article>
+      `;
+    }
+
+    function pluginCard(plugin) {
+      const chips = (plugin.profiles || []).slice(0, 5).map(id => '<span class="badge">' + esc(profileName(id)) + '</span>').join('');
+      const more = plugin.profiles && plugin.profiles.length > 5 ? '<span class="badge">+' + (plugin.profiles.length - 5) + '</span>' : '';
+      return `
+        <article class="card">
+          <div class="card-head">
+            <div style="min-width:0">
+              <div class="title">${esc(plugin.name)}</div>
+              <div class="sub">${esc(plugin.url)}</div>
+            </div>
+            <span class="badge ${plugin.enabled ? 'good' : 'bad'}">${plugin.enabled ? 'Включен' : 'Отключен'}</span>
+          </div>
+          <div class="chip-row">${chips}${more || '<span class="badge warn">Нет профилей</span>'}</div>
+          <div class="actions">
+            <button class="btn" type="button" onclick="openPluginModal('${esc(plugin.id)}')">${icon.edit} Править</button>
+            <button class="btn" type="button" onclick="togglePlugin('${esc(plugin.id)}')">${plugin.enabled ? 'Отключить' : 'Включить'}</button>
+            <button class="btn danger" type="button" onclick="deletePlugin('${esc(plugin.id)}')">${icon.trash} Удалить</button>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderProfileDetail(profile) {
+      return `
+        <div class="toolbar">
+          <button class="btn" type="button" onclick="state.selectedProfile=null; setView('profiles')">Назад</button>
+          <button class="btn primary" type="button" onclick="saveProfilePlugins('${esc(profile.id)}')">${icon.save} Сохранить</button>
+        </div>
+        <div class="panel" id="profilePluginPanel">
+          ${state.plugins.map(plugin => `
+            <div class="switch-row">
+              <div>
+                <strong>${esc(plugin.name)}</strong>
+                <div class="sub">${esc(plugin.url)}</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" data-plugin-toggle="${esc(plugin.id)}" ${pluginEnabledForProfile(profile, plugin) ? 'checked' : ''} ${plugin.enabled ? '' : 'disabled'}>
+                <span class="slider"></span>
+              </label>
+            </div>
+          `).join('') || '<div class="empty">Плагины не добавлены</div>'}
+        </div>
+      `;
+    }
+
+    function renderSettings() {
+      return `
+        <div class="toolbar">
+          <button class="btn" type="button" onclick="loadRawSettings()">Загрузить JSON</button>
+          <button class="btn primary" type="button" onclick="saveRawUsers()">${icon.save} Сохранить users.json</button>
+        </div>
+        <div class="panel">
+          <div class="field">
+            <label>users.json</label>
+            <textarea id="usersRaw">${esc(state.usersRaw)}</textarea>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="field">
+            <label>init.conf</label>
+            <textarea id="initRaw" readonly>${esc(state.initRaw)}</textarea>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLogs() {
+      return `
+        <div class="toolbar">
+          <button class="btn" type="button" onclick="loadLogs()">Обновить логи</button>
+        </div>
+        <div class="panel">
+          <textarea id="logsArea" readonly>Нажмите "Обновить логи"</textarea>
+        </div>
+      `;
+    }
+
+    function openModal(title, body, foot) {
+      document.getElementById('modalTitle').textContent = title;
+      document.getElementById('modalBody').innerHTML = body;
+      document.getElementById('modalFoot').innerHTML = foot;
+      document.getElementById('modalBackdrop').classList.add('open');
+    }
+
+    function closeModal() {
+      document.getElementById('modalBackdrop').classList.remove('open');
+    }
+
+    function profileChecks(selected = []) {
+      const selectedSet = new Set(selected);
+      return state.profiles.map(p => `
+        <label class="switch-row">
+          <span>${esc(p.name)}<span class="sub"> ${esc(p.id)}</span></span>
+          <span class="switch"><input type="checkbox" data-profile-check="${esc(p.id)}" ${selectedSet.has(p.id) ? 'checked' : ''}><span class="slider"></span></span>
+        </label>
+      `).join('');
+    }
+
+    function openProfileModal(id) {
+      const p = id ? state.profiles.find(x => x.id === id) : null;
+      openModal(p ? 'Редактировать профиль' : 'Создать профиль', `
+        <div class="form-grid">
+          <div class="field"><label>ID</label><input id="profileId" value="${esc(p ? p.id : '')}" ${p ? '' : 'placeholder="profile-id"'}></div>
+          <div class="field"><label>Имя</label><input id="profileName" value="${esc(p ? p.name : '')}"></div>
+          <div class="field"><label>Аватар или иконка</label><input id="profileAvatar" value="${esc(p ? p.avatar || '' : '')}"></div>
+          <div class="field"><label>Группа</label><input id="profileGroup" type="number" value="${esc(p ? p.group || 0 : 0)}"></div>
+          <div class="field"><label>Срок</label><input id="profileExpires" value="${esc(p ? p.expires || '' : '2099-12-31T23:59:59')}"></div>
+          <div class="field"><label>Статус</label><select id="profileBan"><option value="false">Активен</option><option value="true" ${p && p.ban ? 'selected' : ''}>Забанен</option></select></div>
+        </div>
+      `, `
+        <button class="btn" type="button" onclick="closeModal()">Отмена</button>
+        <button class="btn primary" type="button" onclick="saveProfile('${esc(id || '')}')">${icon.save} Сохранить</button>
+      `);
+    }
+
+    async function saveProfile(originalId) {
+      const payload = {
+        id: document.getElementById('profileId').value.trim(),
+        name: document.getElementById('profileName').value.trim(),
+        avatar: document.getElementById('profileAvatar').value.trim(),
+        group: Number(document.getElementById('profileGroup').value || 0),
+        expires: document.getElementById('profileExpires').value.trim(),
+        ban: document.getElementById('profileBan').value === 'true'
+      };
+      try {
+        if (originalId) await api('/adminpanel/api/profiles/' + encodeURIComponent(originalId), { method: 'POST', body: JSON.stringify(payload) });
+        else await api('/adminpanel/api/profiles', { method: 'POST', body: JSON.stringify(payload) });
+        closeModal();
+        await loadAll();
+        toast('Профиль сохранен', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function openPluginModal(id) {
+      const p = id ? state.plugins.find(x => x.id === id) : null;
+      openModal(p ? 'Редактировать плагин' : 'Добавить плагин', `
+        <div class="form-grid">
+          <div class="field"><label>Название</label><input id="pluginName" value="${esc(p ? p.name : '')}"></div>
+          <div class="field"><label>Автор</label><input id="pluginAuthor" value="${esc(p ? p.author || 'admin' : 'admin')}"></div>
+          <div class="field full"><label>URL</label><input id="pluginUrl" value="${esc(p ? p.url : '')}" placeholder="https://example.com/plugin.js"></div>
+          <div class="field full"><label>Описание</label><input id="pluginDescription" value="${esc(p ? p.description || '' : '')}"></div>
+          <div class="field"><label>Статус</label><select id="pluginEnabled"><option value="true">Включен</option><option value="false" ${p && !p.enabled ? 'selected' : ''}>Отключен</option></select></div>
+          <div class="field full"><label>Профили</label><div class="panel">${profileChecks(p ? p.profiles || [] : state.profiles.map(x => x.id))}</div></div>
+        </div>
+      `, `
+        <button class="btn" type="button" onclick="closeModal()">Отмена</button>
+        <button class="btn primary" type="button" onclick="savePlugin('${esc(id || '')}')">${icon.save} Сохранить</button>
+      `);
+    }
+
+    async function savePlugin(id) {
+      const profiles = Array.from(document.querySelectorAll('[data-profile-check]:checked')).map(x => x.dataset.profileCheck);
+      const payload = {
+        name: document.getElementById('pluginName').value.trim(),
+        author: document.getElementById('pluginAuthor').value.trim(),
+        url: document.getElementById('pluginUrl').value.trim(),
+        description: document.getElementById('pluginDescription').value.trim(),
+        enabled: document.getElementById('pluginEnabled').value === 'true',
+        profiles
+      };
+      try {
+        if (id) await api('/adminpanel/api/plugins/' + encodeURIComponent(id), { method: 'POST', body: JSON.stringify(payload) });
+        else await api('/adminpanel/api/plugins', { method: 'POST', body: JSON.stringify(payload) });
+        closeModal();
+        await loadAll();
+        toast('Плагин сохранен', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function togglePlugin(id) {
+      const p = state.plugins.find(x => x.id === id);
+      if (!p) return;
+      try {
+        await api('/adminpanel/api/plugins/' + encodeURIComponent(id), {
+          method: 'POST',
+          body: JSON.stringify(Object.assign({}, p, { enabled: !p.enabled }))
+        });
+        await loadAll();
+        toast('Статус плагина изменен', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deletePlugin(id) {
+      const p = state.plugins.find(x => x.id === id);
+      if (!p || !confirm('Удалить плагин "' + p.name + '"?')) return;
+      try {
+        await api('/adminpanel/api/plugins/' + encodeURIComponent(id) + '/delete', { method: 'POST', body: '{}' });
+        await loadAll();
+        toast('Плагин удален', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deleteProfile(id) {
+      const p = state.profiles.find(x => x.id === id);
+      if (!p || !confirm('Удалить профиль "' + p.name + '"?')) return;
+      try {
+        await api('/adminpanel/api/profiles/' + encodeURIComponent(id) + '/delete', { method: 'POST', body: '{}' });
+        await loadAll();
+        toast('Профиль удален', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function openProfileDetail(id) {
+      state.selectedProfile = state.profiles.find(p => p.id === id);
+      render();
+    }
+
+    async function saveProfilePlugins(id) {
+      const enabled = Array.from(document.querySelectorAll('[data-plugin-toggle]:checked')).map(x => x.dataset.pluginToggle);
+      try {
+        await api('/adminpanel/api/profiles/' + encodeURIComponent(id) + '/plugins', { method: 'POST', body: JSON.stringify(enabled) });
+        await loadAll();
+        state.selectedProfile = state.profiles.find(p => p.id === id);
+        render();
+        toast('Плагины профиля сохранены', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function loadRawSettings() {
+      try {
+        const [users, init] = await Promise.all([
+          api('/adminpanel/api/users-json'),
+          api('/adminpanel/api/init')
+        ]);
+        state.usersRaw = JSON.stringify(users, null, 2);
+        state.initRaw = JSON.stringify(init, null, 2);
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function saveRawUsers() {
+      try {
+        const text = document.getElementById('usersRaw').value;
+        JSON.parse(text);
+        await api('/adminpanel/api/users-json', { method: 'POST', body: text });
+        await loadAll();
+        toast('users.json сохранен', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function loadLogs() {
+      const area = document.getElementById('logsArea');
+      area.value = 'Загрузка...';
+      try {
+        const data = await api('/adminpanel/api/lampac/logs?lines=200');
+        area.value = data.logs || '';
+      } catch (e) {
+        area.value = e.message;
+      }
+    }
+
+    async function restartLampac() {
+      if (!confirm('Перезапустить lampac.service?')) return;
+      try {
+        await api('/adminpanel/api/lampac/restart', { method: 'POST', body: '{}' });
+        toast('Перезапуск запланирован', 'success');
+        setTimeout(loadAll, 9000);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    document.getElementById('nav').addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-view]');
+      if (button) setView(button.dataset.view);
+    });
+    document.getElementById('refreshBtn').addEventListener('click', () => loadAll().catch(e => toast(e.message, 'error')));
+    document.getElementById('restartBtn').addEventListener('click', restartLampac);
+    document.getElementById('modalClose').addEventListener('click', closeModal);
+    document.getElementById('modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'modalBackdrop') closeModal(); });
+
+    loadAll().catch(e => {
+      document.getElementById('content').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+      toast(e.message, 'error');
+    });
+  </script>
+</body>
+</html>

@@ -19,7 +19,7 @@ public static class CronParse
         {
             bool savedb = false;
 
-            string mainHtml = await Http.Get($"{ModInit.conf.host}/main/");
+            string mainHtml = await Http.Get($"{ModInit.conf.host}/home/");
             if (mainHtml == null)
                 return;
 
@@ -27,7 +27,7 @@ public static class CronParse
             while (m.Success)
             {
                 string link = m.Groups[1].Value;
-                string news = await Http.Get($"{ModInit.conf.host}/main/{link}");
+                string news = await Http.Get($"{ModInit.conf.host}/home/{link}");
                 if (news != null)
                 {
                     string name = Regex.Match(news, "itemprop=\"name\">([^<]+)</h1>").Groups[1].Value.Trim();
@@ -55,20 +55,20 @@ public static class CronParse
                                 year = year
                             };
 
-                            if (!ModInit.databaseCache.ContainsKey(link))
+                            if (!ModInit.database.ContainsKey(link))
                             {
-                                ModInit.databaseCache.Add(link, md);
+                                ModInit.database.Add(link, md);
                                 savedb = true;
                             }
                             else
                             {
                                 if (string.IsNullOrEmpty(md.tortuga))
-                                    md.tortuga = ModInit.databaseCache[link].tortuga;
+                                    md.tortuga = ModInit.database[link].tortuga;
 
                                 if (string.IsNullOrEmpty(md.ashdi))
-                                    md.ashdi = ModInit.databaseCache[link].ashdi;
+                                    md.ashdi = ModInit.database[link].ashdi;
 
-                                ModInit.databaseCache[link] = md;
+                                ModInit.database[link] = md;
                             }
                         }
                     }
@@ -78,7 +78,7 @@ public static class CronParse
             }
 
             if (savedb)
-                File.WriteAllText("data/kinoukr.json", JsonConvert.SerializeObject(ModInit.databaseCache, Formatting.Indented));
+                File.WriteAllText("data/kinoukr.json", JsonConvert.SerializeObject(ModInit.database, Formatting.Indented));
         }
         catch (System.Exception ex)
         {

@@ -28,10 +28,9 @@ public class VeoVeoController : BaseOnlineController
         };
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/veoveo")]
-    async public Task<ActionResult> Index(long movieid, string imdb_id, long kinopoisk_id, string title, string original_title, int clarification, int s = -1, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(long movieid, string imdb_id, long kinopoisk_id, string title, string original_title, byte clarification, short s = -1, bool rjson = false, bool similar = false)
     {
         if (await IsRequestBlocked(rch: true, rch_check: !similar))
             return badInitMsg;
@@ -131,7 +130,6 @@ public class VeoVeoController : BaseOnlineController
                 else
                 {
                     var etpl = new EpisodeTpl();
-                    string sArhc = s.ToString();
 
                     foreach (var episode in cache.Value
                         .Where(i => (i.season?.order ?? 0) == s)
@@ -154,8 +152,8 @@ public class VeoVeoController : BaseOnlineController
                             etpl.Append(
                                 name ?? $"{episode.order} серия",
                                 title ?? original_title,
-                                sArhc,
-                                episode.order.ToString(),
+                                s,
+                                episode.order,
                                 stream,
                                 vast: init.vast
                             );
@@ -199,7 +197,7 @@ public class VeoVeoController : BaseOnlineController
     #endregion
 
     #region Spider
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/veoveo-spider")]
     async public Task<ActionResult> Spider(string title)
     {
@@ -233,14 +231,10 @@ public class VeoVeoController : BaseOnlineController
 
 
     #region search
-    async ValueTask<Movie> search(string imdb_id, long kinopoisk_id, string title, string original_title)
+    ValueTask<Movie> search(string imdb_id, long kinopoisk_id, string title, string original_title)
     {
         if (!string.IsNullOrEmpty(init.token) && (!string.IsNullOrEmpty(imdb_id) || kinopoisk_id > 0))
-        {
-            var result = await searchApi(imdb_id, kinopoisk_id);
-            if (result != null)
-                return result;
-        }
+            return searchApi(imdb_id, kinopoisk_id);
 
         string stitle = SearchNameTo.Convert(title);
         string sorigtitle = SearchNameTo.Convert(original_title);
@@ -256,10 +250,10 @@ public class VeoVeoController : BaseOnlineController
             })
             {
                 if (!string.IsNullOrEmpty(key) && ModInit.databaseById.TryGetValue(key, out var item))
-                    return item;
+                    return ValueTask.FromResult(item);
             }
 
-            return null;
+            return default;
         }
         else
         {
@@ -299,7 +293,7 @@ public class VeoVeoController : BaseOnlineController
                 return null;
             }
 
-            return goSearch(true) ?? goSearch(false);
+            return ValueTask.FromResult(goSearch(true) ?? goSearch(false));
         }
     }
     #endregion

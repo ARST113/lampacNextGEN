@@ -14,10 +14,9 @@ public class GeosaitebiController : BaseOnlineController
 {
     public GeosaitebiController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/geosaitebi")]
-    async public Task<ActionResult> Index(string title, string original_title, int year, int serial = 0, string href = null, bool similar = false)
+    async public Task<ActionResult> Index(string title, string original_title, short year, byte serial, string href = null, bool similar = false)
     {
         if (serial == 1)
             return OnError();

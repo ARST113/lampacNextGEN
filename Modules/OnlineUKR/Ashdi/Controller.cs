@@ -11,10 +11,9 @@ public class AshdiController : BaseOnlineController
 {
     public AshdiController() : base(ModInit.conf) { }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/ashdi")]
-    async public Task<ActionResult> Index(string uri, string title, string original_title, int t = -1, int s = -1, bool rjson = false)
+    async public Task<ActionResult> Index(string uri, string title, string original_title, short t = -1, short s = -1, bool rjson = false)
     {
         string href = DecryptQuery(uri);
 
@@ -46,7 +45,7 @@ public class AshdiController : BaseOnlineController
         );
     }
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/ashdi/vod.m3u8")]
     async public Task<ActionResult> Vod(string uri, string title, bool play)
     {
@@ -65,11 +64,11 @@ public class AshdiController : BaseOnlineController
                 if (init.rhub_fallback && play)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
 
             if (!play && rch.IsRequiredConnected())
-                return ContentTo(rch.connectionMsg);
+                return Content(rch.connectionMsg, "application/json; charset=utf-8");
 
             if (rch.IsNotSupport(out string rch_error))
                 return ShowError(rch_error);

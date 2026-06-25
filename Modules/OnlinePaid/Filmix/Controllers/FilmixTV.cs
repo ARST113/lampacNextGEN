@@ -1,6 +1,7 @@
 ﻿using Filmix.Models;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json.Linq;
+using Shared.Attributes;
 using System.Net.Http;
 using System.Text;
 using F = System.IO.File;
@@ -30,7 +31,7 @@ public class FilmixTV : BaseOnlineController<FilmixSettings>
         };
     }
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/filmixtv")]
     async public Task<ActionResult> Index(string title, string original_title, int clarification, int year, int postid, int t = -1, int? s = null, bool rjson = false, bool similar = false, string source = null, string id = null)
     {
@@ -109,7 +110,7 @@ public class FilmixTV : BaseOnlineController<FilmixSettings>
 
 
     #region [Copilot AI] EnsureAccessToken
-    async ValueTask<(bool IsSuccess, string Token, string ErrorMsg)> EnsureAccessToken()
+    async Task<(bool IsSuccess, string Token, string ErrorMsg)> EnsureAccessToken()
     {
         string hashFile = $"cache/filmixtv-{CrypTo.md5(init.user_apitv)}.hash";
         var semaphore = new SemaphorManager(hashFile, TimeSpan.FromSeconds(30));

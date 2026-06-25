@@ -1,13 +1,20 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Shared.Attributes;
 using Shared.Models.Events;
-using Shared.PlaywrightCore;
+using Shared.Services.HTTP;
 using System.Net.Http;
 
 namespace Catalog;
 
 public class ListController : BaseController
 {
-    [HttpGet]
+    static readonly JsonSerializerSettings jsonSettings = new JsonSerializerSettings
+    {
+        NullValueHandling = NullValueHandling.Ignore,
+        DefaultValueHandling = DefaultValueHandling.Ignore
+    };
+
+    [HttpGet, Staticache(manually: true)]
     [Route("catalog/list")]
     async public Task<ActionResult> Index(string query, string plugin, string cat, string sort, int page = 1)
     {
@@ -106,7 +113,7 @@ public class ListController : BaseController
                 {
                     html = rch.enable
                         ? await rch.Get(url.Replace("{page}", page.ToString()), headers, useDefaultHeaders: init.useDefaultHeaders)
-                        : init.priorityBrowser == "playwright" ? await PlaywrightBrowser.Get(init, url.Replace("{page}", page.ToString()), headers, proxy.data, cookies: init.cookies)
+                        : init.priorityBrowser == "playwright" ? await PlaywrightHttp.Get(init, url.Replace("{page}", page.ToString()), headers, proxy.data, cookies: init.cookies)
                         : await Http.Get(url.Replace("{page}", page.ToString()), headers: headers, proxy: proxy.proxy, timeoutSeconds: init.timeout, httpversion: init.httpversion, useDefaultHeaders: init.useDefaultHeaders);
                 }
                 #endregion
@@ -249,11 +256,7 @@ public class ListController : BaseController
                 total_pages,
                 next_page
 
-            }, new JsonSerializerSettings
-            {
-                NullValueHandling = NullValueHandling.Ignore,
-                DefaultValueHandling = DefaultValueHandling.Ignore
-            }));
+            }, jsonSettings));
         });
     }
 

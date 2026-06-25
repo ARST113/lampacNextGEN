@@ -3,8 +3,8 @@ using Shared;
 using Shared.Attributes;
 using Shared.Models.SISI.Base;
 using Shared.Models.SISI.OnResult;
-using Shared.PlaywrightCore;
 using Shared.Services;
+using Shared.Services.HTTP;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -24,8 +24,7 @@ public class SpankbangController : BaseSisiController
         };
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache]
     [Route("sbg")]
     async public Task<ActionResult> Index(string search, string sort, int pg = 1)
     {
@@ -50,14 +49,10 @@ public class SpankbangController : BaseSisiController
             {
                 var headers = httpHeaders(init);
 
-                string html = await PlaywrightBrowser.Get(
-                    init,
-                    init.cors(url, headers, requestInfo),
-                    headers,
-                    proxy_data
-                );
-
-                playlists = SpankbangTo.Playlist("sbg/vidosik", html);
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(url, headers, requestInfo), span =>
+                {
+                    playlists = SpankbangTo.Playlist("sbg/vidosik", span);
+                }, headers, proxy_data);
             }
 
             if (playlists == null || playlists.Count == 0)
@@ -74,10 +69,9 @@ public class SpankbangController : BaseSisiController
         );
     }
 
-    [HttpGet]
-    [Staticache]
+    [HttpGet, Staticache(manually: true)]
     [Route("sbg/vidosik")]
-    async public Task<ActionResult> Index(string uri, bool related)
+    async public Task<ActionResult> Vidosik(string uri, bool related)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -102,13 +96,10 @@ public class SpankbangController : BaseSisiController
             {
                 var headers = httpHeaders(init);
 
-                string html = await PlaywrightBrowser.Get(init,
-                    init.cors(url, headers, requestInfo),
-                    headers,
-                    proxy_data
-                );
-
-                stream_links = SpankbangTo.StreamLinks("sbg/vidosik", html);
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(url, headers, requestInfo), span =>
+                {
+                    stream_links = SpankbangTo.StreamLinks("sbg/vidosik", span);
+                }, headers, proxy_data);
             }
 
             if (stream_links?.qualitys == null || stream_links.qualitys.Count == 0)

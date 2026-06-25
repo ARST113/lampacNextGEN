@@ -6,23 +6,23 @@
         console.log(e.detail);
 		// e.detail.name
 		// e.detail.data
-      }); 
+      });
 	*/
 
   {invc-rch_nws}
 
   var nwsClient;
-  
+
   window.lwsEvent = {
-    uid: '', 
+    uid: '',
 	connectionId: '',
 	init: false
   };
-  
+
   window.lwsEvent.send = function hubEvnt(name, data) {
     nwsClient.invoke("events", window.lwsEvent.uid, name, data);
   };
-  
+
   window.lwsEvent.sendId = function hubEvnt(connectionId, name, data) {
     nwsClient.invoke("eventsId", connectionId, window.lwsEvent.uid, name, data);
   };
@@ -89,13 +89,13 @@
     window.lwsEvent.init = true;
     window.lwsEvent.uid = j.user_uid;
     if (typeof NativeWsClient == 'undefined') {
-      Lampa.Utils.putScript(["{localhost}/js/nws-client-es5.js?v18112025"], function() {}, false, function() {
+        Lampa.Utils.putScript(["{localhost}/js/nws-client-es5.js?v21042026"], function() {}, false, function() {
         waitEvent();
       }, true);
     } else waitEvent();
   }
-  
-  
+
+
   if (!window.lwsEvent.init) {
     if (!window.reqinfo) {
       var network = new Lampa.Reguest();
@@ -103,7 +103,7 @@
         if (j.user_uid)
           start(j);
       });
-    } 
+    }
     else
       start(window.reqinfo);
   }

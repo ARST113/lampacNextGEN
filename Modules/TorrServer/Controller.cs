@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Services;
 using Shared.Services.Pools;
@@ -42,28 +43,25 @@ public class TorrServerController : BaseController
     #endregion
 
     #region ts.js
-    [HttpGet]
-    [AllowAnonymous]
+    [HttpGet, AllowAnonymous]
+    [Staticache(cacheMinutes: 10, always: true, setHeadersNoCache: true)]
     [Route("ts.js")]
     [Route("ts/js/{token}")]
     public ActionResult Plugin(string token)
     {
-        SetHeadersNoCache();
-
         string plugins = FileCache.ReadAllText($"{ModInit.modpath}/plugins.js", "ts.js")
             .Replace("{localhost}", Regex.Replace(host, "^https?://", ""));
 
         if (!string.IsNullOrEmpty(token))
             plugins = Regex.Replace(plugins, "Lampa.Storage.set\\('torrserver_login'[^\n\r]+", $"Lampa.Storage.set('torrserver_login','{HttpUtility.UrlEncode(token)}');");
 
-        return Content(plugins, "application/javascript; charset=utf-8");
+        return ContentTo(plugins, "application/javascript; charset=utf-8");
     }
     #endregion
 
 
     #region Main
-    [HttpGet]
-    [AllowAnonymous]
+    [HttpGet, AllowAnonymous]
     [Route("ts")]
     [Route("ts/static/js/{suffix}")]
     async public Task<ActionResult> Main()
@@ -105,8 +103,7 @@ public class TorrServerController : BaseController
     #endregion
 
     #region TorAPI
-    [HttpGet]
-    [HttpPost]
+    [HttpGet, HttpPost]
     [AllowAnonymous]
     [Route("ts/{*suffix}")]
     async public Task Index()
@@ -161,7 +158,6 @@ public class TorrServerController : BaseController
                         HttpContext.Response.ContentType = "text/plain; charset=utf-8";
                         HttpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;
                         HttpContext.Response.BodyWriter.Write("NoAccessGroup"u8);
-                        await HttpContext.Response.BodyWriter.FlushAsync(HttpContext.RequestAborted).ConfigureAwait(false);
                         return;
                     }
 
@@ -175,7 +171,6 @@ public class TorrServerController : BaseController
                 HttpContext.Response.ContentType = "text/plain; charset=utf-8";
                 HttpContext.Response.StatusCode = StatusCodes.Status200OK;
                 HttpContext.Response.BodyWriter.Write("MatriX.API"u8);
-                await HttpContext.Response.BodyWriter.FlushAsync(HttpContext.RequestAborted).ConfigureAwait(false);
                 return;
             }
 
@@ -193,7 +188,7 @@ public class TorrServerController : BaseController
     async public Task TorAPI(AccsUser user = null)
     {
         string pathRequest = Regex.Replace(HttpContext.Request.Path.Value, "^/ts", "");
-        string servUri = $"http://{CoreInit.conf.listen.localhost}:{ModInit.conf.tsport}{pathRequest + HttpContext.Request.QueryString.Value}";
+        string servUri = $"http://{CoreInit.conf.listen.localhost}:{ModInit.conf.tsport}{Regex.Replace(pathRequest, "[^a-zA-Z0-9\\./]", "") + HttpContext.Request.QueryString.Value}";
 
         using (var ctsHttp = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted))
         {
@@ -204,14 +199,11 @@ public class TorrServerController : BaseController
             {
                 if (HttpContext.Request.Method != "POST")
                 {
-                    HttpContext.Response.ContentType = "text/plain; charset=utf-8";
                     HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
-                    HttpContext.Response.BodyWriter.Write("403 Forbidden"u8);
-                    await HttpContext.Response.BodyWriter.FlushAsync(HttpContext.RequestAborted).ConfigureAwait(false);
                     return;
                 }
 
-                using (var reader = new StreamReader(HttpContext.Request.Body, Encoding.UTF8, false, PoolInvk.bufferSize, leaveOpen: true))
+                using (var reader = new StreamReader(HttpContext.Request.Body, Encoding.UTF8, false, leaveOpen: true))
                 {
                     string requestJson = await reader.ReadToEndAsync(ctsHttp.Token).ConfigureAwait(false);
 

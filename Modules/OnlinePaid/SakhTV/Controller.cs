@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.Services;
@@ -86,9 +87,9 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
     }
     #endregion
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/sakhtv")]
-    public async Task<ActionResult> Index(string orid, string imdb_id, long kinopoisk_id, string title, string original_title, int year, int serial, int s = -1, string t = null, bool rjson = false, bool similar = false)
+    public async Task<ActionResult> Index(string orid, string imdb_id, long kinopoisk_id, string title, string original_title, short year, byte serial, short s = -1, string t = null, bool rjson = false, bool similar = false)
     {
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
@@ -111,6 +112,7 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                 var root = await httpHydra.Get<SearchRoot>($"{init.host}/v2/common/search?query={HttpUtility.UrlEncode(original_title)}&amount=20",
                     useDefaultHeaders: false,
                     newheaders: bearer,
+                    textJson: true,
                     safety: true
                 );
 
@@ -151,6 +153,7 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                 var root = await httpHydra.Get<TvshowDetails>($"{init.host}/v1/serials/get?tvshow={orid}",
                     useDefaultHeaders: false,
                     newheaders: bearer,
+                    textJson: true,
                     safety: true
                 );
 
@@ -196,7 +199,9 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                 var episodes = await InvokeCacheResult<EpisodeDetails[]>($"sakhtv:episodes:{seasonId}", 90, async e =>
                 {
                     var root = await httpHydra.Get<EpisodeDetails[]>($"{init.host}/v1/serials/get_episodes?season_id={seasonId}",
-                        addheaders: bearer,
+                        useDefaultHeaders: false,
+                        newheaders: bearer,
+                        textJson: true,
                         safety: true
                     );
 
@@ -237,7 +242,6 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                 #endregion
 
                 var etpl = new EpisodeTpl(vtpl);
-                string sArhc = s.ToString();
 
                 foreach (var episode in episodes.Value)
                 {
@@ -251,7 +255,7 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                             etpl.Append(
                                 $"{e} серия",
                                 string.IsNullOrEmpty(episode.name) ? (title ?? original_title) : episode.name,
-                                sArhc,
+                                s,
                                 e,
                                 accsArgs(link)
                             );
@@ -286,6 +290,7 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                 var root = await httpHydra.Get<MovieDetails>($"{init.host}/v2/movie/{orid}",
                     useDefaultHeaders: false,
                     newheaders: bearer,
+                    textJson: true,
                     safety: true
                 );
 
@@ -328,7 +333,7 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
                 if (init.rhub_fallback)
                     rch.Disabled();
                 else
-                    return ContentTo(rch.connectionMsg);
+                    return Content(rch.connectionMsg, "application/json; charset=utf-8");
             }
         }
 
@@ -338,6 +343,7 @@ public class SakhTVController : BaseOnlineController<ModuleConf>
             var root = await httpHydra.Get<Episode[]>($"{init.host}/v1/serial/watch/get_playlist?season_id={season_id}&rg={rg}",
                 useDefaultHeaders: false,
                 newheaders: bearer,
+                textJson: true,
                 safety: true
             );
 

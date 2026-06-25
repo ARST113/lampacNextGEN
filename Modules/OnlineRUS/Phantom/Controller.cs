@@ -3,6 +3,7 @@ using Microsoft.Playwright;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.PlaywrightCore;
@@ -28,9 +29,9 @@ public class PhantomController : BaseOnlineController<ModuleConf>
         };
     }
 
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/phantom")]
-    async public Task<ActionResult> Index(string orid, string imdb_id, long kinopoisk_id, string title, string original_title, int serial, string original_language, int year, int t = -1, int s = -1, bool origsource = false, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(string orid, string imdb_id, long kinopoisk_id, string title, string original_title, byte serial, string original_language, short year, int t = -1, short s = -1, bool origsource = false, bool rjson = false, bool similar = false)
     {
         if (similar)
             return await RouteSpiderSearch(title, origsource, rjson);
@@ -189,13 +190,13 @@ public class PhantomController : BaseOnlineController<ModuleConf>
                         foreach (var voice in episode
                             .ToObject<Dictionary<string, JObject>>()
                             .Select(i => i.Value)
-                            .OrderBy(e => e.Value<int>("episode")))
+                            .OrderBy(e => e.Value<short>("episode")))
                         {
                             if (voice.Value<int>("id_translation") != t)
                                 continue;
 
                             string translation = voice.Value<string>("translation");
-                            int e = voice.Value<int>("episode");
+                            short e = voice.Value<short>("episode");
 
                             string link = $"{host}/lite/phantom/video?id_file={voice.Value<long>("id")}&token_movie={data.Value<string>("token_movie")}";
                             string streamlink = accsArgs($"{link.Replace("/video", "/video.m3u8")}&play=true");
@@ -205,8 +206,8 @@ public class PhantomController : BaseOnlineController<ModuleConf>
                                 etpl.Append(
                                     $"{e} серия",
                                     title ?? original_title,
-                                    sArhc,
-                                    e.ToString(),
+                                    s,
+                                    e,
                                     link,
                                     "call",
                                     voice_name: translation,
@@ -257,13 +258,13 @@ public class PhantomController : BaseOnlineController<ModuleConf>
                             {
                                 foreach (var episode in sjob
                                     .ToObject<Dictionary<string, JObject>>()
-                                    .OrderBy(e => e.Value.Value<int>("episode")))
+                                    .OrderBy(e => e.Value.Value<short>("episode")))
                                 {
                                     if (episode.Value.Value<int>("id_translation") != t)
                                         continue;
 
                                     string translation = episode.Value.Value<string>("translation");
-                                    int e = episode.Value.Value<int>("episode");
+                                    short e = episode.Value.Value<short>("episode");
 
                                     string link = $"{host}/lite/phantom/video?id_file={episode.Value.Value<long>("id")}&token_movie={data.Value<string>("token_movie")}";
                                     string streamlink = accsArgs($"{link.Replace("/video", "/video.m3u8")}&play=true");
@@ -273,8 +274,8 @@ public class PhantomController : BaseOnlineController<ModuleConf>
                                         etpl.Append(
                                             $"{e} серия",
                                             title ?? original_title,
-                                            sArhc,
-                                            e.ToString(),
+                                            s,
+                                            e,
                                             link,
                                             "call",
                                             voice_name: translation,
@@ -327,7 +328,7 @@ public class PhantomController : BaseOnlineController<ModuleConf>
                             etpl.Append(
                                 $"{episode.Key} серия",
                                 title ?? original_title,
-                                sArhc,
+                                s,
                                 episode.Key,
                                 link,
                                 "call",
@@ -348,7 +349,7 @@ public class PhantomController : BaseOnlineController<ModuleConf>
 
 
     #region Video
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/phantom/video")]
     [Route("lite/phantom/video.m3u8")]
     async public Task<ActionResult> Video(long id_file, string token_movie, bool play)
@@ -382,14 +383,13 @@ public class PhantomController : BaseOnlineController<ModuleConf>
             "auto",
             streamquality: streamquality,
             vast: init.vast,
-            hls_manifest_timeout: (int)TimeSpan.FromSeconds(30).TotalMilliseconds,
             httpContext: HttpContext
         ));
     }
     #endregion
 
     #region SpiderSearch
-    [HttpGet]
+    [HttpGet, Staticache(manually: true)]
     [Route("lite/phantom-search")]
     async public Task<ActionResult> RouteSpiderSearch(string title, bool origsource = false, bool rjson = false)
     {
