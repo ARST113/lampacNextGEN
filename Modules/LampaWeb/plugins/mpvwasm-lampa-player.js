@@ -6,7 +6,7 @@
 
   var script = document.createElement('script');
   script.type = 'text/javascript';
-  script.src = '/mpvwasm/player.js?v=core-20260707-37-seek';
+  script.src = '/mpvwasm/player.js?v=core-20260707-39-hw-seek';
   script.onload = function () { window.__mpvwasm_core_loading = false; };
   script.onerror = function () { window.__mpvwasm_core_loading = false; };
   document.head.appendChild(script);
@@ -15,7 +15,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260707-37-seek';
+  var VERSION = '20260707-39-hw-seek';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -166,7 +166,7 @@
   }
 
   function resolveTimeline(data) {
-    if (data && data.timeline && data.timeline.handler) return data.timeline;
+    if (data && data.timeline && (data.timeline.handler || data.timeline.time || data.timeline.percent || data.timeline.hash)) return data.timeline;
     var hash = timelineHash(data);
     if (!hash) return data && data.timeline ? data.timeline : null;
     try {
@@ -528,11 +528,21 @@
           else video.play().catch(function (error) { call('error', error); });
         },
         seek: function (seconds) {
-          try { video.currentTime = Math.max(0, Number(seconds || 0)); } catch (_) { }
+          var target = Math.max(0, Number(seconds || 0));
+          try {
+            if (typeof video.fastSeek === 'function') video.fastSeek(target);
+            else video.currentTime = target;
+            if (!video.paused) video.play().catch(function (error) { call('error', error); });
+          } catch (_) { }
           tick();
         },
         seekRelative: function (seconds) {
-          try { video.currentTime = Math.max(0, (video.currentTime || 0) + Number(seconds || 0)); } catch (_) { }
+          var target = Math.max(0, (video.currentTime || 0) + Number(seconds || 0));
+          try {
+            if (typeof video.fastSeek === 'function') video.fastSeek(target);
+            else video.currentTime = target;
+            if (!video.paused) video.play().catch(function (error) { call('error', error); });
+          } catch (_) { }
           tick();
         },
         setVolume: function (value) {
@@ -1121,7 +1131,9 @@
         if (Lampa.PlayerInfo.loading) Lampa.PlayerInfo.loading();
         if (Lampa.PlayerInfo.set) {
           Lampa.PlayerInfo.set('name', data.title || data.name || 'MPV');
-          if (data.torrent_hash || /[?&]link=/.test(String(data.url || ''))) Lampa.PlayerInfo.set('stat', playerInfoStatData(data));
+          // Lampa.PlayerInfo stat calls the globally configured TorrServer /cache endpoint.
+          // On HTTPS setups with legacy http/ip TorrServer settings it blocks the MPV player
+          // with repeated mixed-content/SSL failures, while playback itself works via data.url.
         }
       }
     } catch (_) { }
