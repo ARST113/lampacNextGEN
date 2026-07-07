@@ -6,7 +6,7 @@
 
   var script = document.createElement('script');
   script.type = 'text/javascript';
-  script.src = '/mpvwasm/player.js?v=core-20260707-34-hw4k';
+  script.src = '/mpvwasm/player.js?v=core-20260707-35-https';
   script.onload = function () { window.__mpvwasm_core_loading = false; };
   script.onerror = function () { window.__mpvwasm_core_loading = false; };
   document.head.appendChild(script);
@@ -15,9 +15,10 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260707-34-hw4k';
+  var VERSION = '20260707-35-https';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
+  var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
   if (window.__mpvwasm_lampa_plugin === VERSION) return;
   window.__mpvwasm_lampa_plugin = VERSION;
 
@@ -49,6 +50,7 @@
   function normalizeUrl(url) {
     return String(url || '')
       .replace(OLD_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''))
+      .replace(HTTP_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''))
       .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
   }
 
@@ -91,10 +93,7 @@
   function playerInfoStatData(data) {
     var copy = {};
     Object.keys(data || {}).forEach(function (key) { copy[key] = data[key]; });
-    var ip = torserverIp();
-    if (ip && copy.url) {
-      copy.url = String(copy.url).replace(/^https:\/\/newgenres\.duckdns\.org\/TS\/+/i, 'http://' + ip + '/');
-    }
+    if (copy.url) copy.url = normalizeUrl(copy.url);
     return copy;
   }
 
