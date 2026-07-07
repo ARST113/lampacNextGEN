@@ -6,7 +6,7 @@
 
   var script = document.createElement('script');
   script.type = 'text/javascript';
-  script.src = '/mpvwasm/player.js?v=core-20260707-35-https';
+  script.src = '/mpvwasm/player.js?v=core-20260707-36-https-video';
   script.onload = function () { window.__mpvwasm_core_loading = false; };
   script.onerror = function () { window.__mpvwasm_core_loading = false; };
   document.head.appendChild(script);
@@ -15,7 +15,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260707-35-https';
+  var VERSION = '20260707-36-https-video';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -435,7 +435,6 @@
       video.autoplay = true;
       video.controls = false;
       video.preload = 'auto';
-      video.crossOrigin = 'anonymous';
       video.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;background:#000;object-fit:contain';
       try { ui.canvas.style.display = 'none'; } catch (_) { }
       ui.display.appendChild(video);
