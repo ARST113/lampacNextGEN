@@ -6,7 +6,7 @@
 
   var script = document.createElement('script');
   script.type = 'text/javascript';
-  script.src = '/mpvwasm/player.js?v=core-20260707-39-hw-seek';
+  script.src = '/mpvwasm/player.js?v=core-20260707-40-hybrid';
   script.onload = function () { window.__mpvwasm_core_loading = false; };
   script.onerror = function () { window.__mpvwasm_core_loading = false; };
   document.head.appendChild(script);
@@ -15,7 +15,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260707-39-hw-seek';
+  var VERSION = '20260707-40-hybrid';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -119,6 +119,14 @@
 
   function isHeavyVideoData(data) {
     return isHeavyVideoUrl(videoProbeText(data));
+  }
+
+  function isDirectTorrServerUrl(url) {
+    return /^https:\/\/newgenres\.duckdns\.org\/TS\/+/i.test(normalizeUrl(url));
+  }
+
+  function shouldUseHardwareVideo(data) {
+    return isDirectTorrServerUrl(data && data.url) || isHeavyVideoData(data);
   }
 
   function mpvOptionsFor(data) {
@@ -444,17 +452,24 @@
     };
   }
 
-  function createHardwareVideoPlayer(ui, url, callbacks) {
+  function createHardwareVideoPlayer(ui, url, callbacks, sidecarUrl) {
     return new Promise(function (resolve) {
       var video = document.createElement('video');
       var timer = 0;
       var tracksTimer = 0;
+      var syncTimer = 0;
+      var sidecar = null;
+      var sidecarReady = false;
+      var sidecarPendingSeek = null;
+      var sidecarVolume = 1;
+      var sidecarCanvas = null;
       video.className = 'player-video__video mpvwasm-player-canvas mpvwasm-hw-video';
       video.playsInline = true;
       video.autoplay = true;
       video.controls = false;
       video.preload = 'auto';
       video.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;background:#000;object-fit:contain';
+      if (sidecarUrl) video.muted = true;
       try { ui.canvas.style.display = 'none'; } catch (_) { }
       ui.display.appendChild(video);
       ui.nativeVideo = video;
@@ -463,6 +478,84 @@
         try {
           if (callbacks && typeof callbacks[name] === 'function') callbacks[name](value);
         } catch (_) { }
+      }
+
+      function seekNative(seconds) {
+        var target = Math.max(0, Number(seconds || 0));
+        try {
+          if (typeof video.fastSeek === 'function') video.fastSeek(target);
+          else video.currentTime = target;
+          if (!video.paused) video.play().catch(function (error) { call('error', error); });
+        } catch (_) { }
+        if (sidecarReady && sidecar && typeof sidecar.seek === 'function') {
+          try { sidecar.seek(target); } catch (_) { }
+        } else {
+          sidecarPendingSeek = target;
+        }
+      }
+
+      function syncSidecar(force) {
+        if (!sidecarReady || !sidecar || !sidecarUrl) return;
+        try {
+          var delta = Math.abs(Number(sidecar.elapsed || 0) - Number(video.currentTime || 0));
+          if (force || delta > 1.25) sidecar.seek(video.currentTime || 0);
+          sidecar.setPause(!!video.paused);
+        } catch (_) { }
+      }
+
+      function startSidecar() {
+        if (!sidecarUrl || !window.MpvWasmTest || !window.MpvWasmTest.createPlayer) return;
+        sidecarCanvas = document.createElement('canvas');
+        sidecarCanvas.width = 2;
+        sidecarCanvas.height = 2;
+        sidecarCanvas.style.cssText = 'position:fixed;left:-20px;top:-20px;width:2px;height:2px;opacity:0;pointer-events:none';
+        ui.root.appendChild(sidecarCanvas);
+        var sideCallbacks = {
+          status: function (message) {
+            if (window.__MPV_WASM_SIDECAR_STATUS) call('status', 'sidecar ' + message);
+          },
+          error: function (error) {
+            call('status', 'sidecar error ' + (error && (error.error || error.message || error) || error));
+            if (!sidecarReady) video.muted = false;
+          },
+          audioTracks: function (tracks) {
+            call('audioTracks', tracks || []);
+          },
+          subtitleTracks: function (tracks) {
+            call('subtitleTracks', tracks || []);
+          },
+          duration: function () { },
+          elapsed: function () { },
+          isPlaying: function () { },
+          fileStart: function () {
+            sidecarReady = true;
+            try { sidecar.setVolume(sidecarVolume); } catch (_) { }
+            if (sidecarPendingSeek !== null) {
+              try { sidecar.seek(sidecarPendingSeek); } catch (_) { }
+              sidecarPendingSeek = null;
+            } else {
+              syncSidecar(true);
+            }
+          },
+          fileEnd: function () { }
+        };
+        window.MpvWasmTest.createPlayer(sidecarCanvas, null, sideCallbacks, {
+          initialUrl: sidecarUrl,
+          initialMpvOptions: 'vid=no'
+        }).then(function (player) {
+          sidecar = player;
+          sidecarReady = true;
+          try { sidecar.setVolume(sidecarVolume); } catch (_) { }
+          syncSidecar(true);
+          try {
+            if (sidecar.module && typeof sidecar.module.getTracks === 'function') {
+              setTimeout(function () { sidecar.module.getTracks(); }, 800);
+            }
+          } catch (_) { }
+        }).catch(function (error) {
+          call('status', 'sidecar failed ' + (error && (error.message || error) || error));
+          video.muted = false;
+        });
       }
 
       function publishTracks() {
@@ -484,6 +577,7 @@
             }
           }
         } catch (_) { }
+        if (sidecarUrl && !audio.length && !subs.length) return;
         call('audioTracks', audio);
         call('subtitleTracks', subs);
       }
@@ -504,8 +598,15 @@
       video.addEventListener('playing', function () {
         call('isPlaying', true);
         call('fileStart', { hardware: true });
+        syncSidecar(false);
       });
-      video.addEventListener('pause', function () { call('isPlaying', false); });
+      video.addEventListener('pause', function () {
+        call('isPlaying', false);
+        syncSidecar(false);
+      });
+      video.addEventListener('seeked', function () {
+        syncSidecar(true);
+      });
       video.addEventListener('ended', function () { call('fileEnd', { hardware: true }); });
       video.addEventListener('error', function () {
         call('error', video.error ? (video.error.message || ('HTML5 video error ' + video.error.code)) : 'HTML5 video error');
@@ -514,6 +615,7 @@
       video.addEventListener('durationchange', tick);
       timer = setInterval(tick, 500);
       tracksTimer = setInterval(publishTracks, 1500);
+      syncTimer = setInterval(function () { syncSidecar(false); }, 1500);
 
       var player = {
         hardware: true,
@@ -526,33 +628,34 @@
         setPause: function (value) {
           if (value) video.pause();
           else video.play().catch(function (error) { call('error', error); });
+          if (sidecarReady && sidecar && typeof sidecar.setPause === 'function') {
+            try { sidecar.setPause(!!value); } catch (_) { }
+          }
         },
         seek: function (seconds) {
-          var target = Math.max(0, Number(seconds || 0));
-          try {
-            if (typeof video.fastSeek === 'function') video.fastSeek(target);
-            else video.currentTime = target;
-            if (!video.paused) video.play().catch(function (error) { call('error', error); });
-          } catch (_) { }
+          seekNative(seconds);
           tick();
         },
         seekRelative: function (seconds) {
           var target = Math.max(0, (video.currentTime || 0) + Number(seconds || 0));
-          try {
-            if (typeof video.fastSeek === 'function') video.fastSeek(target);
-            else video.currentTime = target;
-            if (!video.paused) video.play().catch(function (error) { call('error', error); });
-          } catch (_) { }
+          seekNative(target);
           tick();
         },
         setVolume: function (value) {
           var volume = Number(value || 0);
           if (!isFinite(volume)) volume = 1;
           if (volume > 1) volume = volume / 100;
-          video.volume = Math.max(0, Math.min(1, volume));
-          video.muted = video.volume <= 0;
+          sidecarVolume = Math.max(0, Math.min(1, volume));
+          video.volume = sidecarVolume;
+          video.muted = !!sidecarUrl || sidecarVolume <= 0;
+          if (sidecarReady && sidecar && typeof sidecar.setVolume === 'function') {
+            try { sidecar.setVolume(sidecarVolume); } catch (_) { }
+          }
         },
         setAudioTrack: function (id) {
+          if (sidecar && typeof sidecar.setAudioTrack === 'function') {
+            try { sidecar.setAudioTrack(id); return; } catch (_) { }
+          }
           try {
             if (!video.audioTracks) return;
             for (var i = 0; i < video.audioTracks.length; i++) video.audioTracks[i].enabled = i === Number(id);
@@ -560,6 +663,9 @@
           } catch (_) { }
         },
         setSubtitleTrack: function (id) {
+          if (sidecar && typeof sidecar.setSubtitleTrack === 'function') {
+            try { sidecar.setSubtitleTrack(id); return; } catch (_) { }
+          }
           try {
             if (!video.textTracks) return;
             for (var i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = i === Number(id) ? 'showing' : 'disabled';
@@ -569,13 +675,17 @@
         destroy: function () {
           clearInterval(timer);
           clearInterval(tracksTimer);
+          clearInterval(syncTimer);
+          try { if (sidecar && typeof sidecar.destroy === 'function') sidecar.destroy(); } catch (_) { }
           try { video.pause(); } catch (_) { }
           try { video.removeAttribute('src'); video.load(); } catch (_) { }
+          removeNode(sidecarCanvas);
           removeNode(video);
         },
         setOptions: function () { }
       };
 
+      startSidecar();
       video.src = url;
       video.play().catch(function (error) { call('error', error); });
       resolve(player);
@@ -714,9 +824,9 @@
     lastError = '';
     window.__mpvwasm_last_error = '';
 
-    var hardwareVideo = isHeavyVideoData(data);
+    var hardwareVideo = shouldUseHardwareVideo(data);
     var playUrl = hardwareVideo ? directUrl(data.url) : proxyUrl(data.url);
-    var playOptions = mpvOptionsFor(data);
+    var playOptions = hardwareVideo ? '' : mpvOptionsFor(data);
     var reuseSameUrl = !!(pooledPlayer && pooledUrl === playUrl);
     if (pooledPlayer && !reuseSameUrl) discardPooledPlayer();
     var reuseCanvas = reuseSameUrl ? pooledCanvas : null;
@@ -835,6 +945,7 @@
       if (!node) return;
       var width = percent + '%';
       node.style.width = width;
+      node.style.minWidth = percent > 0 ? '6px' : '0';
       if (node.firstElementChild) node.firstElementChild.style.width = width;
     }
 
@@ -1138,9 +1249,10 @@
       }
     } catch (_) { }
 
-    var hardwareVideo = isHeavyVideoData(data);
+    var hardwareVideo = shouldUseHardwareVideo(data);
     var playUrl = hardwareVideo ? directUrl(data.url) : proxyUrl(data.url);
-    var playOptions = mpvOptionsFor(data);
+    var playOptions = hardwareVideo ? '' : mpvOptionsFor(data);
+    var sidecarUrl = hardwareVideo ? proxyUrl(data.url) : '';
     var callbacks = {
       status: function (message) {
         if (window.__MPV_WASM_UI_STATUS) ui.status.textContent = String(message || '');
@@ -1225,7 +1337,7 @@
       return Promise.resolve(player);
     }
 
-    var playerReady = state.hardwareVideo ? createHardwareVideoPlayer(ui, playUrl, callbacks) : (reusePlayer ? resumeWithPlayer(reusePlayer) : createFreshPlayer());
+    var playerReady = state.hardwareVideo ? createHardwareVideoPlayer(ui, playUrl, callbacks, sidecarUrl) : (reusePlayer ? resumeWithPlayer(reusePlayer) : createFreshPlayer());
 
     playerReady.then(function (player) {
       if (!active || active.ui !== ui) {
