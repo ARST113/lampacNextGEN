@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-87-range-cache';
+  var VERSION = '20260708-89-fast-autostart';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-87-range-cache';
+  var VERSION = '20260708-89-fast-autostart';
   var modulePromise = null;
   var module = null;
   var info = null;

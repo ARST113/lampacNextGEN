@@ -142,6 +142,24 @@ static const char* media_type_name(enum AVMediaType type) {
   return "other";
 }
 
+static bool streams_have_required_headers(AVFormatContext* fmt) {
+  if (!fmt || fmt->nb_streams == 0) return false;
+  bool has_video = false;
+  for (unsigned int i = 0; i < fmt->nb_streams; i++) {
+    AVCodecParameters* par = fmt->streams[i]->codecpar;
+    if (!par || par->codec_type == AVMEDIA_TYPE_UNKNOWN || par->codec_id == AV_CODEC_ID_NONE) return false;
+    if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
+      has_video = true;
+      if (par->width <= 0 || par->height <= 0) return false;
+      if ((par->codec_id == AV_CODEC_ID_H264 || par->codec_id == AV_CODEC_ID_HEVC || par->codec_id == AV_CODEC_ID_AV1) &&
+          (!par->extradata || par->extradata_size <= 0)) {
+        return false;
+      }
+    }
+  }
+  return has_video;
+}
+
 static std::string b64(const uint8_t* data, int size) {
   static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::string out;
@@ -194,11 +212,19 @@ int demux_open(const char* url) {
   if (!g.fmt) return -5;
   g.fmt->pb = g.avio;
   g.fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+  g.fmt->probesize = 65536;
+  g.fmt->max_analyze_duration = 200000;
 
-  int ret = avformat_open_input(&g.fmt, url, nullptr, nullptr);
+  AVDictionary* opts = nullptr;
+  av_dict_set(&opts, "probesize", "65536", 0);
+  av_dict_set(&opts, "analyzeduration", "200000", 0);
+  int ret = avformat_open_input(&g.fmt, url, nullptr, &opts);
+  av_dict_free(&opts);
   if (ret < 0) return ret;
-  ret = avformat_find_stream_info(g.fmt, nullptr);
-  if (ret < 0) return ret;
+  if (!streams_have_required_headers(g.fmt)) {
+    ret = avformat_find_stream_info(g.fmt, nullptr);
+    if (ret < 0) return ret;
+  }
   g.packet = av_packet_alloc();
   return g.packet ? 0 : -6;
 }

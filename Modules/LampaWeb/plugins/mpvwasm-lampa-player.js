@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-87-range-cache';
+  var VERSION = '20260708-89-fast-autostart';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -34,7 +34,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-87-range-cache';
+  var VERSION = '20260708-89-fast-autostart';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -73,6 +73,12 @@
       .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
   }
 
+  function fastStartTorrServerUrl(url) {
+    return normalizeUrl(url)
+      .replace(/\?(preload|stat|m3u)(?=&|$)/g, '?play')
+      .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
+  }
+
   function shouldUseMpvWasm(data) {
     if (!mpvWasmModeEnabled()) return false;
     var url = normalizeUrl(data && data.url);
@@ -96,6 +102,10 @@
 
   function mpvWasmPlayerMode() {
     return String(storageField('mpvwasm_player_mode', 'default') || '').toLowerCase();
+  }
+
+  function mpv2FastStartEnabled() {
+    return mpvWasmPlayerMode() === 'mpv2';
   }
 
   function directUrl(raw) {
@@ -125,6 +135,40 @@
     Object.keys(data || {}).forEach(function (key) { copy[key] = data[key]; });
     if (copy.url) copy.url = normalizeUrl(copy.url);
     return copy;
+  }
+
+  function patchTorserverFastStart() {
+    try {
+      var tor = Lampa && Lampa.Torserver;
+      if (!tor || typeof tor.stream !== 'function' || tor.__mpvwasm_fast_start_version === VERSION) return;
+      var original = tor.__mpvwasm_original_stream || tor.stream;
+      tor.__mpvwasm_original_stream = original;
+      tor.stream = function () {
+        var url = original.apply(this, arguments);
+        return mpv2FastStartEnabled() ? fastStartTorrServerUrl(url) : normalizeUrl(url);
+      };
+      tor.__mpvwasm_fast_start_version = VERSION;
+    } catch (_) { }
+  }
+
+  function patchTorrentFileAutostart() {
+    try {
+      if (!Lampa || !Lampa.Listener || window.__mpvwasm_fast_autostart_version === VERSION) return;
+      window.__mpvwasm_fast_autostart_version = VERSION;
+      var triggered = {};
+      Lampa.Listener.follow('torrent_file', function (event) {
+        if (!mpv2FastStartEnabled() || !event || event.type !== 'render') return;
+        if (!event.items || event.items.length !== 1 || !event.item || !event.element) return;
+        var key = String(event.element.url || event.element.path || event.element.fname || event.element.title || '');
+        if (!key || triggered[key]) return;
+        triggered[key] = Date.now();
+        setTimeout(function () {
+          try {
+            if (mpv2FastStartEnabled() && event.item && event.item.trigger) event.item.trigger('hover:enter');
+          } catch (_) { }
+        }, 40);
+      });
+    } catch (_) { }
   }
 
   function isHeavyVideoUrl(url) {
@@ -438,7 +482,13 @@
       '/mpvwasm/libmpv.js?v=' + VERSION,
       '/mpvwasm/assets/mpvplayer-wrapper.js?v=' + VERSION,
       '/mpvwasm/libmpv.wasm?v=' + VERSION,
-      '/mpvwasm/libmpv.data?v=' + VERSION
+      '/mpvwasm/libmpv.data?v=' + VERSION,
+      '/mpvwasm/assets/mpvwasm-hybrid-webcodecs.js?v=' + VERSION,
+      '/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=' + VERSION,
+      '/mpvwasm/assets/mpvwasm-demuxer-session-worker.js?v=' + VERSION,
+      '/mpvwasm/assets/mpvwasm-demuxer.js?v=' + VERSION,
+      '/mpvwasm/assets/mpvwasm-demuxer.wasm?v=' + VERSION,
+      '/mpvwasm/assets/mpvwasm-demuxer.worker.js?v=' + VERSION
     ];
     assetWarmReady = Promise.all(urls.map(function (url) {
       return fetch(url, { cache: 'force-cache', credentials: 'same-origin' }).catch(function () { return null; });
@@ -1982,6 +2032,8 @@
 
   function install() {
     addSettings();
+    patchTorserverFastStart();
+    patchTorrentFileAutostart();
     window.MpvWasmLampa = {
       version: VERSION,
       open: openMpvPlayer,
