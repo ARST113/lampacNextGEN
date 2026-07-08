@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-75-closed-frame-drop';
+  var VERSION = '20260708-76-mpv2-choice';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -34,7 +34,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-75-closed-frame-drop';
+  var VERSION = '20260708-76-mpv2-choice';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -90,7 +90,12 @@
   }
 
   function mpvWasmModeEnabled() {
-    return String(storageField('mpvwasm_player_mode', 'default') || '').toLowerCase() === 'mpv';
+    var mode = mpvWasmPlayerMode();
+    return mode === 'mpv' || mode === 'mpv2';
+  }
+
+  function mpvWasmPlayerMode() {
+    return String(storageField('mpvwasm_player_mode', 'default') || '').toLowerCase();
   }
 
   function directUrl(raw) {
@@ -239,14 +244,15 @@
 
   function selectBackend(data) {
     var probe = buildMediaProbe(data);
-    var forced = String(storageField('mpvwasm_backend_mode', 'auto') || 'auto').toLowerCase();
+    var playerMode = mpvWasmPlayerMode();
+    var forced = playerMode === 'mpv2' ? 'hybrid' : String(storageField('mpvwasm_backend_mode', 'auto') || 'auto').toLowerCase();
     var nativePlayable = canPlayNativeSource(probe);
     var webCodecsCandidate = canMaybeUseWebCodecs(probe);
     var decision = {
       selected: 'mpv-wasm-fallback',
       candidate: '',
       reason: '',
-      requested: forced,
+      requested: playerMode === 'mpv2' ? 'mpv2' : forced,
       probe: probe
     };
 
@@ -352,7 +358,8 @@
     if (Lampa.Params && Lampa.Params.select) {
       Lampa.Params.select('mpvwasm_player_mode', {
         'default': 'Обычный плеер',
-        'mpv': 'MPV WASM'
+        'mpv': 'MPV WASM',
+        'mpv2': 'MPV2 WebCodecs'
       }, 'default');
       Lampa.Params.select('mpvwasm_backend_mode', {
         'auto': 'Auto',
@@ -368,7 +375,8 @@
         type: 'select',
         values: {
           'default': 'Обычный плеер',
-          'mpv': 'MPV WASM'
+          'mpv': 'MPV WASM',
+          'mpv2': 'MPV2 WebCodecs'
         },
         default: 'default'
       },

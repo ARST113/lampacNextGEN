@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-75-closed-frame-drop';
+  var VERSION = '20260708-76-mpv2-choice';
   var modulePromise = null;
 
   function loadScript(src) {
