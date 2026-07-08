@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-80-mpv2-only';
+  var VERSION = '20260708-87-range-cache';
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {

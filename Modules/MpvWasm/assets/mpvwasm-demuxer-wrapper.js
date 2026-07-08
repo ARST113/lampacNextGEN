@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-80-mpv2-only';
+  var VERSION = '20260708-87-range-cache';
   var modulePromise = null;
 
   function loadScript(src) {
@@ -46,6 +46,88 @@
       this.trackByIndex[track.index] = track;
     }, this);
   }
+
+  function WorkerDemuxSession(worker, info) {
+    this.worker = worker;
+    this.info = info || {};
+    this.tracks = this.info.tracks || [];
+    this.trackByIndex = {};
+    this.async = true;
+    this.nextId = 1;
+    this.pending = {};
+    this.closed = false;
+    this.packetQueue = [];
+    this.batchLimit = 64;
+    var self = this;
+    this.tracks.forEach(function (track) {
+      self.trackByIndex[track.index] = track;
+    });
+    worker.onmessage = function (event) {
+      var message = event.data || {};
+      var pending = self.pending[message.id];
+      if (!pending) return;
+      delete self.pending[message.id];
+      if (message.ok) pending.resolve(message.result);
+      else pending.reject(new Error(message.error || 'demux worker error'));
+    };
+    worker.onerror = function (event) {
+      var error = new Error(event.message || 'demux worker crashed');
+      Object.keys(self.pending).forEach(function (id) {
+        self.pending[id].reject(error);
+        delete self.pending[id];
+      });
+    };
+  }
+
+  WorkerDemuxSession.prototype.call = function (type, payload) {
+    if (this.closed && type !== 'close') return Promise.resolve(null);
+    var id = this.nextId++;
+    var message = Object.assign({ id: id, type: type }, payload || {});
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      self.pending[id] = { resolve: resolve, reject: reject };
+      self.worker.postMessage(message);
+    });
+  };
+
+  WorkerDemuxSession.prototype.readPacket = function () {
+    if (this.packetQueue.length) return Promise.resolve(this.packetQueue.shift());
+    var self = this;
+    return this.call('readBatch', { limit: this.batchLimit }).then(function (packets) {
+      packets = packets || [];
+      if (!packets.length) return null;
+      self.packetQueue = packets.slice(1);
+      return packets[0];
+    });
+  };
+
+  WorkerDemuxSession.prototype.seek = function (timeUs) {
+    this.packetQueue = [];
+    return this.call('seek', { timeUs: Math.max(0, Math.round(Number(timeUs || 0))) });
+  };
+
+  WorkerDemuxSession.prototype.openAudioDecoder = function (trackIndex) {
+    return this.call('openAudioDecoder', { trackIndex: Number(trackIndex) });
+  };
+
+  WorkerDemuxSession.prototype.decodeCurrentAudioPacket = function () {
+    return this.call('decodeCurrentAudioPacket');
+  };
+
+  WorkerDemuxSession.prototype.closeAudioDecoder = function () {
+    return this.call('closeAudioDecoder');
+  };
+
+  WorkerDemuxSession.prototype.close = function () {
+    if (this.closed) return Promise.resolve(0);
+    var worker = this.worker;
+    var self = this;
+    return this.call('close').catch(function () { }).then(function () {
+      self.closed = true;
+      try { worker.terminate(); } catch (_) { }
+      return 0;
+    });
+  };
 
   DemuxSession.prototype.readPacket = function () {
     var module = this.module;
@@ -116,9 +198,25 @@
     return session;
   }
 
+  async function openWorker(url) {
+    if (typeof Worker !== 'function') return open(url);
+    var worker = new Worker('/mpvwasm/assets/mpvwasm-demuxer-session-worker.js?v=' + VERSION, { name: 'mpvwasm-demuxer-session' });
+    var session = new WorkerDemuxSession(worker, {});
+    var info = await session.call('open', { url: absoluteUrl(url) });
+    session.info = info || {};
+    session.tracks = session.info.tracks || [];
+    session.trackByIndex = {};
+    session.tracks.forEach(function (track) {
+      session.trackByIndex[track.index] = track;
+    });
+    session.workerTiming = session.info.workerTiming || null;
+    return session;
+  }
+
   window.MpvWasmDemuxer = {
     version: VERSION,
     load: loadModule,
-    open: open
+    open: open,
+    openWorker: openWorker
   };
 })();

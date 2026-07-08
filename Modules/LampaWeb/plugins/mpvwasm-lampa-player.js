@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-80-mpv2-only';
+  var VERSION = '20260708-87-range-cache';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -34,7 +34,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-80-mpv2-only';
+  var VERSION = '20260708-87-range-cache';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;

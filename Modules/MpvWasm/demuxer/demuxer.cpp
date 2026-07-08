@@ -68,17 +68,28 @@ EM_JS(double, js_probe_size, (const char* url_ptr), {
 
 EM_JS(int, js_read_range, (const char* url_ptr, double offset, int length, uint8_t* out_ptr), {
   var url = UTF8ToString(url_ptr);
-  var end = offset + length - 1;
+  var start = Math.floor(offset);
+  var end = start + length - 1;
+  var cache = Module.__mpvwasmRangeCache || null;
   try {
+    if (cache && cache.url === url && start >= cache.start && end <= cache.end) {
+      var from = start - cache.start;
+      HEAPU8.set(cache.bytes.subarray(from, from + length), out_ptr);
+      return length;
+    }
+    var fetchLength = Math.max(length, 8 * 1024 * 1024);
+    var fetchEnd = start + fetchLength - 1;
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, false);
-    xhr.overrideMimeType('text/plain; charset=x-user-defined');
-    xhr.setRequestHeader('Range', 'bytes=' + Math.floor(offset) + '-' + Math.floor(end));
+    xhr.responseType = 'arraybuffer';
+    xhr.setRequestHeader('Range', 'bytes=' + start + '-' + fetchEnd);
     xhr.send(null);
     if (xhr.status !== 206 && xhr.status !== 200) return -1;
-    var text = xhr.responseText || "";
-    var take = Math.min(text.length, length);
-    for (var i = 0; i < take; i++) HEAPU8[out_ptr + i] = text.charCodeAt(i) & 255;
+    var bytes = new Uint8Array(xhr.response || new ArrayBuffer(0));
+    if (!bytes.length) return -1;
+    cache = Module.__mpvwasmRangeCache = { url: url, start: start, end: start + bytes.length - 1, bytes: bytes };
+    var take = Math.min(length, bytes.length);
+    HEAPU8.set(bytes.subarray(0, take), out_ptr);
     return take;
   } catch (e) {
     return -1;
