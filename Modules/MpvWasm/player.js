@@ -28,7 +28,7 @@
     });
   }
 
-  var coreVersion = '20260708-54-fallback-grace';
+  var coreVersion = '20260708-56-backend-selector';
   var libmpvScript = '/mpvwasm/libmpv.js?v=' + coreVersion;
   var wrapperScript = '/mpvwasm/assets/mpvplayer-wrapper.js?v=' + coreVersion;
 
