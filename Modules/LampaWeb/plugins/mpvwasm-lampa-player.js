@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-68-sidecar-recover';
+  var VERSION = '20260708-75-closed-frame-drop';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -34,7 +34,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-68-sidecar-recover';
+  var VERSION = '20260708-75-closed-frame-drop';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -1997,6 +1997,9 @@
           prewarming: !!pooledReady,
           ignoreDestroy: ignorePlayerDestroyUntil > Date.now(),
           backend: active && active.state ? active.state.backendDecision : null,
+          activeBackend: active && active.player ? (active.player.hybridWebCodecs ? 'hybrid-webcodecs' : (active.player.hardware ? 'html5-sidecar' : 'mpv-wasm-fallback')) : '',
+          state: active && active.state ? active.state : null,
+          player: active && active.player ? active.player : null,
           lastError: lastError || window.__mpvwasm_last_error || ''
         };
       },

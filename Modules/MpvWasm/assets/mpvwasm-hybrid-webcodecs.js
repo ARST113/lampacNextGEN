@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-64-hybrid-manual';
+  var VERSION = '20260708-75-closed-frame-drop';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {
@@ -101,7 +101,12 @@
     for (var i = 0; i < configs.length; i++) {
       try {
         var support = await VideoDecoder.isConfigSupported(configs[i]);
-        if (support && support.supported) return support.config || configs[i];
+        if (support && support.supported) {
+          var supported = Object.assign({}, support.config || configs[i]);
+          if (configs[i].avc) supported.avc = configs[i].avc;
+          if (configs[i].hevc) supported.hevc = configs[i].hevc;
+          return supported;
+        }
       } catch (_) { }
     }
     return null;
@@ -204,14 +209,19 @@
     this.audioPlayedSamples = 0;
     this.audioBufferUs = 0;
     this.audioClockUs = 0;
+    this.audioSyncPaused = false;
     this.pendingClockUs = 0;
     this.seekTargetUs = 0;
     this.lastElapsedEmit = 0;
     this.lastDrawnFrameUs = 0;
+    this.lastRenderAt = 0;
     this.renderedFrames = 0;
     this.droppedFrames = 0;
     this.decodedFrames = 0;
     this.submittedFrames = 0;
+    this.packetsRead = 0;
+    this.seekStartedAt = 0;
+    this.lastSeekReadyMs = 0;
     this.pumpRunning = false;
     this.volume = 1;
     this.raf = 0;
@@ -274,6 +284,11 @@
     this.videoDecoder = new VideoDecoder({
       output: function (frame) {
         self.decodedFrames++;
+        if (self.seekTargetUs && Number(frame.timestamp || 0) < self.seekTargetUs - 120000) {
+          self.droppedFrames++;
+          try { frame.close(); } catch (_) { }
+          return;
+        }
         self.frameQueue.push(frame);
         while (self.frameQueue.length > 36) {
           self.droppedFrames++;
@@ -364,8 +379,23 @@
     this.audioContext.suspend().catch(function () { });
   };
 
+  HybridWebCodecsPlayer.prototype.syncAudioToVideo = function () {
+    if (!this.audioContext || this.paused || !this.ready || !this.audioTrack || !this.lastDrawnFrameUs || !this.audioClockUs) return;
+    var driftBehindUs = this.audioClockUs - this.lastDrawnFrameUs;
+    var pendingVideo = this.frameQueue.length || (this.videoDecoder && this.videoDecoder.decodeQueueSize);
+    if (!this.audioSyncPaused && driftBehindUs > 260000 && pendingVideo) {
+      this.audioSyncPaused = true;
+      this.pauseAudio();
+      return;
+    }
+    if (this.audioSyncPaused && (driftBehindUs < 90000 || !pendingVideo)) {
+      this.audioSyncPaused = false;
+      this.resumeAudio();
+    }
+  };
+
   HybridWebCodecsPlayer.prototype.throttleReason = function () {
-    if (this.seekTargetUs && !this.hasFrameNear(this.seekTargetUs, 120000)) return '';
+    if (this.seekTargetUs && !this.hasFrameNear(this.seekTargetUs, 180000)) return '';
     if (this.audioTrack && this.audioBufferUs > 2500000) return 'audio-buffer';
     if (!this.ready && this.audioTrack && this.audioBufferUs > 900000 && this.frameQueue.length > 3) return 'startup-buffer';
     return '';
@@ -388,18 +418,21 @@
         }
 
         var handled = 0;
-        while (handled < 96 && !this.destroyed && !this.seeking && !this.throttleReason()) {
+        var limit = this.seekTargetUs ? 48 : 24;
+        while (handled < limit && !this.destroyed && !this.seeking && !this.throttleReason()) {
           var packet = this.session.readPacket();
           if (!packet) {
             call(this.callbacks, 'fileEnd');
             return;
           }
           handled++;
+          this.packetsRead++;
           this.handlePacket(packet);
+          if (this.videoDecoder && this.videoDecoder.decodeQueueSize > 48 && handled >= 4) break;
         }
 
         this.maybeReady();
-        await sleep(0);
+        await sleep(this.videoDecoder && this.videoDecoder.decodeQueueSize > 48 ? 4 : 0);
       }
     } catch (error) {
       if (!this.destroyed) call(this.callbacks, 'error', error);
@@ -476,14 +509,18 @@
 
   HybridWebCodecsPlayer.prototype.maybeReady = function () {
     if (this.destroyed || this.ready) return;
-    var videoReady = this.seekTargetUs ? this.hasFrameNear(this.seekTargetUs, 120000) : this.frameQueue.length > 0;
-    var audioReady = !this.audioTrack || this.audioBufferUs >= 300000 || this.audioQueuedSamples > 0;
+    var videoReady = this.seekTargetUs ? this.hasFrameNear(this.seekTargetUs, 180000) && this.frameQueue.length >= 2 : this.frameQueue.length >= 2;
+    var audioReady = !this.audioTrack || this.audioBufferUs >= 450000 || (!this.started && this.audioQueuedSamples > 0);
     if (!videoReady || !audioReady) return;
 
     var firstStart = !this.started;
     this.ready = true;
     this.seekTargetUs = 0;
     this.pendingClockUs = 0;
+    if (this.seekStartedAt) {
+      this.lastSeekReadyMs = Math.round(performance.now() - this.seekStartedAt);
+      this.seekStartedAt = 0;
+    }
     if (firstStart) {
       this.started = true;
       call(this.callbacks, 'fileStart', { backend: 'hybrid-webcodecs' });
@@ -516,13 +553,14 @@
     if (!this.frameQueue.length) return;
     var clockUs = this.currentClockUs();
     var maxEarlyUs = force ? 300000 : 30000;
-    var maxLateUs = force ? 900000 : 80000;
+    var maxLateUs = force ? 900000 : 250000;
     var frame = null;
 
     while (this.frameQueue.length) {
       frame = this.frameQueue[0];
       var timestamp = Number(frame.timestamp || 0);
-      if (!force && timestamp < clockUs - maxLateUs && this.frameQueue.length > 1) {
+      var starved = !this.lastRenderAt || performance.now() - this.lastRenderAt > 600;
+      if (!force && timestamp < clockUs - maxLateUs && (!starved || this.frameQueue.length > 1)) {
         this.droppedFrames++;
         try { this.frameQueue.shift().close(); } catch (_) { }
         continue;
@@ -539,9 +577,15 @@
     try {
       this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
       this.lastDrawnFrameUs = Number(frame.timestamp || clockUs);
+      this.lastRenderAt = performance.now();
       this.renderedFrames++;
     } catch (error) {
-      call(this.callbacks, 'error', error);
+      var message = String(error && (error.message || error) || '');
+      if (/VideoFrame has been closed/i.test(message)) {
+        this.droppedFrames++;
+      } else {
+        call(this.callbacks, 'error', error);
+      }
     } finally {
       try { frame.close(); } catch (_) { }
     }
@@ -571,6 +615,7 @@
     if (this.ready && !this.paused) this.renderFrame(false);
     var clockUs = this.currentClockUs();
     this.renderSubtitles(clockUs);
+    this.syncAudioToVideo();
     this.emitElapsed(false);
     this.raf = requestAnimationFrame(this._renderLoop);
   };
@@ -598,9 +643,12 @@
       decodedFrames: this.decodedFrames,
       renderedFrames: this.renderedFrames,
       droppedFrames: this.droppedFrames,
+      packetsRead: this.packetsRead,
+      lastSeekReadyMs: this.lastSeekReadyMs,
       videoQueue: this.frameQueue.length,
       decodeQueue: this.videoDecoder ? this.videoDecoder.decodeQueueSize : 0,
       audioBufferUs: this.audioBufferUs,
+      audioSyncPaused: this.audioSyncPaused,
       audioTrack: this.audioTrack && this.audioTrack.index,
       subtitleTrack: this.subtitleTrack && this.subtitleTrack.index
     };
@@ -610,8 +658,13 @@
     this.paused = !!paused;
     this.wantPlaying = !this.paused;
     this.isPlaying = !this.paused;
-    if (this.paused) this.pauseAudio();
-    else if (this.ready) this.resumeAudio();
+    if (this.paused) {
+      this.audioSyncPaused = false;
+      this.pauseAudio();
+    } else if (this.ready) {
+      this.audioSyncPaused = false;
+      this.resumeAudio();
+    }
     call(this.callbacks, 'isPlaying', this.isPlaying);
   };
 
@@ -638,6 +691,8 @@
     call(this.callbacks, 'status', 'hybrid seek ' + target.toFixed(3));
     this.seeking = true;
     this.ready = false;
+    this.audioSyncPaused = false;
+    this.seekStartedAt = performance.now();
     this.elapsed = target;
     this.pendingClockUs = targetUs;
     this.seekTargetUs = targetUs;

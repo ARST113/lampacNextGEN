@@ -173,7 +173,7 @@ int demux_open(const char* url) {
   g.size = (int64_t)js_probe_size(url);
   if (g.size <= 0) return -2;
 
-  const int buffer_size = 32768;
+  const int buffer_size = 1048576;
   g.avio_buffer = (unsigned char*)av_malloc(buffer_size);
   if (!g.avio_buffer) return -3;
   g.avio = avio_alloc_context(g.avio_buffer, buffer_size, 0, nullptr, read_packet, nullptr, seek_packet);

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-64-hybrid-manual';
+  var VERSION = '20260708-75-closed-frame-drop';
   var modulePromise = null;
 
   function loadScript(src) {

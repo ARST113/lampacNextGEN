@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-64-hybrid-manual';
+  var VERSION = '20260708-75-closed-frame-drop';
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -79,7 +79,12 @@
     for (var i = 0; i < configs.length; i++) {
       try {
         var support = await VideoDecoder.isConfigSupported(configs[i]);
-        if (support && support.supported) return support.config || configs[i];
+        if (support && support.supported) {
+          var supported = Object.assign({}, support.config || configs[i]);
+          if (configs[i].avc) supported.avc = configs[i].avc;
+          if (configs[i].hevc) supported.hevc = configs[i].hevc;
+          return supported;
+        }
       } catch (_) { }
     }
     return null;
