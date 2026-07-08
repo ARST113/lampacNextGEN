@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-76-mpv2-choice';
+  var VERSION = '20260708-80-mpv2-only';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-76-mpv2-choice';
+  var VERSION = '20260708-80-mpv2-only';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -34,7 +34,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-76-mpv2-choice';
+  var VERSION = '20260708-80-mpv2-only';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -256,6 +256,16 @@
       probe: probe
     };
 
+    if (playerMode === 'mpv2') {
+      decision.selected = 'hybrid-webcodecs';
+      decision.candidate = 'hybrid-webcodecs';
+      if (!probe.hasWebCodecs) decision.reason = 'mpv2-requires-webcodecs';
+      else if (!probe.hasDemuxOnly) decision.reason = 'mpv2-requires-demux';
+      else if (!probe.hasHybridBackend) decision.reason = 'mpv2-requires-hybrid-backend';
+      else decision.reason = 'mpv2-strict-hybrid';
+      return decision;
+    }
+
     if (forced === 'mpv') {
       decision.reason = 'forced-mpv-wasm';
       return decision;
@@ -361,11 +371,6 @@
         'mpv': 'MPV WASM',
         'mpv2': 'MPV2 WebCodecs'
       }, 'default');
-      Lampa.Params.select('mpvwasm_backend_mode', {
-        'auto': 'Auto',
-        'hybrid': 'Hybrid WebCodecs',
-        'mpv': 'MPV WASM fallback'
-      }, 'auto');
     }
 
     Lampa.SettingsApi.addParam({
@@ -383,24 +388,6 @@
       field: {
         name: 'Плеер для торрентов',
         description: 'MPV WASM перехватывает запуск только когда здесь выбран MPV WASM'
-      }
-    });
-
-    Lampa.SettingsApi.addParam({
-      component: 'player',
-      param: {
-        name: 'mpvwasm_backend_mode',
-        type: 'select',
-        values: {
-          'auto': 'Auto',
-          'hybrid': 'Hybrid WebCodecs',
-          'mpv': 'MPV WASM fallback'
-        },
-        default: 'auto'
-      },
-      field: {
-        name: 'MPV backend',
-        description: 'Stage 1 selector: HTML5 when native, Hybrid only after demux backend exists, otherwise MPV WASM fallback'
       }
     });
 
@@ -1936,7 +1923,13 @@
     }
 
     function createHybridPlayer() {
+      var strictHybrid = state.backendDecision && state.backendDecision.requested === 'mpv2';
       if (!window.HybridWebCodecsBackend || typeof window.HybridWebCodecsBackend.open !== 'function') {
+        if (strictHybrid) {
+          state.backendDecision.selected = 'hybrid-webcodecs';
+          state.backendDecision.reason = 'hybrid-backend-not-loaded';
+          return Promise.reject(new Error('MPV2 hybrid backend not loaded'));
+        }
         state.backendDecision.selected = 'mpv-wasm-fallback';
         state.backendDecision.reason = 'hybrid-backend-not-loaded';
         return createFreshPlayer();
@@ -1945,6 +1938,12 @@
         data: data,
         debug: debugOverlayEnabled()
       }).catch(function (error) {
+        if (strictHybrid) {
+          state.backendDecision.selected = 'hybrid-webcodecs';
+          state.backendDecision.reason = 'hybrid-open-failed';
+          lastError = String(error && (error.message || error) || error || '');
+          throw error;
+        }
         state.backendDecision.selected = 'mpv-wasm-fallback';
         state.backendDecision.reason = 'hybrid-open-failed';
         lastError = String(error && (error.message || error) || error || '');
