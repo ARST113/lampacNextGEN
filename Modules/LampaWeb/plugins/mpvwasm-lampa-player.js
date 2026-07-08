@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-89-fast-autostart';
+  var VERSION = '20260708-93-seek-drop-debug';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -34,7 +34,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-89-fast-autostart';
+  var VERSION = '20260708-93-seek-drop-debug';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -67,10 +67,14 @@
   }
 
   function normalizeUrl(url) {
+    return normalizeTorrServerHost(url)
+      .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
+  }
+
+  function normalizeTorrServerHost(url) {
     return String(url || '')
       .replace(OLD_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''))
-      .replace(HTTP_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''))
-      .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
+      .replace(HTTP_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''));
   }
 
   function fastStartTorrServerUrl(url) {
@@ -141,11 +145,27 @@
     try {
       var tor = Lampa && Lampa.Torserver;
       if (!tor || typeof tor.stream !== 'function' || tor.__mpvwasm_fast_start_version === VERSION) return;
-      var original = tor.__mpvwasm_original_stream || tor.stream;
-      tor.__mpvwasm_original_stream = original;
-      tor.stream = function () {
-        var url = original.apply(this, arguments);
-        return mpv2FastStartEnabled() ? fastStartTorrServerUrl(url) : normalizeUrl(url);
+      if (tor.__mpvwasm_original_stream) {
+        tor.stream = tor.__mpvwasm_original_stream;
+        try { delete tor.__mpvwasm_original_stream; } catch (_) { tor.__mpvwasm_original_stream = null; }
+      }
+      try {
+        var current = String(Lampa.Storage.field('torrserver_url') || Lampa.Storage.get('torrserver_url', '') || '');
+        if (OLD_TORRSERVER_RE.test('http://' + current.replace(/^https?:\/\//i, '')) || HTTP_TORRSERVER_RE.test(current)) {
+          Lampa.Storage.set('torrserver_url', TORRSERVER_URL);
+        }
+      } catch (_) { }
+      tor.__mpvwasm_original_stream = tor.stream;
+      tor.stream = function (element) {
+        try {
+          if (element && element.url) {
+            var copy = {};
+            Object.keys(element).forEach(function (key) { copy[key] = element[key]; });
+            copy.url = normalizeTorrServerHost(copy.url);
+            arguments[0] = copy;
+          }
+        } catch (_) { }
+        return tor.__mpvwasm_original_stream.apply(this, arguments);
       };
       tor.__mpvwasm_fast_start_version = VERSION;
     } catch (_) { }

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-89-fast-autostart';
+  var VERSION = '20260708-93-seek-drop-debug';
   var modulePromise = null;
   var module = null;
   var info = null;

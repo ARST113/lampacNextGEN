@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-89-fast-autostart';
+  var VERSION = '20260708-93-seek-drop-debug';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {
@@ -61,9 +61,30 @@
   }
 
   function hevcCodec(track) {
+    var profile = Number(track && track.profile || 1);
+    if (!isFinite(profile) || profile <= 0) profile = 1;
     var level = Number(track && track.level || 153);
     if (!isFinite(level) || level <= 0) level = 153;
-    return 'hvc1.1.6.L' + level + '.B0';
+    var compat = profile === 2 ? 4 : 6;
+    return 'hvc1.' + profile + '.' + compat + '.L' + level + '.B0';
+  }
+
+  function hevcCodecVariants(track) {
+    var level = Number(track && track.level || 153);
+    if (!isFinite(level) || level <= 0) level = 153;
+    var variants = [
+      hevcCodec(track),
+      hevcCodec(track).replace(/^hvc1/, 'hev1'),
+      'hvc1.1.6.L' + level + '.B0',
+      'hev1.1.6.L' + level + '.B0',
+      'hvc1.2.4.L' + level + '.B0',
+      'hev1.2.4.L' + level + '.B0',
+      'hvc1.1.6.L153.B0',
+      'hev1.1.6.L153.B0',
+      'hvc1.2.4.L153.B0',
+      'hev1.2.4.L153.B0'
+    ];
+    return variants.filter(function (item, index) { return variants.indexOf(item) === index; });
   }
 
   function videoConfigs(track) {
@@ -82,12 +103,21 @@
       return [avc, Object.assign({}, base, { codec: avc.codec })];
     }
     if (codec === 'hevc') {
-      return [
-        Object.assign({}, base, { codec: hevcCodec(track), hevc: { format: 'hevc' } }),
-        Object.assign({}, base, { codec: hevcCodec(track) }),
-        Object.assign({}, base, { codec: 'hvc1.1.6.L153.B0' }),
-        Object.assign({}, base, { codec: 'hev1.1.6.L153.B0' })
-      ];
+      var variants = hevcCodecVariants(track);
+      var configs = [];
+      if (description) {
+        variants.forEach(function (item) {
+          configs.push(Object.assign({}, base, { codec: item }));
+          configs.push(Object.assign({}, base, { codec: item, hevc: { format: 'hevc' } }));
+        });
+      }
+      var noDescriptionBase = Object.assign({}, base);
+      delete noDescriptionBase.description;
+      variants.forEach(function (item) {
+        configs.push(Object.assign({}, noDescriptionBase, { codec: item }));
+        configs.push(Object.assign({}, noDescriptionBase, { codec: item, hevc: { format: 'annexb' } }));
+      });
+      return configs;
     }
     if (codec === 'av1') return [Object.assign({}, base, { codec: 'av01.0.12M.08' })];
     if (codec === 'vp9') return [Object.assign({}, base, { codec: 'vp09.00.51.08' })];
@@ -301,6 +331,7 @@
     this.lastRenderAt = 0;
     this.renderedFrames = 0;
     this.droppedFrames = 0;
+    this.seekDroppedFrames = 0;
     this.decodedFrames = 0;
     this.submittedFrames = 0;
     this.packetsRead = 0;
@@ -407,7 +438,7 @@
           self.markTiming('first-video-frame', { timestamp: Number(frame.timestamp || 0) });
         }
         if (self.seekTargetUs && Number(frame.timestamp || 0) < self.seekTargetUs - 120000) {
-          self.droppedFrames++;
+          self.seekDroppedFrames++;
           try { frame.close(); } catch (_) { }
           return;
         }
@@ -917,6 +948,7 @@
       decodedFrames: this.decodedFrames,
       renderedFrames: this.renderedFrames,
       droppedFrames: this.droppedFrames,
+      seekDroppedFrames: this.seekDroppedFrames,
       renderFps: this.renderFps,
       decodeFps: this.decodeFps,
       packetsRead: this.packetsRead,
