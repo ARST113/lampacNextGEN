@@ -1,26 +1,40 @@
 (function () {
   'use strict';
 
-  if (window.MpvWasmTest || window.__mpvwasm_core_loading) return;
-  window.__mpvwasm_core_loading = true;
+  var VERSION = '20260708-68-sidecar-recover';
 
-  var script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = '/mpvwasm/player.js?v=core-20260708-56-backend-selector';
-  script.onload = function () { window.__mpvwasm_core_loading = false; };
-  script.onerror = function () { window.__mpvwasm_core_loading = false; };
-  document.head.appendChild(script);
+  function append(src, ready) {
+    if (ready && ready()) return;
+    if (document.querySelector('script[data-mpvwasm-src="' + src + '"]')) return;
+    var script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.src = src;
+    script.setAttribute('data-mpvwasm-src', src);
+    document.head.appendChild(script);
+  }
 
-  var demuxer = document.createElement('script');
-  demuxer.type = 'text/javascript';
-  demuxer.src = '/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=20260708-56-backend-selector';
-  document.head.appendChild(demuxer);
+  if (!window.MpvWasmTest && !window.__mpvwasm_core_loading) {
+    window.__mpvwasm_core_loading = true;
+    var core = document.createElement('script');
+    core.type = 'text/javascript';
+    core.src = '/mpvwasm/player.js?v=core-' + VERSION;
+    core.onload = function () { window.__mpvwasm_core_loading = false; };
+    core.onerror = function () { window.__mpvwasm_core_loading = false; };
+    document.head.appendChild(core);
+  }
+
+  append('/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=' + VERSION, function () {
+    return !!window.MpvWasmDemuxer;
+  });
+  append('/mpvwasm/assets/mpvwasm-hybrid-webcodecs.js?v=' + VERSION, function () {
+    return !!(window.HybridWebCodecsBackend && window.HybridWebCodecsBackend.open);
+  });
 })();
 
 (function () {
   'use strict';
 
-  var VERSION = '20260708-56-backend-selector';
+  var VERSION = '20260708-68-sidecar-recover';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -218,7 +232,9 @@
   }
 
   function canMaybeUseWebCodecs(probe) {
-    return !!(probe && probe.hasWebCodecs && webCodecsCodecString(probe));
+    if (!probe || !probe.hasWebCodecs) return false;
+    if (webCodecsCodecString(probe)) return true;
+    return /^(matroska|stream|mpegts|avi)$/.test(String(probe.container || ''));
   }
 
   function selectBackend(data) {
@@ -247,9 +263,11 @@
 
     if (webCodecsCandidate) {
       decision.candidate = 'hybrid-webcodecs';
-      if (probe.hasDemuxOnly && probe.hasHybridBackend) {
+      if (forced === 'hybrid' && probe.hasDemuxOnly && probe.hasHybridBackend) {
         decision.selected = 'hybrid-webcodecs';
         decision.reason = 'webcodecs-pipeline-available';
+      } else if (forced !== 'hybrid') {
+        decision.reason = 'hybrid-disabled-in-auto';
       } else if (probe.hasDemuxOnly) {
         decision.reason = 'webcodecs-pipeline-missing';
       } else {
@@ -647,6 +665,8 @@
       var sidecarClockMoving = false;
       var sidecarReloading = false;
       var sidecarReloadAt = 0;
+      var sidecarStallReloadAt = 0;
+      var sidecarStallReloads = 0;
       var sidecarAudioFallback = false;
       video.className = 'player-video__video mpvwasm-player-canvas mpvwasm-hw-video';
       video.playsInline = true;
@@ -697,6 +717,7 @@
         var done = function () {
           sidecarReady = true;
           sidecarReloading = false;
+          sidecarStallReloads = 0;
           try { sidecar.setVolume(sidecarVolume); } catch (_) { }
           setSidecarPaused(!!video.paused);
         };
@@ -715,6 +736,20 @@
           call('status', 'sidecar reload failed ' + (error && (error.message || error) || error));
           return false;
         }
+      }
+
+      function recreateSidecar(target) {
+        if (!sidecarUrl) return false;
+        sidecarReloading = true;
+        sidecarReloadAt = Date.now();
+        sidecarReady = false;
+        sidecarPendingSeek = null;
+        try { if (sidecar && typeof sidecar.destroy === 'function') sidecar.destroy(); } catch (_) { }
+        removeNode(sidecarCanvas);
+        sidecar = null;
+        sidecarCanvas = null;
+        startSidecar(target);
+        return true;
       }
 
       function seekSidecar(target) {
@@ -745,6 +780,8 @@
         sidecarSeeking = !!sidecarUrl;
         sidecarSeekTarget = videoTarget;
         sidecarSeekAt = Date.now();
+        sidecarStallReloadAt = 0;
+        sidecarStallReloads = 0;
         seekSidecar(videoTarget);
         setSidecarPaused(!resume);
 
@@ -754,7 +791,7 @@
       }
 
       function syncSidecar(force) {
-        if (sidecarUrl && sidecarReloading && Date.now() - sidecarReloadAt > 4000 && !video.paused) {
+        if (sidecarUrl && sidecarReloading && Date.now() - sidecarReloadAt > 60000 && !video.paused) {
           enableBrowserAudio('sidecar-reload-timeout');
         }
         if (!sidecarReady || !sidecar || !sidecarUrl) return;
@@ -775,6 +812,12 @@
             window.__mpvwasm_sidecar_sync = { state: 'seeking', target: sidecarSeekTarget, elapsed: elapsed, delta: targetDelta, stalled: sidecarStalled, at: now };
 
             if (sidecarStalled && now - sidecarSeekAt > 2500) {
+              if (sidecarStallReloads < 3 && now - sidecarStallReloadAt > 3500) {
+                sidecarStallReloadAt = now;
+                sidecarStallReloads++;
+                recreateSidecar(current);
+                return;
+              }
               enableBrowserAudio('sidecar-seek-stalled');
               sidecarSeeking = false;
             }
@@ -796,19 +839,37 @@
             if (typeof video.fastSeek === 'function') video.fastSeek(elapsed);
             else video.currentTime = elapsed;
           }
-          if (sidecarStalled) enableBrowserAudio('sidecar-stalled');
+          if (sidecarStalled) {
+            if (sidecarStallReloads < 3 && now - sidecarStallReloadAt > 3500) {
+              sidecarStallReloadAt = now;
+              sidecarStallReloads++;
+              recreateSidecar(current);
+              return;
+            }
+            enableBrowserAudio('sidecar-stalled');
+          } else {
+            sidecarStallReloads = 0;
+            if (sidecarAudioFallback) {
+              sidecarAudioFallback = false;
+              video.muted = !!sidecarUrl || sidecarVolume <= 0;
+              try { if (sidecar && typeof sidecar.setVolume === 'function') sidecar.setVolume(sidecarVolume); } catch (_) { }
+              window.__mpvwasm_audio_fallback = null;
+              call('status', 'sidecar audio recovered');
+            }
+          }
           window.__mpvwasm_sidecar_sync = { state: sidecarStalled ? 'sidecar-stalled' : 'synced', elapsed: elapsed, video: current, delta: delta, paused: !!video.paused, moving: sidecarClockMoving, at: now };
           setSidecarPaused(!!video.paused);
         } catch (_) { }
       }
 
-      function startSidecar() {
+      function startSidecar(startAt) {
         if (!sidecarUrl || !window.MpvWasmTest || !window.MpvWasmTest.createPlayer) return;
         sidecarCanvas = document.createElement('canvas');
         sidecarCanvas.width = 2;
         sidecarCanvas.height = 2;
         sidecarCanvas.style.cssText = 'position:fixed;left:-20px;top:-20px;width:2px;height:2px;opacity:0;pointer-events:none';
         ui.root.appendChild(sidecarCanvas);
+        var initialStart = Math.max(0, Number(startAt || 0));
         var sideCallbacks = {
           status: function (message) {
             if (window.__MPV_WASM_SIDECAR_STATUS) call('status', 'sidecar ' + message);
@@ -839,10 +900,11 @@
         };
         window.MpvWasmTest.createPlayer(sidecarCanvas, null, sideCallbacks, {
           initialUrl: sidecarUrl,
-          initialMpvOptions: sidecarOptions(0)
+          initialMpvOptions: sidecarOptions(initialStart)
         }).then(function (player) {
           sidecar = player;
           sidecarReady = true;
+          sidecarReloading = false;
           try { sidecar.setVolume(sidecarVolume); } catch (_) { }
           syncSidecar(true);
           try {
@@ -1123,10 +1185,15 @@
     window.__mpvwasm_last_error = '';
 
     var backendDecision = data && data.__mpvwasmBackendDecision || selectBackend(data);
-    var hardwareVideo = shouldUseHardwareVideo(data);
+    var useHybridWebCodecs = backendDecision.selected === 'hybrid-webcodecs';
+    var hardwareVideo = !useHybridWebCodecs && shouldUseHardwareVideo(data);
     var playUrl = hardwareVideo ? directUrl(data.url) : proxyUrl(data.url);
     var playOptions = hardwareVideo ? '' : mpvOptionsFor(data);
     var reuseSameUrl = !!(pooledPlayer && pooledUrl === playUrl);
+    if (useHybridWebCodecs && reuseSameUrl && pooledPlayer && !pooledPlayer.hybridWebCodecs) {
+      discardPooledPlayer();
+      reuseSameUrl = false;
+    }
     if (pooledPlayer && !reuseSameUrl) discardPooledPlayer();
     var reuseCanvas = reuseSameUrl ? pooledCanvas : null;
     var reusePlayer = reuseSameUrl ? pooledPlayer : null;
@@ -1157,6 +1224,7 @@
       timeline: resolveTimeline(data),
       heavyVideo: hardwareVideo,
       hardwareVideo: hardwareVideo,
+      hybridWebCodecs: useHybridWebCodecs,
       backendDecision: backendDecision,
       timelineContinued: false,
       fileStarted: false,
@@ -1405,6 +1473,7 @@
       var probe = decision.probe || {};
       var sync = window.__mpvwasm_sidecar_sync || {};
       var fallback = window.__mpvwasm_audio_fallback || null;
+      var hybrid = window.__mpvwasm_hybrid_debug || {};
       var drift = sync.delta !== undefined ? Math.round(Number(sync.delta || 0) * 1000) : 0;
       ui.debug.textContent = [
         'backend: ' + (decision.selected || 'unknown'),
@@ -1417,6 +1486,8 @@
         'size: ' + ((active && active.player && active.player.video && active.player.video.videoWidth) || '-') + 'x' + ((active && active.player && active.player.video && active.player.video.videoHeight) || '-'),
         'time: ' + formatTime(state.elapsed) + ' / ' + formatTime(state.duration),
         'tracks/subs: ' + state.audioTracks.length + '/' + state.subtitleTracks.length,
+        'hybrid: ' + (hybrid.codec || '-') + ' q=' + (hybrid.videoQueue || 0) + ' aq=' + Math.round(Number(hybrid.audioBufferUs || 0) / 1000) + 'ms drop=' + (hybrid.droppedFrames || 0),
+        'av drift: ' + (hybrid.driftMs !== undefined ? hybrid.driftMs : '-') + 'ms',
         'sidecar: ' + (sync.state || '-') + ' drift_ms=' + drift,
         'audio fallback: ' + (fallback ? fallback.reason : '-'),
         'error: ' + (lastError || '-')
@@ -1692,7 +1763,7 @@
     markControllerNodes();
     setHidden('.player-panel__prev,.player-panel__next,.player-panel__playlist,.player-panel__flow,.player-panel__pip', true);
     var quality = q('.player-panel__quality');
-    if (quality) quality.textContent = state.hardwareVideo ? 'mpv hw' : 'mpv';
+    if (quality) quality.textContent = state.hybridWebCodecs ? 'mpv webcodecs' : (state.hardwareVideo ? 'mpv hw' : 'mpv');
 
     bind('.player-panel__playpause', playPause);
     bind('.player-panel__rprev', function () { seekRelative(-rewindStep); });
@@ -1768,7 +1839,7 @@
       }
     } catch (_) { }
 
-    var hardwareVideo = shouldUseHardwareVideo(data);
+    var hardwareVideo = state.hardwareVideo;
     var playUrl = hardwareVideo ? directUrl(data.url) : proxyUrl(data.url);
     var playOptions = hardwareVideo ? '' : mpvOptionsFor(data);
     var sidecarUrl = hardwareVideo ? proxyUrl(data.url) : '';
@@ -1856,7 +1927,25 @@
       return Promise.resolve(player);
     }
 
-    var playerReady = state.hardwareVideo ? createHardwareVideoPlayer(ui, playUrl, callbacks, sidecarUrl) : (reusePlayer ? resumeWithPlayer(reusePlayer) : createFreshPlayer());
+    function createHybridPlayer() {
+      if (!window.HybridWebCodecsBackend || typeof window.HybridWebCodecsBackend.open !== 'function') {
+        state.backendDecision.selected = 'mpv-wasm-fallback';
+        state.backendDecision.reason = 'hybrid-backend-not-loaded';
+        return createFreshPlayer();
+      }
+      return window.HybridWebCodecsBackend.open(ui.canvas, proxyUrl(data.url), callbacks, {
+        data: data,
+        debug: debugOverlayEnabled()
+      }).catch(function (error) {
+        state.backendDecision.selected = 'mpv-wasm-fallback';
+        state.backendDecision.reason = 'hybrid-open-failed';
+        lastError = String(error && (error.message || error) || error || '');
+        callbacks.status('hybrid fallback ' + lastError);
+        return createFreshPlayer();
+      });
+    }
+
+    var playerReady = state.hybridWebCodecs ? (reusePlayer && reusePlayer.hybridWebCodecs ? resumeWithPlayer(reusePlayer) : createHybridPlayer()) : (state.hardwareVideo ? createHardwareVideoPlayer(ui, playUrl, callbacks, sidecarUrl) : (reusePlayer ? resumeWithPlayer(reusePlayer) : createFreshPlayer()));
 
     playerReady.then(function (player) {
       if (!active || active.ui !== ui) {

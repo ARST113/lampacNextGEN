@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-56-backend-selector';
+  var VERSION = '20260708-64-hybrid-manual';
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -56,9 +56,13 @@
       hardwareAcceleration: 'prefer-hardware'
     };
 
-    if (codec === 'h264') return [Object.assign({}, base, { codec: avcCodec(track, description) })];
+    if (codec === 'h264') {
+      var avc = Object.assign({}, base, { codec: avcCodec(track, description), avc: { format: 'avc' } });
+      return [avc, Object.assign({}, base, { codec: avc.codec })];
+    }
     if (codec === 'hevc') {
       return [
+        Object.assign({}, base, { codec: hevcCodec(track), hevc: { format: 'hevc' } }),
         Object.assign({}, base, { codec: hevcCodec(track) }),
         Object.assign({}, base, { codec: 'hvc1.1.6.L153.B0' }),
         Object.assign({}, base, { codec: 'hev1.1.6.L153.B0' })

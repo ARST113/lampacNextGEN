@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-56-backend-selector';
+  var VERSION = '20260708-64-hybrid-manual';
   var modulePromise = null;
 
   function loadScript(src) {
