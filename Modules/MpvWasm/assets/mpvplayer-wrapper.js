@@ -528,10 +528,12 @@
     await this._workerReady;
     if (this._postMpvWorkerCommand('mpvSetPlaybackTime', { seconds: Number(seconds) })) {
       callback(this.options, 'status', 'mpv-command-send setPlaybackTime ' + Number(seconds));
+      if (this.isPlaying) this._postMpvWorkerCommand('mpvSetPause', { value: false });
       this.elapsed = Number(seconds || 0);
       callback(this.options, 'elapsed', this.elapsed);
     } else if (typeof this.module.setPlaybackTime === 'function') {
       this.module.setPlaybackTime(Number(seconds));
+      if (this.isPlaying && typeof this.module.setPause === 'function') this.module.setPause(false);
       this.elapsed = Number(seconds || 0);
       callback(this.options, 'elapsed', this.elapsed);
     }
@@ -543,8 +545,10 @@
     this.elapsed = Math.max(0, this.duration ? Math.min(this.duration, this.elapsed + value) : this.elapsed + value);
     if (this._postMpvWorkerCommand('mpvSetPlaybackTime', { seconds: this.elapsed })) {
       callback(this.options, 'status', 'mpv-command-send setPlaybackTime ' + this.elapsed);
+      if (this.isPlaying) this._postMpvWorkerCommand('mpvSetPause', { value: false });
     } else if (typeof this.module.setPlaybackTime === 'function') {
       this.module.setPlaybackTime(this.elapsed);
+      if (this.isPlaying && typeof this.module.setPause === 'function') this.module.setPause(false);
     } else if (value >= 0 && typeof this.module.skipForward === 'function') {
       this.module.skipForward(value);
     } else if (value < 0 && typeof this.module.skipBackward === 'function') {

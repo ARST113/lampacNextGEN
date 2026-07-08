@@ -17352,7 +17352,7 @@ var ASM_CONSTS = {
         wasmFS$backends[backendPointer] = {
           allocFile: () => 0,
           freeFile: () => {},
-          getSize: () => state.size,
+          getSize: () => Math.min(state.size, 2147483647),
           read: (file, buffer, length, offset) => {
             try {
               return read(state, buffer, length, offset);

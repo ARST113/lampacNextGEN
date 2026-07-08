@@ -6,7 +6,7 @@
 
   var script = document.createElement('script');
   script.type = 'text/javascript';
-  script.src = '/mpvwasm/player.js?v=core-20260707-40-hybrid';
+  script.src = '/mpvwasm/player.js?v=core-20260708-54-fallback-grace';
   script.onload = function () { window.__mpvwasm_core_loading = false; };
   script.onerror = function () { window.__mpvwasm_core_loading = false; };
   document.head.appendChild(script);
@@ -15,7 +15,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260707-40-hybrid';
+  var VERSION = '20260708-54-fallback-grace';
   var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
   var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
   var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
@@ -321,10 +321,10 @@
       onSelect: function (item) {
         Lampa.Select.close();
         if (item && item.track) select(item.track);
-        try { if (Lampa.Controller) Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+        try { if (Lampa.Controller) Lampa.Controller.toggle('mpvwasm_panel'); } catch (_) { }
       },
       onBack: function () {
-        try { if (Lampa.Controller) Lampa.Controller.toggle(last && last !== 'select' ? last : 'mpvwasm_player'); } catch (_) { }
+        try { if (Lampa.Controller) Lampa.Controller.toggle(last && last !== 'select' ? last : 'mpvwasm_panel'); } catch (_) { }
       }
     });
   }
@@ -463,6 +463,15 @@
       var sidecarPendingSeek = null;
       var sidecarVolume = 1;
       var sidecarCanvas = null;
+      var sidecarSeeking = false;
+      var sidecarSeekTarget = 0;
+      var sidecarSeekAt = 0;
+      var sidecarLastElapsed = NaN;
+      var sidecarLastWall = 0;
+      var sidecarClockMoving = false;
+      var sidecarReloading = false;
+      var sidecarReloadAt = 0;
+      var sidecarAudioFallback = false;
       video.className = 'player-video__video mpvwasm-player-canvas mpvwasm-hw-video';
       video.playsInline = true;
       video.autoplay = true;
@@ -480,26 +489,140 @@
         } catch (_) { }
       }
 
+      function sidecarElapsed() {
+        var elapsed = sidecar && Number(sidecar.elapsed || 0);
+        return isFinite(elapsed) ? elapsed : NaN;
+      }
+
+      function enableBrowserAudio(reason) {
+        if (!sidecarUrl || sidecarAudioFallback) return;
+        sidecarAudioFallback = true;
+        video.muted = sidecarVolume <= 0;
+        try { if (sidecar && typeof sidecar.setVolume === 'function') sidecar.setVolume(0); } catch (_) { }
+        window.__mpvwasm_audio_fallback = { reason: reason || 'sidecar', at: Date.now() };
+        call('status', 'sidecar audio fallback ' + (reason || 'sidecar'));
+      }
+
+      function sidecarOptions(start) {
+        var target = Math.max(0, Number(start || 0));
+        var options = ['vid=no'];
+        if (target > 1) options.push('start=' + target.toFixed(3).replace(/0+$/, '').replace(/\.$/, ''));
+        return options.join(',');
+      }
+
+      function reloadSidecar(target) {
+        if (!sidecar || typeof sidecar.loadUrl !== 'function' || !sidecarUrl) return false;
+        var now = Date.now();
+        if (sidecarReloading || now - sidecarReloadAt < 1500) return true;
+        sidecarReloading = true;
+        sidecarReady = false;
+        sidecarPendingSeek = null;
+        sidecarReloadAt = now;
+        var done = function () {
+          sidecarReady = true;
+          sidecarReloading = false;
+          try { sidecar.setVolume(sidecarVolume); } catch (_) { }
+          setSidecarPaused(!!video.paused);
+        };
+        try {
+          var promise = sidecar.loadUrl(sidecarUrl, sidecarOptions(target));
+          if (promise && typeof promise.then === 'function') promise.then(done, function (error) {
+            sidecarReloading = false;
+            sidecarReady = true;
+            call('status', 'sidecar reload failed ' + (error && (error.message || error) || error));
+          });
+          else done();
+          return true;
+        } catch (error) {
+          sidecarReloading = false;
+          sidecarReady = true;
+          call('status', 'sidecar reload failed ' + (error && (error.message || error) || error));
+          return false;
+        }
+      }
+
+      function seekSidecar(target) {
+        sidecarPendingSeek = target;
+        if (sidecarReady && sidecar && typeof sidecar.seek === 'function') {
+          try {
+            sidecar.seek(target);
+            sidecarPendingSeek = null;
+          } catch (_) { }
+        }
+      }
+
+      function setSidecarPaused(value) {
+        if (sidecarReady && sidecar && typeof sidecar.setPause === 'function') {
+          try { sidecar.setPause(!!value); } catch (_) { }
+        }
+      }
+
       function seekNative(seconds) {
         var target = Math.max(0, Number(seconds || 0));
+        var videoTarget = Math.max(0, target - 2);
+        var resume = !video.paused;
         try {
-          if (typeof video.fastSeek === 'function') video.fastSeek(target);
-          else video.currentTime = target;
-          if (!video.paused) video.play().catch(function (error) { call('error', error); });
+          if (typeof video.fastSeek === 'function') video.fastSeek(videoTarget);
+          else video.currentTime = videoTarget;
         } catch (_) { }
-        if (sidecarReady && sidecar && typeof sidecar.seek === 'function') {
-          try { sidecar.seek(target); } catch (_) { }
-        } else {
-          sidecarPendingSeek = target;
+
+        sidecarSeeking = !!sidecarUrl;
+        sidecarSeekTarget = videoTarget;
+        sidecarSeekAt = Date.now();
+        seekSidecar(videoTarget);
+        setSidecarPaused(!resume);
+
+        if (resume) {
+          try { video.play().catch(function (error) { call('error', error); }); } catch (_) { }
         }
       }
 
       function syncSidecar(force) {
+        if (sidecarUrl && sidecarReloading && Date.now() - sidecarReloadAt > 4000 && !video.paused) {
+          enableBrowserAudio('sidecar-reload-timeout');
+        }
         if (!sidecarReady || !sidecar || !sidecarUrl) return;
         try {
-          var delta = Math.abs(Number(sidecar.elapsed || 0) - Number(video.currentTime || 0));
-          if (force || delta > 1.25) sidecar.seek(video.currentTime || 0);
-          sidecar.setPause(!!video.paused);
+          var elapsed = sidecarElapsed();
+          var current = Number(video.currentTime || 0);
+          var delta = isFinite(elapsed) ? Math.abs(elapsed - current) : 0;
+          var now = Date.now();
+          if (isFinite(elapsed)) {
+            sidecarClockMoving = isFinite(sidecarLastElapsed) && Math.abs(elapsed - sidecarLastElapsed) > 0.08;
+            if (sidecarClockMoving || !sidecarLastWall) sidecarLastWall = now;
+            sidecarLastElapsed = elapsed;
+          }
+          var sidecarStalled = isFinite(elapsed) && !sidecarClockMoving && sidecarLastWall && now - sidecarLastWall > 2500 && !video.paused && (sidecarSeeking || current > 3);
+
+          if (sidecarSeeking) {
+            var targetDelta = isFinite(elapsed) ? Math.abs(elapsed - sidecarSeekTarget) : 999;
+            window.__mpvwasm_sidecar_sync = { state: 'seeking', target: sidecarSeekTarget, elapsed: elapsed, delta: targetDelta, stalled: sidecarStalled, at: now };
+
+            if (sidecarStalled && now - sidecarSeekAt > 2500) {
+              enableBrowserAudio('sidecar-seek-stalled');
+              sidecarSeeking = false;
+            }
+
+            if (targetDelta < 1.5 || now - sidecarSeekAt > 5000) {
+              sidecarSeeking = false;
+              if (!sidecarStalled && isFinite(elapsed) && elapsed > 0 && Math.abs(current - elapsed) > 2.5) {
+                if (typeof video.fastSeek === 'function') video.fastSeek(elapsed);
+                else video.currentTime = elapsed;
+              }
+            } else {
+              return;
+            }
+          }
+
+          if (force) {
+            seekSidecar(current);
+          } else if (!sidecarStalled && delta > 2.5 && isFinite(elapsed) && elapsed > 0) {
+            if (typeof video.fastSeek === 'function') video.fastSeek(elapsed);
+            else video.currentTime = elapsed;
+          }
+          if (sidecarStalled) enableBrowserAudio('sidecar-stalled');
+          window.__mpvwasm_sidecar_sync = { state: sidecarStalled ? 'sidecar-stalled' : 'synced', elapsed: elapsed, video: current, delta: delta, paused: !!video.paused, moving: sidecarClockMoving, at: now };
+          setSidecarPaused(!!video.paused);
         } catch (_) { }
       }
 
@@ -516,7 +639,7 @@
           },
           error: function (error) {
             call('status', 'sidecar error ' + (error && (error.error || error.message || error) || error));
-            if (!sidecarReady) video.muted = false;
+            if (!sidecarReady) enableBrowserAudio('sidecar-error');
           },
           audioTracks: function (tracks) {
             call('audioTracks', tracks || []);
@@ -531,9 +654,8 @@
             sidecarReady = true;
             try { sidecar.setVolume(sidecarVolume); } catch (_) { }
             if (sidecarPendingSeek !== null) {
-              try { sidecar.seek(sidecarPendingSeek); } catch (_) { }
-              sidecarPendingSeek = null;
-            } else {
+              seekSidecar(sidecarPendingSeek);
+            } else if (!sidecarReloading) {
               syncSidecar(true);
             }
           },
@@ -541,7 +663,7 @@
         };
         window.MpvWasmTest.createPlayer(sidecarCanvas, null, sideCallbacks, {
           initialUrl: sidecarUrl,
-          initialMpvOptions: 'vid=no'
+          initialMpvOptions: sidecarOptions(0)
         }).then(function (player) {
           sidecar = player;
           sidecarReady = true;
@@ -605,7 +727,7 @@
         syncSidecar(false);
       });
       video.addEventListener('seeked', function () {
-        syncSidecar(true);
+        syncSidecar(false);
       });
       video.addEventListener('ended', function () { call('fileEnd', { hardware: true }); });
       video.addEventListener('error', function () {
@@ -615,7 +737,7 @@
       video.addEventListener('durationchange', tick);
       timer = setInterval(tick, 500);
       tracksTimer = setInterval(publishTracks, 1500);
-      syncTimer = setInterval(function () { syncSidecar(false); }, 1500);
+      syncTimer = setInterval(function () { syncSidecar(false); }, 700);
 
       var player = {
         hardware: true,
@@ -647,9 +769,9 @@
           if (volume > 1) volume = volume / 100;
           sidecarVolume = Math.max(0, Math.min(1, volume));
           video.volume = sidecarVolume;
-          video.muted = !!sidecarUrl || sidecarVolume <= 0;
+          video.muted = (!!sidecarUrl && !sidecarAudioFallback) || sidecarVolume <= 0;
           if (sidecarReady && sidecar && typeof sidecar.setVolume === 'function') {
-            try { sidecar.setVolume(sidecarVolume); } catch (_) { }
+            try { sidecar.setVolume(sidecarAudioFallback ? 0 : sidecarVolume); } catch (_) { }
           }
         },
         setAudioTrack: function (id) {
@@ -849,6 +971,8 @@
       panelVisible: false,
       loading: true,
       lastController: '',
+      lastFocus: null,
+      lastPanelFocus: null,
       hideTimer: 0,
       cursorTimer: 0,
       clickTimer: 0,
@@ -883,7 +1007,7 @@
         document.removeEventListener('fullscreenchange', resizeCanvas, true);
         try { if (Lampa.PlayerInfo) Lampa.PlayerInfo.destroy(); } catch (_) { }
         try {
-          if (state.lastController && Lampa.Controller && Lampa.Controller.enabled && Lampa.Controller.enabled().name === 'mpvwasm_player') {
+          if (state.lastController && Lampa.Controller && Lampa.Controller.enabled && /^mpvwasm_/.test(Lampa.Controller.enabled().name || '')) {
             Lampa.Controller.toggle(state.lastController);
           }
         } catch (_) { }
@@ -893,6 +1017,8 @@
         if (event.key === 'Escape' || event.key === 'Backspace') {
           event.preventDefault();
           closeActive();
+        } else if (isMpvController() && handleControllerKey(event)) {
+          return;
         } else if (event.key === 'ArrowLeft') {
           event.preventDefault();
           seekRelative(-rewindStep);
@@ -917,6 +1043,141 @@
 
     function setHidden(selector, hidden) {
       qa(selector).forEach(function (node) { node.classList.toggle('hide', !!hidden); });
+    }
+
+    function controllerName() {
+      try {
+        return Lampa.Controller && Lampa.Controller.enabled ? (Lampa.Controller.enabled().name || '') : '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function isMpvController() {
+      return /^mpvwasm_/.test(controllerName());
+    }
+
+    function controllerScope() {
+      return ui.panel || ui.root;
+    }
+
+    function focusControllerNode(node) {
+      try {
+        if (Lampa.Controller && Lampa.Controller.collectionFocus) {
+          Lampa.Controller.collectionFocus(node || false, controllerScope());
+          return;
+        }
+      } catch (_) { }
+
+      if (node) {
+        qa('.selector').forEach(function (item) { item.classList.remove('focus'); });
+        node.classList.add('focus');
+        triggerNode(node, 'hover:focus');
+      }
+    }
+
+    function setControllerCollection(node) {
+      try {
+        if (Lampa.Controller && Lampa.Controller.collectionSet) Lampa.Controller.collectionSet(controllerScope());
+      } catch (_) { }
+      focusControllerNode(node || false);
+    }
+
+    function moveFocus(direction) {
+      try {
+        if (window.Navigator && Navigator.move) {
+          Navigator.move(direction);
+          return;
+        }
+      } catch (_) { }
+    }
+
+    function markControllerNodes() {
+      if (ui.timeline) ui.timeline.setAttribute('data-controller', 'mpvwasm_rewind');
+
+      qa('.player-panel .selector').forEach(function (node) {
+        if (node !== ui.timeline) node.setAttribute('data-controller', 'mpvwasm_panel');
+      });
+
+      qa('.selector').forEach(function (node) {
+        var saveFocus = function () {
+          state.lastFocus = node;
+          if (node !== ui.timeline) state.lastPanelFocus = node;
+        };
+        node.addEventListener('hover:focus', saveFocus);
+        try { if (window.$) $(node).on('hover:focus', saveFocus); } catch (_) { }
+      });
+    }
+
+    function handleControllerKey(event) {
+      var name = controllerName();
+      var key = event.key;
+      var handled = false;
+
+      if (name === 'mpvwasm_rewind') {
+        if (key === 'ArrowLeft') {
+          seekRelative(-rewindStep);
+          handled = true;
+        } else if (key === 'ArrowRight') {
+          seekRelative(rewindStep);
+          handled = true;
+        } else if (key === 'ArrowDown') {
+          showPanel();
+          try { Lampa.Controller.toggle('mpvwasm_panel'); } catch (_) { }
+          handled = true;
+        } else if (key === 'ArrowUp') {
+          hidePanel();
+          try { Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+          handled = true;
+        } else if (key === 'Enter' || key === ' ') {
+          playPause();
+          handled = true;
+        }
+      } else if (name === 'mpvwasm_panel') {
+        if (key === 'ArrowLeft') {
+          moveFocus('left');
+          handled = true;
+        } else if (key === 'ArrowRight') {
+          moveFocus('right');
+          handled = true;
+        } else if (key === 'ArrowUp') {
+          showPanel();
+          try { Lampa.Controller.toggle('mpvwasm_rewind'); } catch (_) { }
+          handled = true;
+        } else if (key === 'ArrowDown') {
+          showPanel();
+          handled = true;
+        } else if (key === 'Enter') {
+          if (state.lastFocus) triggerNode(state.lastFocus, 'hover:enter');
+          else playPause();
+          handled = true;
+        } else if (key === ' ') {
+          playPause();
+          handled = true;
+        }
+      } else if (name === 'mpvwasm_player') {
+        if (key === 'ArrowLeft') {
+          seekRelative(-rewindStep);
+          handled = true;
+        } else if (key === 'ArrowRight') {
+          seekRelative(rewindStep);
+          handled = true;
+        } else if (key === 'ArrowDown' || key === 'ArrowUp') {
+          showPanel();
+          try { Lampa.Controller.toggle(key === 'ArrowDown' ? 'mpvwasm_panel' : 'mpvwasm_rewind'); } catch (_) { }
+          handled = true;
+        } else if (key === 'Enter' || key === ' ') {
+          playPause();
+          handled = true;
+        }
+      }
+
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      return handled;
     }
 
     function bind(selector, handler) {
@@ -1124,7 +1385,7 @@
           if (item && item.trigger) item.trigger();
         },
         onBack: function () {
-          try { if (Lampa.Controller) Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+          try { if (Lampa.Controller) Lampa.Controller.toggle('mpvwasm_panel'); } catch (_) { }
         }
       });
     }
@@ -1134,9 +1395,17 @@
       Lampa.Controller.add('mpvwasm_player', {
         invisible: true,
         hover: showPanel,
-        toggle: showPanel,
-        up: showPanel,
-        down: showPanel,
+        toggle: function () {
+          hidePanel();
+        },
+        up: function () {
+          showPanel();
+          try { Lampa.Controller.toggle('mpvwasm_rewind'); } catch (_) { }
+        },
+        down: function () {
+          showPanel();
+          try { Lampa.Controller.toggle('mpvwasm_panel'); } catch (_) { }
+        },
         left: function () { seekRelative(-rewindStep); },
         right: function () { seekRelative(rewindStep); },
         enter: playPause,
@@ -1146,7 +1415,53 @@
         stop: closeActive,
         back: closeActive
       });
-      try { Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+      Lampa.Controller.add('mpvwasm_rewind', {
+        toggle: function () {
+          showPanel();
+          setControllerCollection(ui.timeline || state.lastFocus || false);
+        },
+        up: function () {
+          hidePanel();
+          try { Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+        },
+        down: function () {
+          showPanel();
+          try { Lampa.Controller.toggle('mpvwasm_panel'); } catch (_) { }
+        },
+        left: function () { seekRelative(-rewindStep); },
+        right: function () { seekRelative(rewindStep); },
+        enter: playPause,
+        playpause: playPause,
+        play: function () { setPaused(false, true); },
+        pause: function () { setPaused(true, true); },
+        stop: closeActive,
+        gone: function () { qa('.selector').forEach(function (node) { node.classList.remove('focus'); }); },
+        back: closeActive
+      });
+      Lampa.Controller.add('mpvwasm_panel', {
+        toggle: function () {
+          showPanel();
+          setControllerCollection(state.lastPanelFocus || q('.player-panel__playpause') || state.lastFocus || false);
+        },
+        up: function () {
+          showPanel();
+          try { Lampa.Controller.toggle('mpvwasm_rewind'); } catch (_) { }
+        },
+        down: showPanel,
+        left: function () { moveFocus('left'); },
+        right: function () { moveFocus('right'); },
+        enter: function () {
+          if (state.lastFocus) triggerNode(state.lastFocus, 'hover:enter');
+          else playPause();
+        },
+        playpause: playPause,
+        play: function () { setPaused(false, true); },
+        pause: function () { setPaused(true, true); },
+        stop: closeActive,
+        gone: function () { qa('.selector').forEach(function (node) { node.classList.remove('focus'); }); },
+        back: closeActive
+      });
+      try { Lampa.Controller.toggle('mpvwasm_rewind'); } catch (_) { }
     }
 
     function clickVideo(event) {
@@ -1171,6 +1486,7 @@
       }, 300);
     }
 
+    markControllerNodes();
     setHidden('.player-panel__prev,.player-panel__next,.player-panel__playlist,.player-panel__flow,.player-panel__pip', true);
     var quality = q('.player-panel__quality');
     if (quality) quality.textContent = state.hardwareVideo ? 'mpv hw' : 'mpv';
