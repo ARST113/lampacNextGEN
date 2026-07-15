@@ -20,7 +20,7 @@ public sealed class MpvWasmProxyService
 
     public async Task<HttpResponseMessage> SendAsync(string encodedUrl, string encodedHeaders, HttpRequest request, ModuleConf conf, CancellationToken cancellationToken)
     {
-        var method = HttpMethod.Get;
+        var method = HttpMethods.IsHead(request.Method) ? HttpMethod.Head : HttpMethod.Get;
         var headers = MpvWasmHeaders.DecodeOutboundHeaders(encodedHeaders, conf);
         var url = MpvWasmUrlCodec.DecodeUrl(encodedUrl);
         var uri = new Uri(url);

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-93-seek-drop-debug';
+  var VERSION = '20260715-18-select-keys';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -11,16 +11,6 @@
     script.src = src;
     script.setAttribute('data-mpvwasm-src', src);
     document.head.appendChild(script);
-  }
-
-  if (!window.MpvWasmTest && !window.__mpvwasm_core_loading) {
-    window.__mpvwasm_core_loading = true;
-    var core = document.createElement('script');
-    core.type = 'text/javascript';
-    core.src = '/mpvwasm/player.js?v=core-' + VERSION;
-    core.onload = function () { window.__mpvwasm_core_loading = false; };
-    core.onerror = function () { window.__mpvwasm_core_loading = false; };
-    document.head.appendChild(core);
   }
 
   append('/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=' + VERSION, function () {
@@ -34,16 +24,13 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-93-seek-drop-debug';
-  var TORRSERVER_URL = 'https://newgenres.duckdns.org/TS';
-  var OLD_TORRSERVER_RE = /^http:\/\/213\.171\.26\.189:2367(?=\/|$)/i;
-  var HTTP_TORRSERVER_RE = /^http:\/\/newgenres\.duckdns\.org\/TS(?=\/|$)/i;
+  var VERSION = '20260715-18-select-keys';
   if (window.__mpvwasm_lampa_plugin === VERSION) return;
   window.__mpvwasm_lampa_plugin = VERSION;
 
   function waitLampa(callback) {
     var timer = setInterval(function () {
-      if (window.Lampa && Lampa.Player && Lampa.Player.listener && window.MpvWasmTest) {
+      if (window.Lampa && Lampa.Player && Lampa.Player.listener && window.MpvWasmDemuxer && window.HybridWebCodecsBackend) {
         clearInterval(timer);
         callback();
       }
@@ -67,20 +54,110 @@
   }
 
   function normalizeUrl(url) {
-    return normalizeTorrServerHost(url)
-      .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
-  }
-
-  function normalizeTorrServerHost(url) {
     return String(url || '')
-      .replace(OLD_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''))
-      .replace(HTTP_TORRSERVER_RE, TORRSERVER_URL.replace(/\/+$/, ''));
+      .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
   }
 
   function fastStartTorrServerUrl(url) {
     return normalizeUrl(url)
       .replace(/\?(preload|stat|m3u)(?=&|$)/g, '?play')
       .replace(/&(preload|stat|m3u)(?=&|$)/g, '&play');
+  }
+
+  function torrServerFlagUrl(url, flag) {
+    url = String(url || '');
+    if (/[?&](play|preload|stat|m3u)(?=&|$)/.test(url)) {
+      return url
+        .replace(/\?(play|preload|stat|m3u)(?=&|$)/g, '?' + flag)
+        .replace(/&(play|preload|stat|m3u)(?=&|$)/g, '&' + flag);
+    }
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + flag;
+  }
+
+  function formatBytes(value) {
+    value = Number(value || 0);
+    if (!isFinite(value) || value <= 0) return '0 MB';
+    return Math.round(value / 1024 / 1024) + ' MB';
+  }
+
+  function shouldWaitTorrPreload(data) {
+    if (!data || !data.url || !mpv2FastStartEnabled()) return false;
+    if (!storageBool('torrserver_preload', true)) return false;
+    var url = String(data.url || '');
+    return /\/stream\//i.test(url) && /[?&](play|preload)(?=&|$)/i.test(url);
+  }
+
+  var activePreloadDrain = null;
+  function keepTorrPreloadAlive(preloadUrl, heavy) {
+    try {
+      if (activePreloadDrain && activePreloadDrain.abort) activePreloadDrain.abort();
+    } catch (_) { }
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    activePreloadDrain = controller;
+    var timeout = heavy ? 90000 : 45000;
+    var stopAt = Date.now() + timeout;
+    try {
+      fetch(preloadUrl, { cache: 'no-store', credentials: 'omit', mode: 'cors', signal: controller && controller.signal }).then(function (response) {
+        var reader = response && response.body && response.body.getReader ? response.body.getReader() : null;
+        if (!reader) return null;
+        function drain() {
+          if (Date.now() >= stopAt) {
+            try { reader.cancel(); } catch (_) { }
+            return null;
+          }
+          return reader.read().then(function (chunk) {
+            if (!chunk || chunk.done) return null;
+            return drain();
+          });
+        }
+        return drain();
+      }).catch(function () { });
+      if (controller) setTimeout(function () {
+        try { controller.abort(); } catch (_) { }
+      }, timeout);
+    } catch (_) { }
+  }
+
+  function waitTorrPreload(data, ui) {
+    if (!shouldWaitTorrPreload(data)) return Promise.resolve(false);
+    var raw = String(data.url || '');
+    var preloadUrl = torrServerFlagUrl(raw, 'preload');
+    var statUrl = torrServerFlagUrl(raw, 'stat');
+    var startedAt = Date.now();
+    var heavy = isHeavyVideoData(data);
+    var minReady = heavy ? 32 * 1024 * 1024 : 12 * 1024 * 1024;
+    var maxWait = heavy ? 8000 : 5000;
+
+    keepTorrPreloadAlive(preloadUrl, heavy);
+
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish() {
+        if (done) return;
+        done = true;
+        if (ui && ui.status) ui.status.textContent = '';
+        resolve(true);
+      }
+      function poll() {
+        if (done) return;
+        if (Date.now() - startedAt > maxWait) return finish();
+        fetch(statUrl, { cache: 'no-store', credentials: 'omit', mode: 'cors' }).then(function (response) {
+          return response.ok ? response.json() : null;
+        }).then(function (stat) {
+          stat = stat || {};
+          var loaded = Number(stat.preloaded_bytes || 0);
+          var size = Number(stat.preload_size || 0);
+          if (ui && ui.status && (loaded || size)) ui.status.textContent = 'TorrServer ' + formatBytes(loaded) + (size ? ' / ' + formatBytes(size) : '');
+          if (size > 0 && loaded >= Math.floor(size * 0.98)) return finish();
+          if (loaded >= minReady || size > 0 && loaded >= Math.min(size, minReady)) return finish();
+          setTimeout(poll, 800);
+        }).catch(function () {
+          if (Date.now() - startedAt > 4000) return finish();
+          setTimeout(poll, 800);
+        });
+      }
+      setTimeout(poll, 800);
+    });
   }
 
   function shouldUseMpvWasm(data) {
@@ -99,9 +176,15 @@
     }
   }
 
+  function setStorageField(name, value) {
+    try {
+      if (Lampa.Storage && typeof Lampa.Storage.set === 'function') Lampa.Storage.set(name, value);
+    } catch (_) { }
+  }
+
   function mpvWasmModeEnabled() {
     var mode = mpvWasmPlayerMode();
-    return mode === 'mpv' || mode === 'mpv2';
+    return mode === 'mpv2';
   }
 
   function mpvWasmPlayerMode() {
@@ -149,46 +232,11 @@
         tor.stream = tor.__mpvwasm_original_stream;
         try { delete tor.__mpvwasm_original_stream; } catch (_) { tor.__mpvwasm_original_stream = null; }
       }
-      try {
-        var current = String(Lampa.Storage.field('torrserver_url') || Lampa.Storage.get('torrserver_url', '') || '');
-        if (OLD_TORRSERVER_RE.test('http://' + current.replace(/^https?:\/\//i, '')) || HTTP_TORRSERVER_RE.test(current)) {
-          Lampa.Storage.set('torrserver_url', TORRSERVER_URL);
-        }
-      } catch (_) { }
-      tor.__mpvwasm_original_stream = tor.stream;
-      tor.stream = function (element) {
-        try {
-          if (element && element.url) {
-            var copy = {};
-            Object.keys(element).forEach(function (key) { copy[key] = element[key]; });
-            copy.url = normalizeTorrServerHost(copy.url);
-            arguments[0] = copy;
-          }
-        } catch (_) { }
-        return tor.__mpvwasm_original_stream.apply(this, arguments);
-      };
       tor.__mpvwasm_fast_start_version = VERSION;
     } catch (_) { }
   }
 
   function patchTorrentFileAutostart() {
-    try {
-      if (!Lampa || !Lampa.Listener || window.__mpvwasm_fast_autostart_version === VERSION) return;
-      window.__mpvwasm_fast_autostart_version = VERSION;
-      var triggered = {};
-      Lampa.Listener.follow('torrent_file', function (event) {
-        if (!mpv2FastStartEnabled() || !event || event.type !== 'render') return;
-        if (!event.items || event.items.length !== 1 || !event.item || !event.element) return;
-        var key = String(event.element.url || event.element.path || event.element.fname || event.element.title || '');
-        if (!key || triggered[key]) return;
-        triggered[key] = Date.now();
-        setTimeout(function () {
-          try {
-            if (mpv2FastStartEnabled() && event.item && event.item.trigger) event.item.trigger('hover:enter');
-          } catch (_) { }
-        }, 40);
-      });
-    } catch (_) { }
   }
 
   function isHeavyVideoUrl(url) {
@@ -313,7 +361,7 @@
     var nativePlayable = canPlayNativeSource(probe);
     var webCodecsCandidate = canMaybeUseWebCodecs(probe);
     var decision = {
-      selected: 'mpv-wasm-fallback',
+      selected: 'hybrid-webcodecs',
       candidate: '',
       reason: '',
       requested: playerMode === 'mpv2' ? 'mpv2' : forced,
@@ -331,11 +379,11 @@
     }
 
     if (forced === 'mpv') {
-      decision.reason = 'forced-mpv-wasm';
-      return decision;
+      forced = 'hybrid';
+      decision.requested = 'old-mpv-disabled-use-hybrid';
     }
 
-    if (nativePlayable && forced !== 'hybrid') {
+    if (nativePlayable && forced !== 'hybrid' && playerMode !== 'mpv2') {
       decision.selected = 'html5';
       decision.reason = 'native-can-play-type';
       return decision;
@@ -343,11 +391,9 @@
 
     if (webCodecsCandidate) {
       decision.candidate = 'hybrid-webcodecs';
-      if (forced === 'hybrid' && probe.hasDemuxOnly && probe.hasHybridBackend) {
+      if (probe.hasDemuxOnly && probe.hasHybridBackend) {
         decision.selected = 'hybrid-webcodecs';
         decision.reason = 'webcodecs-pipeline-available';
-      } else if (forced !== 'hybrid') {
-        decision.reason = 'hybrid-disabled-in-auto';
       } else if (probe.hasDemuxOnly) {
         decision.reason = 'webcodecs-pipeline-missing';
       } else {
@@ -383,6 +429,21 @@
     } catch (_) { }
   }
 
+  var mpvLog = window.__mpvwasm_log || [];
+  window.__mpvwasm_log = mpvLog;
+
+  function logMpv(action, data) {
+    var entry = {
+      t: new Date().toISOString(),
+      action: action,
+      data: data || {}
+    };
+    mpvLog.push(entry);
+    if (mpvLog.length > 400) mpvLog.splice(0, mpvLog.length - 400);
+    try { console.warn('[mpv2-log]', action, data || {}); } catch (_) { }
+    return entry;
+  }
+
   function numField(object, fields) {
     for (var i = 0; object && i < fields.length; i++) {
       var value = object[fields[i]];
@@ -396,45 +457,81 @@
 
   function timelineHash(data) {
     data = data || {};
-    if (data.timeline && data.timeline.hash) return data.timeline.hash;
-    var explicit = data.timeline_hash || data.timelineHash || data.view_hash || data.viewHash || data.time_hash || data.timeHash;
-    if (explicit) return explicit;
-    if ((typeof data.hash === 'number') || /^-?\d+$/.test(String(data.hash || ''))) return data.hash;
-
     var card = data.card || data.movie || data.item || data.object || data;
-    var title = card.original_name || card.original_title || data.original_name || data.original_title;
+    try {
+      if (data.path && window.Lampa && Lampa.Torserver && Lampa.Torserver.parse) {
+        var exe = String(data.exe || data.path.split('.').pop() || '').toLowerCase();
+        var parsed = Lampa.Torserver.parse({
+          movie: card,
+          files: data.files || data.playlist || [],
+          filename: data.path_human || data.title || data.path,
+          path: data.path,
+          is_file: data.is_file !== undefined ? !!data.is_file : (exe === 'vob' || exe === 'm2ts')
+        });
+        if (parsed && parsed.hash) return parsed.hash;
+      }
+    } catch (_) { }
+
+    var title = card.original_name || card.original_title || data.original_name || data.original_title || data.first_title || data.name || data.title;
     var season = numField(data, ['season', 'season_number', 'seasonNum', 'season_num', 's']);
     var episode = numField(data, ['episode', 'episode_number', 'episodeNum', 'episode_num', 'e']);
     try {
       if (window.Lampa && Lampa.Utils && Lampa.Utils.hash) {
         if (title && season && episode) return Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, title].join(''));
-        if ((card.original_title || data.original_title) && !episode) return Lampa.Utils.hash(card.original_title || data.original_title);
+        if (data.path) return Lampa.Utils.hash(data.path);
         if (data.url) return Lampa.Utils.hash(normalizeUrl(data.url));
+        if (data.title && !episode) return Lampa.Utils.hash(cleanText(data.title));
+        if ((card.original_title || data.original_title) && !episode) return Lampa.Utils.hash(card.original_title || data.original_title);
       }
     } catch (_) { }
+
+    if (data.timeline && data.timeline.hash) return data.timeline.hash;
+    var explicit = data.timeline_hash || data.timelineHash || data.view_hash || data.viewHash || data.time_hash || data.timeHash;
+    if (explicit) return explicit;
+    if ((typeof data.hash === 'number') || /^-?\d+$/.test(String(data.hash || ''))) return data.hash;
     return '';
   }
 
-  function resolveTimeline(data) {
-    if (data && data.timeline && (data.timeline.handler || data.timeline.time || data.timeline.percent || data.timeline.hash)) return data.timeline;
-    var hash = timelineHash(data);
-    if (!hash) return data && data.timeline ? data.timeline : null;
+  function lampaTimelineView(hash) {
+    if (!hash) return null;
     try {
       if (window.Lampa && Lampa.Timeline && Lampa.Timeline.view) return Lampa.Timeline.view(hash);
     } catch (_) { }
-    return data && data.timeline ? data.timeline : { hash: hash };
+    return null;
+  }
+
+  function timelineSeconds(timeline) {
+    var value = parseFloat(timeline && timeline.time + '');
+    return !isNaN(value) && isFinite(value) ? value : 0;
+  }
+
+  function resolveTimeline(data) {
+    var hash = timelineHash(data);
+    if (hash) {
+      var fresh = lampaTimelineView(hash);
+      if (fresh) return fresh;
+      if (data && data.timeline) {
+        var copy = {};
+        Object.keys(data.timeline || {}).forEach(function (key) { copy[key] = data.timeline[key]; });
+        copy.hash = hash;
+        return copy;
+      }
+      return { hash: hash };
+    }
+    if (data && data.timeline && (data.timeline.handler || data.timeline.time || data.timeline.percent)) return data.timeline;
+    return data && data.timeline ? data.timeline : null;
   }
 
   function addSettings() {
     if (!Lampa.SettingsApi || window.__mpvwasm_settings_ready === VERSION) return;
     window.__mpvwasm_settings_ready = VERSION;
+    if (mpvWasmPlayerMode() === 'mpv') setStorageField('mpvwasm_player_mode', 'mpv2');
 
     if (Lampa.Params && Lampa.Params.select) {
       Lampa.Params.select('mpvwasm_player_mode', {
         'default': 'Обычный плеер',
-        'mpv': 'MPV WASM',
         'mpv2': 'MPV2 WebCodecs'
-      }, 'default');
+      }, mpvWasmPlayerMode() === 'mpv2' ? 'mpv2' : 'default');
     }
 
     Lampa.SettingsApi.addParam({
@@ -444,7 +541,6 @@
         type: 'select',
         values: {
           'default': 'Обычный плеер',
-          'mpv': 'MPV WASM',
           'mpv2': 'MPV2 WebCodecs'
         },
         default: 'default'
@@ -466,9 +562,143 @@
   var pooledReady = null;
   var pooledUrl = '';
   var assetWarmReady = null;
+  var lastMpvPlayData = null;
+  var lastMpvPlayAt = 0;
+  var lastMpvBackCallback = null;
+  var lastMpvBackAt = 0;
+  var lastCreateUrl = '';
+  var lastCreateAt = 0;
+  var playlistState = {
+    list: [],
+    current: '',
+    position: 0
+  };
 
   function removeNode(node) {
     try { if (node && node.parentNode) node.parentNode.removeChild(node); } catch (_) { }
+  }
+
+  function cleanText(value) {
+    value = String(value || '');
+    try {
+      if (Lampa.Utils && Lampa.Utils.clearHtmlTags) return Lampa.Utils.clearHtmlTags(value).trim();
+    } catch (_) { }
+    return value.replace(/<[^>]*>/g, '').trim();
+  }
+
+  function itemUrlValue(item) {
+    return item && typeof item.url === 'string' ? normalizeUrl(item.url) : '';
+  }
+
+  function samePlaylistItem(item, data) {
+    var url = itemUrlValue(item);
+    var dataUrl = normalizeUrl(data && data.url);
+    if (url && dataUrl && url === dataUrl) return true;
+    if (item && data && item.path && data.path && String(item.path) === String(data.path)) return true;
+    if (item && data && item.title && data.title && cleanText(item.title) === cleanText(data.title)) {
+      var seasonA = numField(item, ['season', 'season_number', 's']);
+      var seasonB = numField(data, ['season', 'season_number', 's']);
+      var episodeA = numField(item, ['episode', 'episode_number', 'e']);
+      var episodeB = numField(data, ['episode', 'episode_number', 'e']);
+      return (!seasonA || !seasonB || seasonA === seasonB) && (!episodeA || !episodeB || episodeA === episodeB);
+    }
+    return false;
+  }
+
+  function setMpvPlaylist(list, currentData) {
+    if (Array.isArray(list)) {
+      playlistState.list = list.filter(function (item) {
+        return item && (typeof item.url === 'string' || typeof item.url === 'function');
+      }).map(function (item) {
+        if (item && typeof item.url === 'string') item.timeline = resolveTimeline(item);
+        return item;
+      });
+      logMpv('playlist:set', { count: playlistState.list.length });
+    }
+
+    playlistState.current = normalizeUrl(currentData && currentData.url);
+    playlistState.position = 0;
+    playlistState.list.forEach(function (item, index) {
+      item.selected = samePlaylistItem(item, currentData);
+      if (item.selected) playlistState.position = index;
+    });
+
+    logMpv('playlist:sync', {
+      count: playlistState.list.length,
+      position: playlistState.position,
+      current: playlistState.current,
+      title: currentData && currentData.title,
+      timeline: currentData && currentData.timeline ? {
+        hash: currentData.timeline.hash,
+        time: currentData.timeline.time,
+        percent: currentData.timeline.percent,
+        duration: currentData.timeline.duration
+      } : null
+    });
+
+    if (active && typeof active.syncPlaylistUi === 'function') active.syncPlaylistUi();
+  }
+
+  function playlistCan(delta) {
+    if (!playlistState.list.length) return false;
+    var next = playlistState.position + delta;
+    return next >= 0 && next < playlistState.list.length;
+  }
+
+  function patchPlayerPlaylist() {
+    try {
+      if (!Lampa.Player || Lampa.Player.__mpvwasm_playlist_patch === VERSION) return;
+      var original = Lampa.Player.__mpvwasm_original_playlist || Lampa.Player.playlist;
+      Lampa.Player.__mpvwasm_playlist_patch = VERSION;
+      Lampa.Player.__mpvwasm_original_playlist = original;
+      Lampa.Player.playlist = function (list) {
+        var result;
+        try {
+          if (typeof original === 'function') result = original.apply(this, arguments);
+        } catch (error) {
+          setTimeout(function () { throw error; }, 0);
+        }
+        if (active || Date.now() - lastMpvPlayAt < 10000) {
+          setMpvPlaylist(list, active && active.data || lastMpvPlayData);
+        }
+        return result;
+      };
+    } catch (_) { }
+  }
+
+  function filesModalVisible() {
+    try {
+      return !!(document.querySelector('.modal .torrent-files') || document.querySelector('.torrent-files'));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function restoreFilesModalController() {
+    try {
+      if (!filesModalVisible() || !Lampa.Controller || !Lampa.Controller.toggle) return false;
+      Lampa.Controller.toggle('modal');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function patchPlayerCallback() {
+    try {
+      if (!Lampa.Player || Lampa.Player.__mpvwasm_callback_patch === VERSION) return;
+      var original = Lampa.Player.__mpvwasm_original_callback || Lampa.Player.callback;
+      Lampa.Player.__mpvwasm_callback_patch = VERSION;
+      Lampa.Player.__mpvwasm_original_callback = original;
+      Lampa.Player.callback = function (back) {
+        if (typeof back === 'function' && (active || Date.now() - lastMpvPlayAt < 10000)) {
+          lastMpvBackCallback = back;
+          lastMpvBackAt = Date.now();
+          logMpv('callback:capture', { active: !!active });
+        }
+        if (typeof original === 'function') return original.apply(this, arguments);
+      };
+    } catch (_) { }
   }
 
   function cachePlayer(player, canvas, shell, url) {
@@ -499,10 +729,6 @@
   function prewarmMpvPlayer() {
     if (assetWarmReady || !mpvWasmModeEnabled()) return assetWarmReady;
     var urls = [
-      '/mpvwasm/libmpv.js?v=' + VERSION,
-      '/mpvwasm/assets/mpvplayer-wrapper.js?v=' + VERSION,
-      '/mpvwasm/libmpv.wasm?v=' + VERSION,
-      '/mpvwasm/libmpv.data?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-hybrid-webcodecs.js?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer-session-worker.js?v=' + VERSION,
@@ -520,11 +746,17 @@
     setTimeout(prewarmMpvPlayer, 1200);
   }
 
-  function closeActive() {
+  function closeActive(skipBackCallback) {
     if (!active) return;
     var closing = active;
+    var backCallback = skipBackCallback ? null : lastMpvBackCallback;
+    logMpv('close', { skipBackCallback: !!skipBackCallback, hasCallback: typeof backCallback === 'function', controller: (function () { try { return Lampa.Controller.enabled().name; } catch (_) { return ''; } })() });
+    if (!skipBackCallback) {
+      lastMpvBackCallback = null;
+      lastMpvBackAt = 0;
+    }
     try { document.removeEventListener('keydown', active.onKey, true); } catch (_) { }
-    try { if (active.onClose) active.onClose(); } catch (_) { }
+    try { if (active.onClose) active.onClose(!!skipBackCallback); } catch (_) { }
     if (closing.state && closing.state.hardwareVideo) {
       try { if (closing.player) closing.player.destroy(); } catch (_) { }
     } else if (closing.player && closing.ui && closing.ui.canvas) cachePlayer(closing.player, closing.ui.canvas, null, closing.playUrl);
@@ -535,6 +767,21 @@
     try { Lampa.Loading.stop(); } catch (_) { }
     active = null;
     window.__mpvwasm_active = null;
+    if (!skipBackCallback) {
+      if (typeof backCallback === 'function') {
+        try { backCallback(); } catch (error) { notify('Back callback error: ' + (error && (error.message || error) || error)); }
+        setTimeout(function () {
+          if (!document.querySelector('.torrent-files')) restoreFilesModalController();
+        }, 60);
+      } else {
+        if (!restoreFilesModalController()) {
+          try {
+            var last = closing && closing.state && closing.state.lastController;
+            if (last && Lampa.Controller && Lampa.Controller.toggle) Lampa.Controller.toggle(last);
+          } catch (_) { }
+        }
+      }
+    }
   }
 
   function button(label, title, click) {
@@ -652,6 +899,13 @@
       if (window.$) $(node).trigger(name);
       else node.dispatchEvent(new CustomEvent(name, { bubbles: true }));
     } catch (_) { }
+  }
+
+  function eatEvent(event) {
+    if (!event) return;
+    try { event.preventDefault(); } catch (_) { }
+    try { event.stopPropagation(); } catch (_) { }
+    try { event.stopImmediatePropagation(); } catch (_) { }
   }
 
   function debugOverlayEnabled() {
@@ -1245,9 +1499,25 @@
   */
 
   function openMpvPlayer(data) {
-    closeActive();
+    logMpv('open:request', {
+      title: data && data.title,
+      path: data && data.path,
+      url: normalizeUrl(data && data.url),
+      playlist: data && data.playlist ? data.playlist.length : 0,
+      timeline: data && data.timeline ? {
+        hash: data.timeline.hash,
+        time: data.timeline.time,
+        percent: data.timeline.percent,
+        duration: data.timeline.duration
+      } : null
+    });
+    closeActive(true);
+    try { if (window.Lampa && Lampa.Select && Lampa.Select.close) Lampa.Select.close(); } catch (_) { }
     lastError = '';
     window.__mpvwasm_last_error = '';
+    lastMpvPlayData = data || null;
+    lastMpvPlayAt = Date.now();
+    setMpvPlaylist(data && data.playlist, data);
 
     var backendDecision = data && data.__mpvwasmBackendDecision || selectBackend(data);
     var useHybridWebCodecs = backendDecision.selected === 'hybrid-webcodecs';
@@ -1292,11 +1562,28 @@
       hybridWebCodecs: useHybridWebCodecs,
       backendDecision: backendDecision,
       timelineContinued: false,
+      userSeeked: false,
+      lastConfirmAt: 0,
+      lastPlayPauseAt: 0,
+      playlistOpen: false,
+      playlistOpenedAt: 0,
+      playlistSelectBlockUntil: 0,
       fileStarted: false,
       pendingSeek: null,
       timelineLastSave: 0,
       resizeTimer: 0
     };
+
+    logMpv('open:state', {
+      title: data && data.title,
+      backend: backendDecision,
+      timeline: state.timeline ? {
+        hash: state.timeline.hash,
+        time: state.timeline.time,
+        percent: state.timeline.percent,
+        duration: state.timeline.duration
+      } : null
+    });
 
     try {
       if (Lampa.Controller && Lampa.Controller.enabled) state.lastController = Lampa.Controller.enabled().name || '';
@@ -1306,9 +1593,10 @@
       root: ui.root,
       ui: ui,
       player: null,
+      data: data,
       playUrl: playUrl,
       state: state,
-      onClose: function () {
+      onClose: function (skipBackCallback) {
         clearTimeout(state.hideTimer);
         clearTimeout(state.cursorTimer);
         clearTimeout(state.clickTimer);
@@ -1317,27 +1605,30 @@
         window.removeEventListener('resize', resizeCanvas, true);
         document.removeEventListener('fullscreenchange', resizeCanvas, true);
         try { if (Lampa.PlayerInfo) Lampa.PlayerInfo.destroy(); } catch (_) { }
-        try {
-          if (state.lastController && Lampa.Controller && Lampa.Controller.enabled && /^mpvwasm_/.test(Lampa.Controller.enabled().name || '')) {
-            Lampa.Controller.toggle(state.lastController);
-          }
-        } catch (_) { }
       },
       onKey: function (event) {
         if (!active) return;
-        if (event.key === 'Escape' || event.key === 'Backspace') {
-          event.preventDefault();
-          closeActive();
-        } else if (isMpvController() && handleControllerKey(event)) {
+        if (state.playlistOpen && (event.key === 'Escape' || event.key === 'Backspace' || event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+          closePlaylistSelect();
+          eatEvent(event);
           return;
+        }
+        if (controllerName() === 'select') {
+          return;
+        }
+        if (isMpvController() && handleControllerKey(event)) {
+          return;
+        } else if (event.key === 'Escape' || event.key === 'Backspace') {
+          eatEvent(event);
+          closeActive();
         } else if (event.key === 'ArrowLeft') {
-          event.preventDefault();
+          eatEvent(event);
           seekRelative(-rewindStep);
         } else if (event.key === 'ArrowRight') {
-          event.preventDefault();
+          eatEvent(event);
           seekRelative(rewindStep);
         } else if (event.key === ' ' || event.key === 'Enter') {
-          event.preventDefault();
+          eatEvent(event);
           playPause();
         }
       }
@@ -1354,6 +1645,154 @@
 
     function setHidden(selector, hidden) {
       qa(selector).forEach(function (node) { node.classList.toggle('hide', !!hidden); });
+    }
+
+    function syncPlaylistUi() {
+      var currentData = active && active.data || data;
+      playlistState.current = normalizeUrl(currentData && currentData.url);
+      playlistState.position = 0;
+      playlistState.list.forEach(function (item, index) {
+        item.selected = samePlaylistItem(item, currentData);
+        if (item.selected) playlistState.position = index;
+      });
+      setHidden('.player-panel__playlist', playlistState.list.length < 2);
+      setHidden('.player-panel__left > .player-panel__prev', !playlistCan(-1));
+      setHidden('.player-panel__left > .player-panel__next', !playlistCan(1));
+      setHidden('.player-panel__center > .player-panel__prev', !playlistCan(-1));
+      setHidden('.player-panel__center > .player-panel__next', !playlistCan(1));
+      var next = playlistState.list[playlistState.position + 1];
+      qa('.player-panel__next-episode-name,.player-panel__episode').forEach(function (episode) {
+        var text = next ? cleanText(next.title || next.name || next.path || '') : '';
+        episode.textContent = text;
+        episode.classList.toggle('hide', !text);
+      });
+      if (!q('.player-panel__next-episode-name') && next) {
+        var left = q('.player-panel__left');
+        if (left) {
+          var label = document.createElement('div');
+          label.className = 'player-panel__next-episode-name';
+          label.textContent = cleanText(next.title || next.name || next.path || '');
+          left.appendChild(label);
+        }
+      }
+    }
+
+    active.syncPlaylistUi = syncPlaylistUi;
+
+    function playlistItemData(item) {
+      var next = {};
+      Object.keys(item || {}).forEach(function (key) { next[key] = item[key]; });
+      if (!next.card && data && data.card) next.card = data.card;
+      if (!next.movie && data && data.movie) next.movie = data.movie;
+      if (!next.playlist) next.playlist = playlistState.list;
+      next.timeline = resolveTimeline(next);
+      next.continue_play = true;
+      next.title = cleanText(next.title || next.name || next.path || '');
+      logMpv('playlist:item-data', {
+        index: playlistState.position,
+        title: next.title,
+        path: next.path,
+        url: normalizeUrl(next.url),
+        timeline: next.timeline ? {
+          hash: next.timeline.hash,
+          time: next.timeline.time,
+          percent: next.timeline.percent,
+          duration: next.timeline.duration
+        } : null
+      });
+      return next;
+    }
+
+    function playPlaylistIndex(index) {
+      var item = playlistState.list[index];
+      if (!item) return;
+
+      if (typeof item.url === 'function') {
+        setLoading(true);
+        try {
+          item.url(function () {
+            setLoading(false);
+            playPlaylistIndex(index);
+          });
+        } catch (error) {
+          setLoading(false);
+          notify('Playlist error: ' + (error && (error.message || error) || error));
+        }
+        return;
+      }
+
+      logMpv('playlist:play-index', { index: index, title: item.title, path: item.path, url: itemUrlValue(item) });
+      saveTimeline(true);
+      playlistState.position = index;
+      playlistState.current = itemUrlValue(item);
+      var nextData = playlistItemData(item);
+      closeActive(true);
+      openMpvPlayer(nextData);
+      if (item.callback) {
+        try { item.callback(); } catch (_) { }
+      }
+    }
+
+    function playlistPrev() {
+      if (playlistCan(-1)) playPlaylistIndex(playlistState.position - 1);
+    }
+
+    function playlistNext() {
+      if (playlistCan(1)) playPlaylistIndex(playlistState.position + 1);
+    }
+
+    function showPlaylist() {
+      if (playlistState.list.length < 2) return;
+      var last = controllerName();
+      var openedAt = Date.now();
+      state.playlistOpen = true;
+      state.playlistOpenedAt = openedAt;
+      state.playlistSelectBlockUntil = openedAt + 900;
+      Lampa.Select.show({
+        title: lang('player_playlist', 'Playlist'),
+        items: playlistState.list.map(function (item, index) {
+          return {
+            title: cleanText(item.title || item.name || item.path || ('#' + (index + 1))),
+            subtitle: cleanText(item.subtitle || ''),
+            selected: index === playlistState.position,
+            index: index
+          };
+        }),
+        onSelect: function (item) {
+          if (Date.now() < state.playlistSelectBlockUntil) {
+            logMpv('playlist:select-ignored', { index: item && item.index });
+            return;
+          }
+          state.playlistOpen = false;
+          state.playlistSelectBlockUntil = 0;
+          try { Lampa.Select.close(); } catch (_) { }
+          playPlaylistIndex(item.index);
+        },
+        onBack: function () {
+          state.playlistOpen = false;
+          state.playlistSelectBlockUntil = 0;
+          try { if (Lampa.Controller) Lampa.Controller.toggle(last && last !== 'select' ? last : 'mpvwasm_panel'); } catch (_) { }
+        }
+      });
+    }
+
+    function closePlaylistSelect() {
+      if (!state.playlistOpen) return false;
+      state.playlistOpen = false;
+      state.playlistSelectBlockUntil = 0;
+      try { Lampa.Select.close(); } catch (_) { }
+      try { if (Lampa.Controller) Lampa.Controller.toggle('mpvwasm_panel'); } catch (_) { }
+      showPanel();
+      return true;
+    }
+
+    function skipRepeatedConfirm(event) {
+      var key = event && event.key;
+      if (key !== 'Enter' && key !== ' ') return false;
+      var now = Date.now();
+      if ((event && event.repeat) || (state.lastConfirmAt && now - state.lastConfirmAt < 650)) return true;
+      state.lastConfirmAt = now;
+      return false;
     }
 
     function controllerName() {
@@ -1425,7 +1864,29 @@
       var key = event.key;
       var handled = false;
 
-      if (name === 'mpvwasm_rewind') {
+      logMpv('key', { key: key, controller: name });
+
+      if (state.playlistOpen && (key === 'Escape' || key === 'Backspace' || key === 'ArrowLeft' || key === 'ArrowRight')) {
+        closePlaylistSelect();
+        eatEvent(event);
+        return true;
+      }
+
+      if (skipRepeatedConfirm(event)) {
+        eatEvent(event);
+        return true;
+      }
+
+      if (key === 'Escape' || key === 'Backspace') {
+        if (name === 'mpvwasm_panel' || name === 'mpvwasm_rewind') {
+          hidePanel();
+          try { Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+          handled = true;
+        } else if (name === 'mpvwasm_player') {
+          closeActive();
+          handled = true;
+        }
+      } else if (name === 'mpvwasm_rewind') {
         if (key === 'ArrowLeft') {
           seekRelative(-rewindStep);
           handled = true;
@@ -1484,25 +1945,25 @@
       }
 
       if (handled) {
-        event.preventDefault();
-        event.stopPropagation();
+        eatEvent(event);
       }
 
       return handled;
     }
 
-    function bind(selector, handler) {
+      function bind(selector, handler) {
       qa(selector).forEach(function (node) {
         var run = function (event) {
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
+          eatEvent(event);
+          var now = Date.now();
+          if (node.__mpvwasm_enter_at && now - node.__mpvwasm_enter_at < 900) return;
+          node.__mpvwasm_enter_at = now;
+          state.lastConfirmAt = now;
+          logMpv('ui:button', { selector: selector, cls: node.className });
           handler(event);
           showPanel();
         };
         node.addEventListener('click', run);
-        node.addEventListener('hover:enter', run);
         try { if (window.$) $(node).on('hover:enter', run); } catch (_) { }
       });
     }
@@ -1550,6 +2011,7 @@
         'demux-only: ' + (!!probe.hasDemuxOnly),
         'size: ' + ((active && active.player && active.player.video && active.player.video.videoWidth) || '-') + 'x' + ((active && active.player && active.player.video && active.player.video.videoHeight) || '-'),
         'time: ' + formatTime(state.elapsed) + ' / ' + formatTime(state.duration),
+        'playlist: ' + (playlistState.list.length ? (playlistState.position + 1) + '/' + playlistState.list.length : '-'),
         'tracks/subs: ' + state.audioTracks.length + '/' + state.subtitleTracks.length,
         'hybrid: ' + (hybrid.codec || '-') + ' q=' + (hybrid.videoQueue || 0) + ' aq=' + Math.round(Number(hybrid.audioBufferUs || 0) / 1000) + 'ms drop=' + (hybrid.droppedFrames || 0),
         'av drift: ' + (hybrid.driftMs !== undefined ? hybrid.driftMs : '-') + 'ms',
@@ -1563,11 +2025,37 @@
       if (!state.timeline || !state.timeline.handler || !state.duration) return;
       var now = Date.now();
       if (!force && now - state.timelineLastSave < 15000) return;
+      if (state.timeline.hash && !state.userSeeked) {
+        var freshTimeline = lampaTimelineView(state.timeline.hash);
+        var freshTime = timelineSeconds(freshTimeline);
+        if (freshTimeline && freshTime > 10 && freshTime > state.elapsed + 5) {
+          state.timeline = freshTimeline;
+          logMpv('timeline:save-skip-older', {
+            force: !!force,
+            hash: state.timeline.hash,
+            freshTime: freshTime,
+            elapsed: state.elapsed,
+            duration: state.duration
+          });
+          return;
+        }
+      }
       state.timelineLastSave = now;
       state.timeline.percent = Math.round(state.elapsed / state.duration * 100);
       state.timeline.time = state.elapsed;
       state.timeline.duration = state.duration;
       try { state.timeline.handler(state.timeline.percent, state.timeline.time, state.timeline.duration); } catch (_) { }
+      logMpv('timeline:save', {
+        force: !!force,
+        hash: state.timeline.hash,
+        time: state.timeline.time,
+        percent: state.timeline.percent,
+        duration: state.timeline.duration
+      });
+      if (active && active.data) active.data.timeline = state.timeline;
+      playlistState.list.forEach(function (item) {
+        if (samePlaylistItem(item, active && active.data || data)) item.timeline = state.timeline;
+      });
     }
 
     function resumeTimeline() {
@@ -1577,6 +2065,7 @@
       var exact = parseFloat(state.timeline.time + '');
       var percent = parseFloat(state.timeline.percent + '');
       var pos = !isNaN(exact) && exact > 0 ? exact : (!isNaN(percent) ? Math.round(state.duration * percent / 100) : 0);
+      logMpv('timeline:resume', { pos: pos, exact: exact, percent: percent, duration: state.duration });
       if (pos > 10 && pos < state.duration - 15 && (!percent || percent < 90)) seekTo(pos, true);
     }
 
@@ -1602,6 +2091,38 @@
     function setLoading(status) {
       state.loading = !!status;
       ui.video.classList.toggle('video--load', state.loading);
+    }
+
+    function ensureMpvController() {
+      try {
+        var name = controllerName();
+        if (Lampa.Controller && Lampa.Controller.toggle && name !== 'mpvwasm_player' && name !== 'mpvwasm_panel' && name !== 'mpvwasm_rewind') {
+          Lampa.Controller.toggle('mpvwasm_player');
+        }
+      } catch (_) { }
+    }
+
+    function markFileStarted(source) {
+      try { Lampa.Loading.stop(); } catch (_) { }
+      if (!state.fileStarted) {
+        state.fileStarted = true;
+        logMpv('callback:file-start', {
+          source: source || 'unknown',
+          pendingSeek: state.pendingSeek,
+          elapsed: state.elapsed,
+          duration: state.duration
+        });
+      }
+      setLoading(false);
+      ensureMpvController();
+      if (state.pendingSeek !== null) {
+        var target = state.pendingSeek;
+        state.pendingSeek = null;
+        seekTo(target, true);
+      } else {
+        resumeTimeline();
+      }
+      showPanel();
     }
 
     function showPanel() {
@@ -1630,6 +2151,9 @@
     }
 
     function playPause() {
+      var now = Date.now();
+      if (state.lastPlayPauseAt && now - state.lastPlayPauseAt < 450) return;
+      state.lastPlayPauseAt = now;
       setPaused(!state.paused, true);
     }
 
@@ -1647,21 +2171,25 @@
     function seekTo(seconds, silent) {
       var target = Number(seconds || 0);
       if (state.duration) target = Math.max(0, Math.min(target, state.duration));
+      logMpv('seek:to', { target: target, silent: !!silent, fileStarted: state.fileStarted, duration: state.duration });
+      if (!silent) state.userSeeked = true;
       state.elapsed = target;
       updateTimeline();
+      if (!silent) saveTimeline(true);
       if (active && active.player && state.fileStarted) active.player.seek(target);
       else state.pendingSeek = target;
-      if (!silent) saveTimeline(true);
       showPanel();
     }
 
     function seekRelative(seconds) {
       var value = Number(seconds || 0);
+      logMpv('seek:relative', { seconds: value, elapsed: state.elapsed, duration: state.duration });
+      state.userSeeked = true;
       state.elapsed = Math.max(0, state.duration ? Math.min(state.duration, state.elapsed + value) : state.elapsed + value);
       updateTimeline();
       flashRewind(value);
-      if (active && active.player) active.player.seekRelative(value);
       saveTimeline(true);
+      if (active && active.player) active.player.seekRelative(value);
       showPanel();
     }
 
@@ -1775,7 +2303,10 @@
         pause: function () { setPaused(true, true); },
         stop: closeActive,
         gone: function () { qa('.selector').forEach(function (node) { node.classList.remove('focus'); }); },
-        back: closeActive
+        back: function () {
+          hidePanel();
+          try { Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+        }
       });
       Lampa.Controller.add('mpvwasm_panel', {
         toggle: function () {
@@ -1786,7 +2317,9 @@
           showPanel();
           try { Lampa.Controller.toggle('mpvwasm_rewind'); } catch (_) { }
         },
-        down: showPanel,
+        down: function () {
+          showPanel();
+        },
         left: function () { moveFocus('left'); },
         right: function () { moveFocus('right'); },
         enter: function () {
@@ -1798,7 +2331,10 @@
         pause: function () { setPaused(true, true); },
         stop: closeActive,
         gone: function () { qa('.selector').forEach(function (node) { node.classList.remove('focus'); }); },
-        back: closeActive
+        back: function () {
+          hidePanel();
+          try { Lampa.Controller.toggle('mpvwasm_player'); } catch (_) { }
+        }
       });
       try { Lampa.Controller.toggle('mpvwasm_rewind'); } catch (_) { }
     }
@@ -1826,10 +2362,16 @@
     }
 
     markControllerNodes();
-    setHidden('.player-panel__prev,.player-panel__next,.player-panel__playlist,.player-panel__flow,.player-panel__pip', true);
+    setHidden('.player-panel__flow,.player-panel__pip', true);
+    syncPlaylistUi();
     var quality = q('.player-panel__quality');
     if (quality) quality.textContent = state.hybridWebCodecs ? 'mpv webcodecs' : (state.hardwareVideo ? 'mpv hw' : 'mpv');
 
+    bind('.player-panel__left > .player-panel__prev', playlistPrev);
+    bind('.player-panel__left > .player-panel__next', playlistNext);
+    bind('.player-panel__center > .player-panel__prev', playlistPrev);
+    bind('.player-panel__center > .player-panel__next', playlistNext);
+    bind('.player-panel__playlist', showPlaylist);
     bind('.player-panel__playpause', playPause);
     bind('.player-panel__rprev', function () { seekRelative(-rewindStep); });
     bind('.player-panel__rnext', function () { seekRelative(rewindStep); });
@@ -1915,29 +2457,38 @@
       error: function (error) {
         lastError = String(error && (error.error || error.message || error) || error || '');
         window.__mpvwasm_last_error = lastError;
+        logMpv('callback:error', { error: lastError });
         try { if (Lampa.PlayerInfo && Lampa.PlayerInfo.set) Lampa.PlayerInfo.set('error', lastError); } catch (_) { }
         notify('MPV WASM: ' + (error && error.error || error && error.message || error));
       },
       duration: function (value) {
         state.duration = Number(value || 0);
+        logMpv('callback:duration', { duration: state.duration });
         updateTimeline();
-        if (state.fileStarted) resumeTimeline();
+        if (state.duration && !state.fileStarted) markFileStarted('duration');
+        else if (state.fileStarted) resumeTimeline();
       },
       elapsed: function (value) {
         state.elapsed = Number(value || 0);
         updateTimeline();
-        if (state.fileStarted) resumeTimeline();
+        if (state.elapsed > 0 && !state.fileStarted) markFileStarted('elapsed');
+        else if (state.fileStarted) resumeTimeline();
         saveTimeline(false);
       },
       isPlaying: function (value) {
         setPaused(!value, false);
       },
+      buffering: function (value) {
+        setLoading(!!value);
+      },
       audioTracks: function (tracks) {
         state.audioTracks = tracks || [];
+        logMpv('callback:audio-tracks', { count: state.audioTracks.length });
         syncTrackButtons();
       },
       subtitleTracks: function (tracks) {
         state.subtitleTracks = tracks || [];
+        logMpv('callback:subtitle-tracks', { count: state.subtitleTracks.length });
         syncTrackButtons();
       },
       videoSize: function (value) {
@@ -1946,20 +2497,12 @@
         try { if (Lampa.PlayerInfo && Lampa.PlayerInfo.set && width && height) Lampa.PlayerInfo.set('size', { width: width, height: height }); } catch (_) { }
       },
       fileStart: function () {
-        try { Lampa.Loading.stop(); } catch (_) { }
-        state.fileStarted = true;
-        setLoading(false);
-        if (state.pendingSeek !== null) {
-          var target = state.pendingSeek;
-          state.pendingSeek = null;
-          seekTo(target, true);
-        } else {
-          resumeTimeline();
-        }
-        showPanel();
+        markFileStarted('file-start');
       },
       fileEnd: function () {
-        closeActive();
+        logMpv('callback:file-end', { playlistNext: storageBool('playlist_next', true), canNext: playlistCan(1) });
+        if (storageBool('playlist_next', true) && playlistCan(1)) playlistNext();
+        else closeActive();
       }
     };
 
@@ -1995,36 +2538,31 @@
     function createHybridPlayer() {
       var strictHybrid = state.backendDecision && state.backendDecision.requested === 'mpv2';
       if (!window.HybridWebCodecsBackend || typeof window.HybridWebCodecsBackend.open !== 'function') {
-        if (strictHybrid) {
-          state.backendDecision.selected = 'hybrid-webcodecs';
-          state.backendDecision.reason = 'hybrid-backend-not-loaded';
-          return Promise.reject(new Error('MPV2 hybrid backend not loaded'));
-        }
-        state.backendDecision.selected = 'mpv-wasm-fallback';
+        state.backendDecision.selected = 'hybrid-webcodecs';
         state.backendDecision.reason = 'hybrid-backend-not-loaded';
-        return createFreshPlayer();
+        return Promise.reject(new Error('MPV2 hybrid backend not loaded'));
       }
       return window.HybridWebCodecsBackend.open(ui.canvas, proxyUrl(data.url), callbacks, {
         data: data,
         debug: debugOverlayEnabled()
       }).catch(function (error) {
-        if (strictHybrid) {
-          state.backendDecision.selected = 'hybrid-webcodecs';
-          state.backendDecision.reason = 'hybrid-open-failed';
-          lastError = String(error && (error.message || error) || error || '');
-          throw error;
-        }
-        state.backendDecision.selected = 'mpv-wasm-fallback';
+        state.backendDecision.selected = 'hybrid-webcodecs';
         state.backendDecision.reason = 'hybrid-open-failed';
         lastError = String(error && (error.message || error) || error || '');
-        callbacks.status('hybrid fallback ' + lastError);
-        return createFreshPlayer();
+        throw error;
       });
     }
 
-    var playerReady = state.hybridWebCodecs ? (reusePlayer && reusePlayer.hybridWebCodecs ? resumeWithPlayer(reusePlayer) : createHybridPlayer()) : (state.hardwareVideo ? createHardwareVideoPlayer(ui, playUrl, callbacks, sidecarUrl) : (reusePlayer ? resumeWithPlayer(reusePlayer) : createFreshPlayer()));
+    function startSelectedPlayer() {
+      if (!active || active.ui !== ui) return Promise.resolve(null);
+      return state.hybridWebCodecs ? (reusePlayer && reusePlayer.hybridWebCodecs ? resumeWithPlayer(reusePlayer) : createHybridPlayer()) : (state.hardwareVideo ? createHardwareVideoPlayer(ui, playUrl, callbacks, sidecarUrl) : Promise.reject(new Error('MPV2 hybrid backend required')));
+    }
+
+    waitTorrPreload(data, ui).catch(function () { });
+    var playerReady = startSelectedPlayer();
 
     playerReady.then(function (player) {
+      if (!player) return;
       if (!active || active.ui !== ui) {
         cachePlayer(player, ui.canvas);
         return;
@@ -2058,6 +2596,8 @@
       version: VERSION,
       open: openMpvPlayer,
       close: closeActive,
+      dumpLog: function () { return mpvLog.slice(); },
+      clearLog: function () { mpvLog.length = 0; },
       activeInfo: function () {
         return {
           active: !!active,
@@ -2077,6 +2617,11 @@
           ignoreDestroy: ignorePlayerDestroyUntil > Date.now(),
           backend: active && active.state ? active.state.backendDecision : null,
           activeBackend: active && active.player ? (active.player.hybridWebCodecs ? 'hybrid-webcodecs' : (active.player.hardware ? 'html5-sidecar' : 'mpv-wasm-fallback')) : '',
+          playlist: {
+            count: playlistState.list.length,
+            position: playlistState.position,
+            current: playlistState.current
+          },
           state: active && active.state ? active.state : null,
           player: active && active.player ? active.player : null,
           lastError: lastError || window.__mpvwasm_last_error || ''
@@ -2092,19 +2637,35 @@
     };
     if (window.__mpvwasm_player_hooked) return;
     window.__mpvwasm_player_hooked = true;
+    patchPlayerPlaylist();
+    patchPlayerCallback();
 
     Lampa.Player.listener.follow('create', function (event) {
       if (!event || !event.data || !shouldUseMpvWasm(event.data)) return;
+      var createUrl = normalizeUrl(event.data.url);
+      if (createUrl && createUrl === lastCreateUrl && Date.now() - lastCreateAt < 1200) {
+        logMpv('player:create-duplicate', { url: createUrl, title: event.data.title });
+        if (event.abort) event.abort();
+        if (event.preventDefault) event.preventDefault();
+        if (event.stopPropagation) event.stopPropagation();
+        event.cancel = true;
+        return;
+      }
+      lastCreateUrl = createUrl;
+      lastCreateAt = Date.now();
       var backendDecision = selectBackend(event.data);
       window.__mpvwasm_backend_decision = backendDecision;
       if (backendDecision.selected === 'html5') return;
       event.data.__mpvwasmBackendDecision = backendDecision;
+      lastMpvPlayData = event.data;
+      lastMpvPlayAt = Date.now();
+      setMpvPlaylist(event.data.playlist, event.data);
       if (event.abort) event.abort();
       if (event.preventDefault) event.preventDefault();
       if (event.stopPropagation) event.stopPropagation();
       event.cancel = true;
       ignorePlayerDestroyUntil = Date.now() + 30000;
-      try { Lampa.Player.close(); } catch (_) { }
+      try { if (Lampa.Player.opened && Lampa.Player.opened()) Lampa.Player.close(); } catch (_) { }
       openMpvPlayer(event.data);
     });
 

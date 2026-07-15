@@ -39,10 +39,39 @@ static DemuxState g;
 
 EM_JS(double, js_probe_size, (const char* url_ptr), {
   var url = UTF8ToString(url_ptr);
+  function decodeProxyUrl(value) {
+    try {
+      var parsed = new URL(value, self.location && self.location.origin ? self.location.origin : location.origin);
+      if (parsed.pathname.indexOf('/mpvwasm/proxy') < 0) return "";
+      var encoded = parsed.searchParams.get('u') || "";
+      if (!encoded) return "";
+      var b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      var binary = atob(b64);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return typeof TextDecoder === 'function' ? new TextDecoder().decode(bytes) : binary;
+    } catch (e) {
+      return "";
+    }
+  }
   function parseRange(value) {
     value = String(value || "");
     var slash = value.lastIndexOf("/");
     return slash >= 0 ? Number(value.slice(slash + 1).trim() || 0) : 0;
+  }
+  var directUrl = decodeProxyUrl(url);
+  var probeUrls = directUrl && directUrl !== url ? [directUrl, url] : [url];
+  for (var i = 0; i < probeUrls.length; i++) {
+    try {
+      var head = new XMLHttpRequest();
+      head.open('HEAD', probeUrls[i], false);
+      head.send(null);
+      if (head.status >= 200 && head.status < 400) {
+        var length = Number(head.getResponseHeader('Content-Length') || 0);
+        if (length > 0) return length;
+      }
+    } catch (e) {}
   }
   try {
     var xhr = new XMLHttpRequest();
@@ -52,15 +81,6 @@ EM_JS(double, js_probe_size, (const char* url_ptr), {
     if (xhr.status === 206) {
       var size = parseRange(xhr.getResponseHeader('Content-Range'));
       if (size > 0) return size;
-    }
-  } catch (e) {}
-  try {
-    var head = new XMLHttpRequest();
-    head.open('HEAD', url, false);
-    head.send(null);
-    if (head.status >= 200 && head.status < 400) {
-      var length = Number(head.getResponseHeader('Content-Length') || 0);
-      if (length > 0) return length;
     }
   } catch (e) {}
   return 0;
@@ -77,7 +97,7 @@ EM_JS(int, js_read_range, (const char* url_ptr, double offset, int length, uint8
       HEAPU8.set(cache.bytes.subarray(from, from + length), out_ptr);
       return length;
     }
-    var fetchLength = Math.max(length, 8 * 1024 * 1024);
+    var fetchLength = Math.max(length, 4 * 1024 * 1024);
     var fetchEnd = start + fetchLength - 1;
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, false);
@@ -147,14 +167,17 @@ static bool streams_have_required_headers(AVFormatContext* fmt) {
   bool has_video = false;
   for (unsigned int i = 0; i < fmt->nb_streams; i++) {
     AVCodecParameters* par = fmt->streams[i]->codecpar;
-    if (!par || par->codec_type == AVMEDIA_TYPE_UNKNOWN || par->codec_id == AV_CODEC_ID_NONE) return false;
+    if (!par) continue;
     if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
       has_video = true;
+      if (par->codec_id == AV_CODEC_ID_NONE) return false;
       if (par->width <= 0 || par->height <= 0) return false;
       if ((par->codec_id == AV_CODEC_ID_H264 || par->codec_id == AV_CODEC_ID_HEVC || par->codec_id == AV_CODEC_ID_AV1) &&
           (!par->extradata || par->extradata_size <= 0)) {
         return false;
       }
+    } else if (par->codec_type == AVMEDIA_TYPE_AUDIO || par->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+      if (par->codec_id == AV_CODEC_ID_NONE) return false;
     }
   }
   return has_video;

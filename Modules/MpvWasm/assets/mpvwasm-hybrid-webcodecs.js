@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-93-seek-drop-debug';
+  var VERSION = '20260709-04-buffering';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {
@@ -69,10 +69,27 @@
     return 'hvc1.' + profile + '.' + compat + '.L' + level + '.B0';
   }
 
-  function hevcCodecVariants(track) {
+  function hevcCodecFromHvcC(description, sampleEntry) {
+    if (!description || description.length < 23 || description[0] !== 1) return null;
+    var profileByte = description[1];
+    var profileSpace = profileByte >> 6;
+    var tierFlag = (profileByte >> 5) & 1;
+    var profileIdc = profileByte & 0x1f;
+    var compat = ((description[2] << 24) | (description[3] << 16) | (description[4] << 8) | description[5]) >>> 0;
+    var level = description[12];
+    var constraints = '';
+    for (var i = 6; i < 12; i++) constraints += hex(description[i]);
+    constraints = constraints.replace(/(00)+$/g, '') || '0';
+    var space = profileSpace === 1 ? 'A' : (profileSpace === 2 ? 'B' : (profileSpace === 3 ? 'C' : ''));
+    return sampleEntry + '.' + space + profileIdc + '.' + compat.toString(16).toUpperCase() + '.' + (tierFlag ? 'H' : 'L') + level + '.' + constraints.toUpperCase();
+  }
+
+  function hevcCodecVariants(track, description) {
     var level = Number(track && track.level || 153);
     if (!isFinite(level) || level <= 0) level = 153;
     var variants = [
+      hevcCodecFromHvcC(description, 'hvc1'),
+      hevcCodecFromHvcC(description, 'hev1'),
       hevcCodec(track),
       hevcCodec(track).replace(/^hvc1/, 'hev1'),
       'hvc1.1.6.L' + level + '.B0',
@@ -84,12 +101,13 @@
       'hvc1.2.4.L153.B0',
       'hev1.2.4.L153.B0'
     ];
-    return variants.filter(function (item, index) { return variants.indexOf(item) === index; });
+    return variants.filter(function (item, index) { return item && variants.indexOf(item) === index; });
   }
 
   function videoConfigs(track) {
     var description = fromBase64(track && track.extradata || '');
     var codec = String(track && track.codecName || '').toLowerCase();
+    var colorSpace = videoColorSpace(track);
     var base = {
       codedWidth: Number(track && track.width || 0),
       codedHeight: Number(track && track.height || 0),
@@ -97,13 +115,14 @@
       hardwareAcceleration: 'prefer-hardware',
       optimizeForLatency: true
     };
+    if (colorSpace) base.colorSpace = colorSpace;
 
     if (codec === 'h264') {
       var avc = Object.assign({}, base, { codec: avcCodec(description), avc: { format: 'avc' } });
       return [avc, Object.assign({}, base, { codec: avc.codec })];
     }
     if (codec === 'hevc') {
-      var variants = hevcCodecVariants(track);
+      var variants = hevcCodecVariants(track, description);
       var configs = [];
       if (description) {
         variants.forEach(function (item) {
@@ -123,6 +142,31 @@
     if (codec === 'vp9') return [Object.assign({}, base, { codec: 'vp09.00.51.08' })];
     if (codec === 'vp8') return [Object.assign({}, base, { codec: 'vp8' })];
     return [];
+  }
+
+  function videoColorSpace(track) {
+    if (!track) return null;
+    var primariesId = Number(track.colorPrimaries || 0);
+    var transferId = Number(track.colorTransfer || 0);
+    var matrixId = Number(track.colorMatrix || 0);
+    var color = {};
+    if (primariesId === 1) color.primaries = 'bt709';
+    else if (primariesId === 5) color.primaries = 'bt470bg';
+    else if (primariesId === 6) color.primaries = 'smpte170m';
+    else if (primariesId === 9) color.primaries = 'bt2020';
+    if (transferId === 1) color.transfer = 'bt709';
+    else if (transferId === 6) color.transfer = 'smpte170m';
+    else if (transferId === 13) color.transfer = 'iec61966-2-1';
+    else if (transferId === 16) color.transfer = 'smpte2084';
+    else if (transferId === 18) color.transfer = 'arib-std-b67';
+    if (matrixId === 0) color.matrix = 'rgb';
+    else if (matrixId === 1) color.matrix = 'bt709';
+    else if (matrixId === 5) color.matrix = 'bt470bg';
+    else if (matrixId === 6) color.matrix = 'smpte170m';
+    else if (matrixId === 9) color.matrix = 'bt2020-ncl';
+    else if (matrixId === 10) color.matrix = 'bt2020-cl';
+    if (Number(track.colorRange || 0) === 2) color.fullRange = true;
+    return Object.keys(color).length ? color : null;
   }
 
   async function supportedConfig(track) {
@@ -189,8 +233,7 @@
   function audioCodecConfig(track) {
     var codec = String(track && track.codecName || '').toLowerCase();
     var mapped = '';
-    if (codec === 'ac3') mapped = 'ac-3';
-    else if (codec === 'eac3') mapped = 'ec-3';
+    if (codec === 'ac3' || codec === 'eac3' || codec === 'dts' || codec === 'truehd') return null;
     else if (codec === 'aac') mapped = 'mp4a.40.2';
     else if (codec === 'mp3') mapped = 'mp3';
     else if (codec === 'opus') mapped = 'opus';
@@ -215,6 +258,22 @@
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader) || 'shader compile failed');
     return shader;
+  }
+
+  function fitRect(canvas, sourceWidth, sourceHeight) {
+    var cw = Math.max(1, Number(canvas && canvas.width || 1));
+    var ch = Math.max(1, Number(canvas && canvas.height || 1));
+    var sw = Math.max(1, Number(sourceWidth || 1));
+    var sh = Math.max(1, Number(sourceHeight || 1));
+    var scale = Math.min(cw / sw, ch / sh);
+    var width = Math.max(1, Math.round(sw * scale));
+    var height = Math.max(1, Math.round(sh * scale));
+    return {
+      x: Math.round((cw - width) / 2),
+      y: Math.round((ch - height) / 2),
+      width: width,
+      height: height
+    };
   }
 
   function createWebglRenderer(canvas) {
@@ -252,8 +311,12 @@
 
     return {
       type: 'webgl',
-      render: function (frame) {
+      render: function (frame, sourceWidth, sourceHeight) {
+        var rect = fitRect(canvas, sourceWidth, sourceHeight);
         gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.viewport(rect.x, rect.y, rect.width, rect.height);
         gl.useProgram(program);
         gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
         gl.enableVertexAttribArray(position);
@@ -269,6 +332,21 @@
         try { gl.deleteBuffer(buffer); } catch (_) { }
         try { gl.deleteProgram(program); } catch (_) { }
       }
+    };
+  }
+
+  function create2dRenderer(canvas) {
+    var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true }) || canvas.getContext('2d', { alpha: false }) || canvas.getContext('2d');
+    if (!ctx) return null;
+    try { ctx.imageSmoothingEnabled = true; } catch (_) { }
+    return {
+      type: '2d',
+      render: function (frame, sourceWidth, sourceHeight) {
+        var rect = fitRect(canvas, sourceWidth || frame.displayWidth || frame.codedWidth, sourceHeight || frame.displayHeight || frame.codedHeight);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(frame, rect.x, rect.y, rect.width, rect.height);
+      },
+      destroy: function () { }
     };
   }
 
@@ -289,7 +367,9 @@
     this.options = options || {};
     this.hybridWebCodecs = true;
     this.hardware = true;
-    try { this.renderer = createWebglRenderer(canvas); } catch (_) { this.renderer = null; }
+    var rendererMode = '';
+    try { rendererMode = String(localStorage.getItem('mpvwasm_renderer') || '2d'); } catch (_) { rendererMode = '2d'; }
+    try { this.renderer = rendererMode === 'webgl' ? createWebglRenderer(canvas) : create2dRenderer(canvas); } catch (_) { this.renderer = null; }
     this.ctx = this.renderer ? null : (canvas.getContext('2d', { alpha: false, desynchronized: true }) || canvas.getContext('2d'));
     this.session = null;
     this.videoDecoder = null;
@@ -323,12 +403,17 @@
     this.audioPlayedSamples = 0;
     this.audioBufferUs = 0;
     this.audioClockUs = 0;
+    this.audioClockWallAt = 0;
     this.audioSyncPaused = false;
+    this.buffering = false;
     this.pendingClockUs = 0;
     this.seekTargetUs = 0;
     this.lastElapsedEmit = 0;
     this.lastDrawnFrameUs = 0;
     this.lastRenderAt = 0;
+    this.lastFrameIntervalMs = 0;
+    this.frameIntervalJitterMs = 0;
+    this.maxFrameIntervalMs = 0;
     this.renderedFrames = 0;
     this.droppedFrames = 0;
     this.seekDroppedFrames = 0;
@@ -448,6 +533,7 @@
           try { self.frameQueue.shift().close(); } catch (_) { }
         }
         self.maybeReady();
+        self.maybeResumeBuffering();
       },
       error: function (error) {
         call(self.callbacks, 'error', error);
@@ -479,6 +565,7 @@
       if (self.audioBasePtsUs === null) return;
       if (Number(data.clockUs || 0) < self.audioBasePtsUs - 100000) return;
       self.audioClockUs = Number(data.clockUs || 0);
+      self.audioClockWallAt = performance.now();
       self.audioPlayedSamples = Number(data.playedSamples || 0);
       self.audioBufferUs = Number(data.bufferUs || 0);
       self.emitElapsed(false);
@@ -548,6 +635,7 @@
     this.audioPlayedSamples = 0;
     this.audioBufferUs = 0;
     this.audioClockUs = this.audioBasePtsUs || 0;
+    this.audioClockWallAt = performance.now();
     if (this.audioNode) {
       this.audioNode.port.postMessage({
         type: 'reset',
@@ -560,6 +648,7 @@
 
   HybridWebCodecsPlayer.prototype.resumeAudio = function () {
     if (!this.audioContext || this.destroyed) return;
+    this.audioClockWallAt = performance.now();
     var self = this;
     this.audioContext.resume().catch(function (error) {
       call(self.callbacks, 'error', error);
@@ -571,21 +660,47 @@
     this.audioContext.suspend().catch(function () { });
   };
 
+  HybridWebCodecsPlayer.prototype.enterBuffering = function () {
+    if (this.buffering || this.destroyed || this.paused) return;
+    this.buffering = true;
+    this.pauseAudio();
+    call(this.callbacks, 'buffering', true);
+    call(this.callbacks, 'status', 'hybrid buffering');
+    this.updateDebug();
+  };
+
+  HybridWebCodecsPlayer.prototype.maybeResumeBuffering = function () {
+    if (!this.buffering || this.destroyed || this.paused) return;
+    var videoReady = this.frameQueue.length >= 2;
+    var audioReady = !this.audioTrack || this.audioBufferUs >= Math.min(500000, this.startupAudioBufferUs());
+    if (!videoReady || !audioReady) return;
+    this.buffering = false;
+    call(this.callbacks, 'buffering', false);
+    if (this.wantPlaying) this.resumeAudio();
+    call(this.callbacks, 'status', 'hybrid resumed');
+    this.updateDebug();
+  };
+
   HybridWebCodecsPlayer.prototype.syncAudioToVideo = function () {
     return;
   };
 
   HybridWebCodecsPlayer.prototype.maxFrameQueue = function () {
     var width = Number(this.videoTrack && this.videoTrack.width || 0);
-    return width >= 3000 ? 30 : 14;
+    return width >= 3000 ? 48 : 24;
+  };
+
+  HybridWebCodecsPlayer.prototype.startupAudioBufferUs = function () {
+    var width = Number(this.videoTrack && this.videoTrack.width || 0);
+    return width >= 3000 ? 900000 : 500000;
   };
 
   HybridWebCodecsPlayer.prototype.throttleReason = function () {
     if (this.seekTargetUs && !this.hasFrameNear(this.seekTargetUs, 180000)) return '';
     if (this.videoDecoder && this.videoDecoder.decodeQueueSize > 64) return 'video-decode';
     if (this.frameQueue.length >= this.maxFrameQueue()) return 'video-buffer';
-    if (this.audioTrack && this.audioBufferUs > 3000000) return 'audio-buffer';
-    if (!this.ready && this.audioTrack && this.audioBufferUs > 1200000 && this.frameQueue.length > 8) return 'startup-buffer';
+    if (this.audioTrack && this.audioBufferUs > 6000000) return 'audio-buffer';
+    if (!this.ready && this.audioTrack && this.audioBufferUs > this.startupAudioBufferUs() + 700000 && this.frameQueue.length > 8) return 'startup-buffer';
     return '';
   };
 
@@ -607,7 +722,7 @@
 
         var handled = 0;
         var is4k = Number(this.videoTrack && this.videoTrack.width || 0) >= 3000;
-        var limit = this.seekTargetUs ? (is4k ? 128 : 36) : (is4k ? 64 : 10);
+        var limit = this.seekTargetUs ? (is4k ? 192 : 48) : (is4k ? 128 : 24);
         while (handled < limit && !this.destroyed && !this.seeking && !this.throttleReason()) {
           var packet = await this.session.readPacket();
           if (!packet) {
@@ -777,7 +892,7 @@
   HybridWebCodecsPlayer.prototype.maybeReady = function () {
     if (this.destroyed || this.ready) return;
     var videoReady = this.seekTargetUs ? this.hasFrameNear(this.seekTargetUs, 180000) && this.frameQueue.length >= 2 : this.frameQueue.length >= 2;
-    var audioReady = !this.audioTrack || this.audioBufferUs >= 300000 || (!this.started && this.audioQueuedSamples > 0);
+    var audioReady = !this.audioTrack || this.audioBufferUs >= this.startupAudioBufferUs();
     if (!videoReady || !audioReady) return;
 
     var firstStart = !this.started;
@@ -803,7 +918,13 @@
   };
 
   HybridWebCodecsPlayer.prototype.currentClockUs = function () {
-    if (this.audioTrack && this.audioClockUs) return this.audioClockUs;
+    if (this.audioTrack && this.audioClockUs) {
+      if (!this.paused && this.audioClockWallAt) {
+        var advancedUs = Math.max(0, Math.min(250000, Math.round((performance.now() - this.audioClockWallAt) * 1000)));
+        return this.audioClockUs + advancedUs;
+      }
+      return this.audioClockUs;
+    }
     if (this.audioTrack && this.pendingClockUs) return this.pendingClockUs;
     if (this.audioBasePtsUs !== null) return this.audioBasePtsUs;
     if (this.frameQueue.length) return Number(this.frameQueue[0].timestamp || 0);
@@ -821,7 +942,7 @@
   HybridWebCodecsPlayer.prototype.renderFrame = function (force) {
     if (!this.frameQueue.length) return;
     var clockUs = this.currentClockUs();
-    var maxEarlyUs = force ? 300000 : 30000;
+    var maxEarlyUs = force ? 300000 : 12000;
     var maxLateUs = force ? 900000 : (Number(this.videoTrack && this.videoTrack.width || 0) >= 3000 ? 450000 : 250000);
     var frame = null;
 
@@ -844,10 +965,22 @@
 
     if (!frame) return;
     try {
-      if (this.renderer) this.renderer.render(frame);
-      else this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+      if (this.renderer) this.renderer.render(frame, this.videoTrack && this.videoTrack.width, this.videoTrack && this.videoTrack.height);
+      else {
+        var rect = fitRect(this.canvas, this.videoTrack && this.videoTrack.width || frame.displayWidth || frame.codedWidth, this.videoTrack && this.videoTrack.height || frame.displayHeight || frame.codedHeight);
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.drawImage(frame, rect.x, rect.y, rect.width, rect.height);
+      }
       this.lastDrawnFrameUs = Number(frame.timestamp || clockUs);
-      this.lastRenderAt = performance.now();
+      var renderAt = performance.now();
+      if (this.lastRenderAt) {
+        var intervalMs = renderAt - this.lastRenderAt;
+        var idealMs = 1000 / 24;
+        this.lastFrameIntervalMs = Math.round(intervalMs * 10) / 10;
+        this.maxFrameIntervalMs = Math.max(this.maxFrameIntervalMs * 0.98, intervalMs);
+        this.frameIntervalJitterMs = this.frameIntervalJitterMs ? this.frameIntervalJitterMs * 0.85 + Math.abs(intervalMs - idealMs) * 0.15 : Math.abs(intervalMs - idealMs);
+      }
+      this.lastRenderAt = renderAt;
       this.renderedFrames++;
     } catch (error) {
       var message = String(error && (error.message || error) || '');
@@ -856,7 +989,9 @@
         this.renderer = null;
         this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true }) || this.canvas.getContext('2d');
         try {
-          this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+          var fallbackRect = fitRect(this.canvas, this.videoTrack && this.videoTrack.width || frame.displayWidth || frame.codedWidth, this.videoTrack && this.videoTrack.height || frame.displayHeight || frame.codedHeight);
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          this.ctx.drawImage(frame, fallbackRect.x, fallbackRect.y, fallbackRect.width, fallbackRect.height);
           this.lastDrawnFrameUs = Number(frame.timestamp || clockUs);
           this.lastRenderAt = performance.now();
           this.renderedFrames++;
@@ -905,7 +1040,11 @@
 
   HybridWebCodecsPlayer.prototype._renderLoop = function () {
     if (this.destroyed) return;
-    if (this.ready && !this.paused) this.renderFrame(false);
+    if (this.ready && !this.paused && !this.buffering) this.renderFrame(false);
+    if (this.ready && !this.paused && !this.buffering && !this.frameQueue.length && (!this.lastRenderAt || performance.now() - this.lastRenderAt > 250)) {
+      this.enterBuffering();
+    }
+    this.maybeResumeBuffering();
     var clockUs = this.currentClockUs();
     this.renderSubtitles(clockUs);
     this.syncAudioToVideo();
@@ -923,7 +1062,6 @@
   };
 
   HybridWebCodecsPlayer.prototype.updateDebug = function () {
-    if (!this.options.debug && !window.__MPV_WASM_DEBUG) return;
     var now = performance.now();
     if (!this.statsAt) {
       this.statsAt = now;
@@ -956,7 +1094,11 @@
       videoQueue: this.frameQueue.length,
       decodeQueue: this.videoDecoder ? this.videoDecoder.decodeQueueSize : 0,
       audioBufferUs: this.audioBufferUs,
+      frameIntervalMs: this.lastFrameIntervalMs,
+      frameJitterMs: Math.round(this.frameIntervalJitterMs * 10) / 10,
+      maxFrameIntervalMs: Math.round(this.maxFrameIntervalMs * 10) / 10,
       audioSyncPaused: this.audioSyncPaused,
+      buffering: this.buffering,
       audioDecoder: this.audioDecoderMode,
       renderer: this.renderer ? this.renderer.type : '2d',
       timing: this.timing,

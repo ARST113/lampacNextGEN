@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-93-seek-drop-debug';
+  var VERSION = '20260709-04-buffering';
   var modulePromise = null;
   var module = null;
   var info = null;
