@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -17,20 +18,20 @@ namespace VeoVeo;
 
 public class VeoVeoController : BaseOnlineController
 {
-    static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
+    static readonly HttpClient manifestClient = FriendlyHttp.CreateHttpClient();
 
     public VeoVeoController() : base(ModInit.conf)
     {
         requestInitialization += () =>
         {
             if (init.httpversion == 2)
-                httpHydra.RegisterHttp(http2Client);
+                httpHydra.RegisterHttp(manifestClient);
         };
     }
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/veoveo")]
-    async public Task<ActionResult> Index(long movieid, string imdb_id, long kinopoisk_id, string title, string original_title, byte clarification, short s = -1, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(long movieid, string imdb_id, long kinopoisk_id, string title, string original_title, byte clarification, string t = null, short s = -1, bool rjson = false, bool similar = false)
     {
         if (await IsRequestBlocked(rch: true, rch_check: !similar))
             return badInitMsg;
@@ -66,6 +67,37 @@ public class VeoVeoController : BaseOnlineController
             goto rhubFallback;
         #endregion
 
+        var voiceLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (cache.Value?.Count > 0)
+        {
+            IEnumerable<EpisodeVariant> variants = null;
+
+            if (cache.Value.First().season?.order == 0)
+            {
+                variants = cache.Value.First().episodeVariants;
+            }
+            else if (s >= 0)
+            {
+                variants = cache.Value
+                    .Where(i => (i.season?.order ?? 0) == s)
+                    .SelectMany(i => i.episodeVariants ?? Enumerable.Empty<EpisodeVariant>());
+            }
+
+            if (variants != null)
+            {
+                foreach (var group in variants
+                    .Where(i => !string.IsNullOrWhiteSpace(i.title) && !string.IsNullOrWhiteSpace(i.filepath))
+                    .GroupBy(i => i.title, StringComparer.OrdinalIgnoreCase))
+                {
+                    string sourceVoice = group.Key;
+                    voiceLabels[sourceVoice] = IsGenericVoice(sourceVoice)
+                        ? await DetectVoiceLabel(movieid, s, sourceVoice, group.First().filepath)
+                        : sourceVoice;
+                }
+            }
+        }
+
         return ContentTpl(cache, () =>
         {
             var firstCatalogItem = cache.Value.First();
@@ -85,13 +117,15 @@ public class VeoVeoController : BaseOnlineController
                             string file = episode?.filepath;
                             if (!string.IsNullOrWhiteSpace(file))
                             {
+                                string voiceName = DisplayVoice(voiceLabels, episode.title ?? "VeoVeo");
                                 string stream = file.Contains(".json")
                                     ? accsArgs($"{host}/lite/veoveo/parsed.m3u8?link={EncryptQuery(file)}")
                                     : HostStreamProxy(file);
 
                                 mtpl.Append(
-                                    episode.title ?? "1080p",
+                                    voiceName,
                                     stream,
+                                    voice_name: voiceName,
                                     vast: init.vast
                                 );
                             }
@@ -129,32 +163,66 @@ public class VeoVeoController : BaseOnlineController
                 }
                 else
                 {
-                    var etpl = new EpisodeTpl();
-
-                    foreach (var episode in cache.Value
+                    var seasonEpisodes = cache.Value
                         .Where(i => (i.season?.order ?? 0) == s)
-                        .OrderBy(i => i.order))
+                        .OrderBy(i => i.order)
+                        .ToList();
+
+                    var voiceNames = seasonEpisodes
+                        .SelectMany(i => i.episodeVariants ?? Enumerable.Empty<EpisodeVariant>())
+                        .Where(i => !string.IsNullOrWhiteSpace(i.title) && !string.IsNullOrWhiteSpace(i.filepath))
+                        .GroupBy(i => i.title, StringComparer.OrdinalIgnoreCase)
+                        .Select(i => i.Key)
+                        .ToList();
+
+                    if (voiceNames.Any(i => !string.Equals(i, "Default", StringComparison.OrdinalIgnoreCase)))
+                        voiceNames = voiceNames.Where(i => !string.Equals(i, "Default", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    string selectedVoice = voiceNames.FirstOrDefault(i => string.Equals(i, t, StringComparison.OrdinalIgnoreCase))
+                        ?? voiceNames.FirstOrDefault();
+
+                    if (string.IsNullOrEmpty(selectedVoice))
+                        return default;
+
+                    var vtpl = new VoiceTpl(voiceNames.Count);
+                    string enc_title = HttpUtility.UrlEncode(title);
+                    string enc_original_title = HttpUtility.UrlEncode(original_title);
+
+                    foreach (string voice in voiceNames)
+                    {
+                        vtpl.Append(
+                            DisplayVoice(voiceLabels, voice),
+                            string.Equals(voice, selectedVoice, StringComparison.OrdinalIgnoreCase),
+                            $"{host}/lite/veoveo?rjson={rjson}&movieid={movieid}&kinopoisk_id={kinopoisk_id}&imdb_id={imdb_id}&title={enc_title}&original_title={enc_original_title}&s={s}&t={HttpUtility.UrlEncode(voice)}"
+                        );
+                    }
+
+                    var etpl = new EpisodeTpl(vtpl, seasonEpisodes.Count);
+
+                    foreach (var episode in seasonEpisodes)
                     {
                         string name = episode.title;
 
                         var variants = episode.episodeVariants;
                         var fileToken = variants?
+                            .Where(i => string.Equals(i.title, selectedVoice, StringComparison.OrdinalIgnoreCase))
                             .OrderByDescending(i => (i.filepath ?? "").Contains(".m3u8"))
                             .FirstOrDefault();
 
                         string file = fileToken?.filepath;
                         if (!string.IsNullOrWhiteSpace(file))
                         {
-                            string stream = HostStreamProxy(file);
-                            if (stream.Contains(".json"))
-                                stream = accsArgs($"{host}/lite/veoveo/parsed.m3u8?link={EncryptQuery(file)}");
+                            string stream = file.Contains(".json")
+                                ? accsArgs($"{host}/lite/veoveo/parsed.m3u8?link={EncryptQuery(file)}")
+                                : HostStreamProxy(file);
 
                             etpl.Append(
                                 name ?? $"{episode.order} серия",
                                 title ?? original_title,
-                                s,
-                                episode.order,
+                                s.ToString(),
+                                episode.order.ToString(),
                                 stream,
+                                voice_name: DisplayVoice(voiceLabels, selectedVoice),
                                 vast: init.vast
                             );
                         }
@@ -166,6 +234,98 @@ public class VeoVeoController : BaseOnlineController
             }
         });
     }
+
+    #region VoiceLabel
+    static bool IsGenericVoice(string name)
+    {
+        return string.Equals(name, "Original", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(name, "\u041e\u0440\u0438\u0433\u0438\u043d\u0430\u043b", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(name, "Default", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(name, "\u041f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static string DisplayVoice(IReadOnlyDictionary<string, string> labels, string sourceVoice)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceVoice) && labels.TryGetValue(sourceVoice, out string label))
+            return label;
+
+        return sourceVoice;
+    }
+
+    async Task<string> ResolveMediaSource(string file)
+    {
+        if (string.IsNullOrWhiteSpace(file))
+            return null;
+
+        if (!file.Contains(".json", StringComparison.OrdinalIgnoreCase))
+            return file;
+
+        var parsed = await httpHydra.Get<ParsedResponse>(file);
+        return parsed?.sources?.FirstOrDefault()?.link;
+    }
+
+    async Task<string> DetectVoiceLabel(long movieid, int season, string sourceVoice, string file)
+    {
+        string fallback = string.Equals(sourceVoice, "Default", StringComparison.OrdinalIgnoreCase)
+            ? "\u041f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e"
+            : sourceVoice;
+
+        return await InvokeCache($"veoveo:voice:v3:{movieid}:{season}:{sourceVoice}", TimeSpan.FromHours(2), async () =>
+        {
+            try
+            {
+                string source = await ResolveMediaSource(file);
+                if (string.IsNullOrWhiteSpace(source) || !source.Contains(".m3u8", StringComparison.OrdinalIgnoreCase))
+                    return fallback;
+
+                using var response = await manifestClient.GetAsync(source);
+                if (!response.IsSuccessStatusCode)
+                    return fallback;
+
+                string manifest = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(manifest))
+                    return fallback;
+
+                var tracks = Regex.Matches(
+                        manifest,
+                        @"^#EXT-X-MEDIA:(?=[^\r\n]*TYPE=AUDIO)[^\r\n]+$",
+                        RegexOptions.Multiline
+                    )
+                    .Cast<Match>()
+                    .Select(m => new
+                    {
+                        line = m.Value,
+                        name = Regex.Match(m.Value, @"(?:^|,)NAME=""([^""]+)""").Groups[1].Value
+                    })
+                    .Where(i => !string.IsNullOrWhiteSpace(i.name))
+                    .GroupBy(i => i.name, StringComparer.OrdinalIgnoreCase)
+                    .Select(i => i.First())
+                    .ToList();
+
+                var selected = tracks.FirstOrDefault(i => i.line.Contains("DEFAULT=YES", StringComparison.OrdinalIgnoreCase))
+                    ?? tracks.FirstOrDefault();
+
+                if (selected == null)
+                    return fallback;
+
+                string label = HttpUtility.HtmlDecode(selected.name).Trim();
+                label = Regex.Replace(label, @"^\s*[0-9]+[.)]\s*", string.Empty);
+                label = Regex.Replace(label, @"\s*\((RUS|ENG|UKR|BEL|KAZ)\)\s*$", string.Empty, RegexOptions.IgnoreCase);
+
+                if (string.IsNullOrWhiteSpace(label))
+                    return fallback;
+
+                Console.WriteLine($"[VeoVeo] voice movie={movieid} season={season} source={sourceVoice} detected={label} tracks={tracks.Count}");
+                return label;
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "VeoVeo voice detection failed MovieId={MovieId} Season={Season}", movieid, season);
+                return fallback;
+            }
+        });
+    }
+    #endregion
 
     #region Parsed
     [HttpGet]

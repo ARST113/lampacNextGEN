@@ -160,6 +160,7 @@ public class AnimevostController : BaseOnlineController
                         "^([0-9]+)").Groups[1].Value,
                         link,
                         "call",
+                        voice_name: "AnimeVost",
                         streamlink: accsArgs($"{link}&play=true")
                     );
                 }

@@ -94,7 +94,7 @@ public class TmdbProxyController : BaseController
     #endregion
 
     #region API
-    [HttpGet]
+    [HttpGet, AllowAnonymous]
     [Staticache(
         always: true,
         setHeadersNoCache: true,
@@ -147,7 +147,7 @@ public class TmdbProxyController : BaseController
     #endregion
 
     #region IMG
-    [HttpGet]
+    [HttpGet, AllowAnonymous]
     [Staticache(always: true)]
     [Route("tmdb/img/{*suffix}")]
     async public Task TmdbIMG()

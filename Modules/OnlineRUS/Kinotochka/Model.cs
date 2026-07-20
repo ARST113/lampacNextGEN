@@ -18,15 +18,18 @@ public class Episode
 {
     public Episode() { }
 
-    public Episode(string comment, string file)
+    public Episode(string comment, string file, string voice)
     {
         this.comment = comment;
         this.file = file;
+        this.voice = voice;
     }
 
     public string comment { get; set; }
 
     public string file { get; set; }
+
+    public string voice { get; set; }
 }
 
 public class Season

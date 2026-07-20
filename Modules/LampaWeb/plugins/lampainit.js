@@ -60,6 +60,8 @@
         Lampa.Storage.set('lampac_unic_id', unic_id);
       }
 
+      syncLampacPlugins();
+
       Lampa.Utils.putScriptAsync(["{localhost}/privateinit.js?account_email=" + encodeURIComponent(Lampa.Storage.get('account_email', '')) + "&uid=" + encodeURIComponent(Lampa.Storage.get('lampac_unic_id', ''))], function() {});
 
       if (window.appready) start();
@@ -67,7 +69,7 @@
 
       {pirate_store}
     }
-  }, 200);
+  }, 50);
 
   function normalizePluginUrl(url) {
     var value = String(url || '').replace(/\{localhost\}/g, location.origin);
@@ -84,76 +86,144 @@
     return value.split('#')[0].split('?')[0].toLowerCase();
   }
 
-  function pluginLoadUrl(url) {
-    var value = String(url || '').replace(/\{localhost\}/g, location.origin);
-    if (!value) return value;
-    var key = window.__lampacPluginCacheKey;
-    if (!key) {
-      key = String(Date.now());
-      window.__lampacPluginCacheKey = key;
-    }
-    value = value.replace(/([?&])lampac_cache=[^&]*/g, '$1').replace(/[?&]$/, '');
-    return value + (value.indexOf('?') >= 0 ? '&' : '?') + 'lampac_cache=' + encodeURIComponent(key);
-  }
-
   function samePluginUrl(a, b) {
     return normalizePluginUrl(a) == normalizePluginUrl(b);
   }
 
-  function findPlugin(list, url) {
-    var first = null;
-    for (var i = 0; i < list.length; i++) {
-      if (list[i] && samePluginUrl(list[i].__lampacSourceUrl || list[i].url, url)) {
-        if (!first) first = list[i];
-        if (list[i].status == 0) return list[i];
-      }
+  function normalizePluginItem(item) {
+    if (!item) return null;
+    if (typeof item == 'string') item = { url: item, status: 1 };
+    if (!item.url) return null;
+    return item;
+  }
+
+  function syncStatus(items) {
+    var map = {};
+    items.forEach(function(item) {
+      item = normalizePluginItem(item);
+      if (!item) return;
+      var key = normalizePluginUrl(item.__lampacSourceUrl || item.url);
+      if (!key) return;
+      if (item.status == 0 || map[key] === undefined) map[key] = item.status == 0 ? 0 : 1;
+    });
+    return map;
+  }
+
+  function copyPlugin(plugin, status) {
+    var item = {};
+    for (var key in plugin) item[key] = plugin[key];
+    item.__lampacManaged = true;
+    item.__lampacSourceUrl = plugin.url;
+    item.url = String(plugin.url || '').replace(/\{localhost\}/g, location.origin);
+    item.status = status;
+    return item;
+  }
+
+  function samePluginList(a, b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!samePluginUrl(a[i].__lampacSourceUrl || a[i].url, b[i].__lampacSourceUrl || b[i].url)) return false;
+      if ((a[i].status == 0 ? 0 : 1) != (b[i].status == 0 ? 0 : 1)) return false;
+      if ((a[i].name || '') != (b[i].name || '')) return false;
+      if ((a[i].author || '') != (b[i].author || '')) return false;
+      if ((a[i].descr || '') != (b[i].descr || '')) return false;
+      if ((a[i].description || '') != (b[i].description || '')) return false;
     }
-    return first;
+    return true;
+  }
+
+  function cleanupRemovedPluginCache(allowed) {
+    if (!window.caches) return;
+
+    caches.keys().then(function(names) {
+      names.forEach(function(name) {
+        caches.open(name).then(function(cache) {
+          cache.keys().then(function(requests) {
+            requests.forEach(function(request) {
+              var key = normalizePluginUrl(request.url);
+              if (key && !allowed[key] && /\/(lampac-js\/uploads|plugins)\//i.test(request.url)) {
+                cache.delete(request);
+              }
+            });
+          });
+        });
+      });
+    }).catch(function() {});
+  }
+
+  function cleanupRemovedPluginStorage(allowed) {
+    var re = /(fps[-_ ]?monitor|lampa[-_ ]?fps[-_ ]?monitor|client-cache-purge)/i;
+
+    ['localStorage', 'sessionStorage'].forEach(function(storageName) {
+      var storage = window[storageName];
+      if (!storage) return;
+      var remove = [];
+      try {
+        for (var i = 0; i < storage.length; i++) {
+          var key = storage.key(i);
+          var value = storage.getItem(key) || '';
+          if (re.test(key) || re.test(value)) remove.push(key);
+        }
+        remove.forEach(function(key) { try { storage.removeItem(key); } catch (e) {} });
+      }
+      catch (e) {}
+    });
+
+    try {
+      var node = document.getElementById('lampa-fps-monitor');
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    }
+    catch (e) {}
   }
 
   function syncLampacPlugins() {
-    if (!Lampa.Plugins || !Lampa.Plugins.get || !Lampa.Plugins.add) return;
+    if (!Lampa.Storage || !Lampa.Storage.get || !Lampa.Storage.set) return;
+
     var installed = [];
-    try { installed = Lampa.Plugins.get() || []; } catch (e) { installed = []; }
+    try { installed = Lampa.Storage.get('plugins', '[]') || []; } catch (e) { installed = []; }
+    if (!Array.isArray(installed)) installed = [];
+
+    installed = installed.map(normalizePluginItem).filter(Boolean);
+
     var server = {initiale} || [];
-    var changed = false;
-    var load = [];
+    if (!Array.isArray(server)) server = [];
+
+    var status = syncStatus(installed);
+    var allowed = {};
+    var next = [];
 
     server.forEach(function(plugin) {
-      if (!plugin || !plugin.url) return;
-      var existing = findPlugin(installed, plugin.url);
+      plugin = normalizePluginItem(plugin);
+      if (!plugin) return;
+
+      var key = normalizePluginUrl(plugin.url);
+      if (!key || allowed[key]) return;
+
+      allowed[key] = true;
+
       var serverDisabled = plugin.status == 0 || plugin.status === false;
-      if (existing) {
-        var clientHasStatus = existing.status == 0 || existing.status == 1;
-        existing.name = plugin.name || existing.name;
-        existing.author = plugin.author || existing.author;
-        existing.descr = plugin.descr || existing.descr;
-        existing.description = plugin.description || existing.description;
-        existing.__lampacManaged = true;
-        existing.__lampacSourceUrl = plugin.url;
-        existing.url = String(plugin.url || '').replace(/\\{localhost\\}/g, location.origin);
-        existing.status = clientHasStatus ? existing.status : (serverDisabled ? 0 : 1);
-        changed = true;
-        if (existing.status == 1) load.push(pluginLoadUrl(plugin.url));
-      }
-      else {
-        var item = {};
-        for (var key in plugin) item[key] = plugin[key];
-        item.__lampacManaged = true;
-        item.__lampacSourceUrl = plugin.url;
-        item.url = String(plugin.url || '').replace(/\\{localhost\\}/g, location.origin);
-        item.status = serverDisabled ? 0 : 1;
-        Lampa.Plugins.add(item);
-        changed = true;
-        if (item.status == 1) load.push(pluginLoadUrl(plugin.url));
-      }
+      var clientStatus = status[key];
+      var targetStatus = clientStatus === 0 || clientStatus === 1 ? clientStatus : (serverDisabled ? 0 : 1);
+
+      next.push(copyPlugin(plugin, targetStatus));
     });
 
-    if (changed && Lampa.Plugins.save) {
-      try { Lampa.Plugins.save(); } catch (e) {}
+    var removed = installed.some(function(plugin) {
+      return !allowed[normalizePluginUrl(plugin.__lampacSourceUrl || plugin.url)];
+    });
+
+    if (!samePluginList(installed, next)) {
+      Lampa.Storage.set('plugins', next);
+      console.log('LampacPlugins', 'synced with admin:', {
+        installed: installed.length,
+        server: next.length,
+        removed: removed
+      });
     }
-    if (load.length && Lampa.Utils && Lampa.Utils.putScript) {
-      Lampa.Utils.putScript(load, function() {}, function() {}, function() {}, true);
+
+    if (removed) {
+      cleanupRemovedPluginCache(allowed);
+      cleanupRemovedPluginStorage(allowed);
     }
   }
 

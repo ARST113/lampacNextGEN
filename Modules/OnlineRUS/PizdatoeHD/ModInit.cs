@@ -86,6 +86,7 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
             displayindex = 331,
             hls = true,
             streamproxy = true,
+            useproxystream = true,
             stream_access = "apk,cors,web",
             headers_stream = HeadersModel.Init(
                 ("accept-encoding", "gzip, deflate, br, zstd"),

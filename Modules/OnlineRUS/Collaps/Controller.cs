@@ -3,7 +3,10 @@ using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
+using Shared.Services;
+using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -32,14 +35,15 @@ public class CollapsController : BaseOnlineController<ModuleConf>
                httpHydra,
                init.host,
                init.dash,
-               onstreamtofile => HostStreamProxy(Encoder.Uri(onstreamtofile))
+               onstreamtofile => HostStreamProxy(Encoder.Uri(onstreamtofile)),
+               (onstreamtofile, audio) => accsArgs($"{host}/lite/collaps/video.m3u8?id={EncryptQuery(onstreamtofile)}&audio={audio}")
             );
         };
     }
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/collaps")]
-    async public Task<ActionResult> Index(long orid, string imdb_id, long kinopoisk_id, string title, string original_title, short s = -1, bool rjson = false, bool similar = false)
+    async public Task<ActionResult> Index(long orid, string imdb_id, long kinopoisk_id, string title, string original_title, string t = null, short s = -1, bool rjson = false, bool similar = false)
     {
         if (similar || (orid == 0 && kinopoisk_id == 0 && string.IsNullOrWhiteSpace(imdb_id)))
             return await RouteSearch(title);
@@ -64,10 +68,54 @@ public class CollapsController : BaseOnlineController<ModuleConf>
             title,
             original_title,
             s,
+            t,
             vast: init.vast,
             rjson: rjson,
             headers: init.streamproxy ? null : httpHeaders(init.host, init.headers_stream)
         ));
+    }
+
+
+    [HttpGet]
+    [Route("lite/collaps/video.m3u8")]
+    async public Task<ActionResult> Video(string id, int audio = 0)
+    {
+        if (await IsRequestBlocked(rch: true))
+            return badInitMsg;
+
+        string stream = DecryptQuery(id);
+        if (string.IsNullOrWhiteSpace(stream))
+            return OnError();
+
+        string proxyUrl = HostStreamProxy(Encoder.Uri(stream));
+        if (string.IsNullOrWhiteSpace(proxyUrl))
+            return OnError();
+
+        string localUrl = proxyUrl;
+        if (Uri.TryCreate(proxyUrl, UriKind.Absolute, out var proxyUri))
+            localUrl = $"http://127.0.0.1:8242{proxyUri.PathAndQuery}";
+        else if (proxyUrl.StartsWith("/", StringComparison.Ordinal))
+            localUrl = "http://127.0.0.1:8242" + proxyUrl;
+
+        string manifest = await Http.Get(localUrl, timeoutSeconds: 30);
+        if (string.IsNullOrWhiteSpace(manifest))
+            return OnError();
+
+        manifest = Regex.Replace(manifest, "(?m)^#EXT-X-MEDIA:TYPE=AUDIO,[^\\r\\n]+$", match =>
+        {
+            string line = match.Value;
+            var name = Regex.Match(line, "NAME=\\\"[^\\\"]*?([0-9]+)\\\"", RegexOptions.IgnoreCase);
+            bool selected = name.Success && int.TryParse(name.Groups[1].Value, out int index) && index == audio;
+
+            line = Regex.Replace(line, "DEFAULT=(YES|NO)", selected ? "DEFAULT=YES" : "DEFAULT=NO", RegexOptions.IgnoreCase);
+            line = Regex.Replace(line, "AUTOSELECT=(YES|NO)", selected ? "AUTOSELECT=YES" : "AUTOSELECT=NO", RegexOptions.IgnoreCase);
+            return line;
+        });
+
+        string publicHost = $"{Request.Scheme}://{Request.Host}";
+        manifest = Regex.Replace(manifest, "https?://127\\.0\\.0\\.1:8242", publicHost, RegexOptions.IgnoreCase);
+
+        return Content(manifest, "application/vnd.apple.mpegurl");
     }
 
 

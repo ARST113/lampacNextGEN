@@ -32,7 +32,7 @@ public class KinotochkaController : BaseOnlineController
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/kinotochka")]
-    async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, short serial, string newsuri, short s = -1)
+    async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, short serial, string newsuri, string t = null, short s = -1, bool rjson = false)
     {
         if (string.IsNullOrWhiteSpace(title))
             return OnError();
@@ -71,7 +71,7 @@ public class KinotochkaController : BaseOnlineController
                                 links.Add(new Season()
                                 {
                                     name = $"{sname} сезон",
-                                    url = $"{host}/lite/kinotochka?title={HttpUtility.UrlEncode(title)}&serial={serial}&s={sname}&newsuri={HttpUtility.UrlEncode(url)}",
+                                    url = $"{host}/lite/kinotochka?rjson={rjson}&kinopoisk_id={kinopoisk_id}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(original_title)}&serial={serial}&s={sname}&newsuri={HttpUtility.UrlEncode(url)}",
                                     season = sname
                                 });
                             }
@@ -107,7 +107,7 @@ public class KinotochkaController : BaseOnlineController
                                     links.Add(new Season()
                                     {
                                         name = gname[2].Value.ToLower(),
-                                        url = $"{host}/lite/kinotochka?title={HttpUtility.UrlEncode(title)}&serial={serial}&s={gname[3].Value}&newsuri={HttpUtility.UrlEncode(uri)}",
+                                        url = $"{host}/lite/kinotochka?rjson={rjson}&kinopoisk_id={kinopoisk_id}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(original_title)}&serial={serial}&s={gname[3].Value}&newsuri={HttpUtility.UrlEncode(uri)}",
                                         season = gname[3].Value
                                     });
                                 }
@@ -147,7 +147,7 @@ public class KinotochkaController : BaseOnlineController
                 #region Серии
             rhubFallback:
 
-                var cache = await InvokeCacheResult<List<Episode>>($"kinotochka:playlist:{newsuri}", 30, textJson: true, onget: async e =>
+                var cache = await InvokeCacheResult<List<Episode>>($"kinotochka:playlist:v2:{newsuri}", 30, textJson: true, onget: async e =>
                 {
                     string filetxt = null;
 
@@ -173,7 +173,14 @@ public class KinotochkaController : BaseOnlineController
                             if (pl.file.Contains("].mp4"))
                                 pl.file = Regex.Replace(pl.file, "\\[[^\\]]+,([0-9]+)\\]\\.mp4$", "$1.mp4");
 
-                            links.Add(new(pl.comment.Split("<")[0].Trim(), pl.file));
+                            string voice = Regex.Match(pl.comment, "\\[([^\\]]+)\\]").Groups[1].Value.Trim();
+                            if (string.IsNullOrEmpty(voice))
+                                voice = Regex.Match(pl.comment, "<br\\s*/?>\\s*([^<]+)", RegexOptions.IgnoreCase).Groups[1].Value.Trim();
+                            if (string.IsNullOrEmpty(voice))
+                                voice = "Kinotochka";
+
+                            string episode = Regex.Replace(pl.comment, "<br\\s*/?>.*$", string.Empty, RegexOptions.IgnoreCase).Trim();
+                            links.Add(new(episode, pl.file, voice));
                         }
                     }
 
@@ -188,9 +195,28 @@ public class KinotochkaController : BaseOnlineController
 
                 return ContentTpl(cache, () =>
                 {
-                    var etpl = new EpisodeTpl(cache.Value.Count);
+                    var voiceNames = cache.Value
+                        .Where(i => !string.IsNullOrWhiteSpace(i.voice))
+                        .Select(i => i.voice)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
 
-                    foreach (var l in cache.Value)
+                    string selectedVoice = voiceNames.FirstOrDefault(i => string.Equals(i, t, StringComparison.OrdinalIgnoreCase))
+                        ?? voiceNames.FirstOrDefault();
+
+                    var vtpl = new VoiceTpl(voiceNames.Count);
+                    foreach (string voice in voiceNames)
+                    {
+                        vtpl.Append(
+                            voice,
+                            string.Equals(voice, selectedVoice, StringComparison.OrdinalIgnoreCase),
+                            $"{host}/lite/kinotochka?rjson={rjson}&kinopoisk_id={kinopoisk_id}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(original_title)}&serial={serial}&s={s}&newsuri={HttpUtility.UrlEncode(newsuri)}&t={HttpUtility.UrlEncode(voice)}"
+                        );
+                    }
+
+                    var etpl = new EpisodeTpl(vtpl, cache.Value.Count);
+
+                    foreach (var l in cache.Value.Where(i => string.Equals(i.voice, selectedVoice, StringComparison.OrdinalIgnoreCase)))
                     {
                         etpl.Append(
                             l.comment,
@@ -198,6 +224,7 @@ public class KinotochkaController : BaseOnlineController
                             s,
                             Regex.Match(l.comment, "^([0-9]+)").Groups[1].Value,
                             HostStreamProxy(l.file),
+                            voice_name: selectedVoice,
                             vast: init.vast
                         );
                     }
@@ -254,6 +281,7 @@ public class KinotochkaController : BaseOnlineController
                 mtpl.Append(
                     "По умолчанию",
                     HostStreamProxy(cache.Value.content),
+                    voice_name: "Kinotochka",
                     vast: init.vast
                 );
 

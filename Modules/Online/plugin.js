@@ -706,6 +706,14 @@
               var find_voice_url = buttons.find(function(v) {
                 return v.url == select_voice_url;
               });
+              if (!find_voice_url && balanser == 'pizdatoehd' && select_voice_url) {
+                var select_voice_id = (select_voice_url.match(/[?&]t=([^&]+)/) || [])[1];
+                if (select_voice_id) {
+                  find_voice_url = buttons.find(function(v) {
+                    return (v.url.match(/[?&]t=([^&]+)/) || [])[1] == select_voice_id;
+                  });
+                }
+              }
               var find_voice_name = buttons.find(function(v) {
                 return v.text == select_voice_name;
               });
@@ -719,21 +727,24 @@
                 //console.log('Lampac', 'go to voice', find_voice_url);
                 this.replaceChoice({
                   voice: buttons.indexOf(find_voice_url),
-                  voice_name: find_voice_url.text
+                  voice_name: find_voice_url.text,
+                  voice_url: find_voice_url.url
                 });
                 this.request(find_voice_url.url);
               } else if (find_voice_name && !find_voice_name.active) {
                 //console.log('Lampac', 'go to voice', find_voice_name);
                 this.replaceChoice({
                   voice: buttons.indexOf(find_voice_name),
-                  voice_name: find_voice_name.text
+                  voice_name: find_voice_name.text,
+                  voice_url: find_voice_name.url
                 });
                 this.request(find_voice_name.url);
               } else {
                 if (find_voice_active) {
                   this.replaceChoice({
                     voice: buttons.indexOf(find_voice_active),
-                    voice_name: find_voice_active.text
+                    voice_name: find_voice_active.text,
+                    voice_url: find_voice_active.url
                   });
                 }
                 this.display(videos);

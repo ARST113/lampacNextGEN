@@ -23,7 +23,7 @@ public class VibixController : BaseOnlineController
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/vibix")]
-    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short s = -1, bool rjson = false)
+    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, string t = null, short s = -1, bool rjson = false)
     {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
@@ -61,32 +61,7 @@ public class VibixController : BaseOnlineController
 
             foreach (var movie in cache.Value)
             {
-                if (movie.voices == null)
-                {
-                    movie.voices = new Dictionary<string, List<StreamQualityDto>>();
-
-                    foreach (Match qualityMatch in Regex.Matches(movie.file, @"\[(?<q>480|720|1080)p\](?<items>.*?)(?=,\[(?:480|720|1080)p\]|$)", RegexOptions.Singleline))
-                    {
-                        string items = qualityMatch.Groups["items"].Value;
-
-                        foreach (Match voiceMatch in Regex.Matches(items, @"\{(?<voice>[^}]+)\}(?<file>https?://[^,\t\[\;{ ]+)", RegexOptions.Singleline))
-                        {
-                            string voice = voiceMatch.Groups["voice"].Value;
-                            string file = voiceMatch.Groups["file"].Value;
-
-                            if (!movie.voices.TryGetValue(voice, out var streams))
-                            {
-                                streams = new List<StreamQualityDto>();
-                                movie.voices[voice] = streams;
-                            }
-
-                            streams.Insert(0, new StreamQualityDto(
-                                $"{host}/lite/vibix/video.m3u8?id={EncryptQuery(file)}",
-                                qualityMatch.Groups["q"].Value + "p"
-                            ));
-                        }
-                    }
-                }
+                movie.voices ??= ParseVoices(movie.file);
 
                 if (movie.voices.Count == 0)
                     continue;
@@ -99,6 +74,7 @@ public class VibixController : BaseOnlineController
                             v.Key ?? movie.title,
                             accsArgs(v.Value[0].link),
                             streamquality: new StreamQualityTpl(v.Value, linkPredicate: accsArgs),
+                            voice_name: v.Key ?? movie.title ?? "Vibix",
                             vast: init.vast
                         );
                     }
@@ -134,57 +110,113 @@ public class VibixController : BaseOnlineController
             }
             else
             {
-                var etpl = new EpisodeTpl();
+                var season = cache.Value.FirstOrDefault(i => i.title?.EndsWith($" {s}") == true);
+                if (season?.folder == null)
+                    return OnError();
 
-                foreach (var season in cache.Value)
+                foreach (var episode in season.folder)
                 {
-                    if (!season.title.EndsWith($" {s}"))
+                    string file = episode.folder?.FirstOrDefault(i => !string.IsNullOrEmpty(i.file))?.file ?? episode.file;
+                    episode.voices = ParseVoices(file);
+                }
+
+                var voiceNames = season.folder
+                    .Where(i => i.voices != null)
+                    .SelectMany(i => i.voices.Keys)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                string selectedVoice = voiceNames.FirstOrDefault(i => string.Equals(i, t, StringComparison.OrdinalIgnoreCase))
+                    ?? voiceNames.FirstOrDefault();
+
+                if (string.IsNullOrEmpty(selectedVoice))
+                    return OnError();
+
+                var vtpl = new VoiceTpl(voiceNames.Count);
+                foreach (string voice in voiceNames)
+                {
+                    vtpl.Append(
+                        voice,
+                        string.Equals(voice, selectedVoice, StringComparison.OrdinalIgnoreCase),
+                        $"{host}/lite/vibix?rjson={rjson}&kinopoisk_id={kinopoisk_id}&imdb_id={imdb_id}&title={enc_title}&original_title={enc_original_title}&s={s}&t={HttpUtility.UrlEncode(voice)}"
+                    );
+                }
+
+                var etpl = new EpisodeTpl(vtpl, season.folder.Length);
+
+                foreach (var episode in season.folder)
+                {
+                    string name = episode.title;
+                    var voice = episode.voices?.FirstOrDefault(i => string.Equals(i.Key, selectedVoice, StringComparison.OrdinalIgnoreCase));
+                    var streams = voice?.Value;
+
+                    if (string.IsNullOrEmpty(name) || streams == null || streams.Count == 0)
                         continue;
 
-                    foreach (var episode in season.folder)
-                    {
-                        string name = episode.title;
-                        string file = episode.folder?.First().file ?? episode.file;
-
-                        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(file))
-                            continue;
-
-                        if (episode.streams == null)
-                        {
-                            episode.streams = new List<StreamQualityDto>(3);
-
-                            foreach (string q in new string[] { "1080", "720", "480" })
-                            {
-                                var g = new Regex($"{q}p?\\](\\{{[^\\}}]+\\}})?(?<file>https?://[^,\t\\[\\;\\{{ ]+)").Match(file).Groups;
-                                if (!string.IsNullOrEmpty(g["file"].Value))
-                                {
-                                    episode.streams.Add(new StreamQualityDto(
-                                        $"{host}/lite/vibix/video.m3u8?id={EncryptQuery(g["file"].Value)}",
-                                        $"{q}p"
-                                    ));
-                                }
-                            }
-                        }
-
-                        if (episode.streams.Count > 0)
-                        {
-                            etpl.Append(
-                                name,
-                                title ?? original_title,
-                                s,
-                                Regex.Match(name, "([0-9]+)").Groups[1].Value,
-                                accsArgs(episode.streams[0].link),
-                                streamquality: new StreamQualityTpl(episode.streams, linkPredicate: accsArgs),
-                                vast: init.vast
-                            );
-                        }
-                    }
+                    etpl.Append(
+                        name,
+                        title ?? original_title,
+                        s,
+                        Regex.Match(name, "([0-9]+)").Groups[1].Value,
+                        accsArgs(streams[0].link),
+                        streamquality: new StreamQualityTpl(streams, linkPredicate: accsArgs),
+                        voice_name: selectedVoice,
+                        vast: init.vast
+                    );
                 }
 
                 return ContentTpl(etpl);
             }
             #endregion
         }
+    }
+
+
+    Dictionary<string, List<StreamQualityDto>> ParseVoices(string file)
+    {
+        var voices = new Dictionary<string, List<StreamQualityDto>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(file))
+            return voices;
+
+        foreach (Match qualityMatch in Regex.Matches(file, @"\[(?<q>480|720|1080)p\](?<items>.*?)(?=,\[(?:480|720|1080)p\]|$)", RegexOptions.Singleline))
+        {
+            string items = qualityMatch.Groups["items"].Value;
+            var voiceMatches = Regex.Matches(items, @"\{(?<voice>[^}]+)\}(?<file>https?://[^,\t\[\;{ ]+)", RegexOptions.Singleline);
+
+            if (voiceMatches.Count == 0)
+            {
+                var defaultFile = Regex.Match(items, @"(?<file>https?://[^,\t\[\;{ ]+)").Groups["file"].Value;
+                if (!string.IsNullOrEmpty(defaultFile))
+                    AppendVoiceStream(voices, "Vibix", qualityMatch.Groups["q"].Value, defaultFile);
+                continue;
+            }
+
+            foreach (Match voiceMatch in voiceMatches)
+            {
+                AppendVoiceStream(
+                    voices,
+                    voiceMatch.Groups["voice"].Value,
+                    qualityMatch.Groups["q"].Value,
+                    voiceMatch.Groups["file"].Value
+                );
+            }
+        }
+
+        return voices;
+    }
+
+    void AppendVoiceStream(Dictionary<string, List<StreamQualityDto>> voices, string voice, string quality, string file)
+    {
+        if (!voices.TryGetValue(voice, out var streams))
+        {
+            streams = new List<StreamQualityDto>(3);
+            voices[voice] = streams;
+        }
+
+        streams.Insert(0, new StreamQualityDto(
+            $"{host}/lite/vibix/video.m3u8?id={EncryptQuery(file)}",
+            quality + "p"
+        ));
     }
 
 

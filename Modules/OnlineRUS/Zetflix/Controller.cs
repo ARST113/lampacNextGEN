@@ -1844,7 +1844,7 @@ namespace Zetflix
             if (!Regex.IsMatch(host ?? string.Empty, "^https?://go\\."))
                 return host;
 
-            string backhost = "https://7apr.zet-flix.online";
+            string backhost = host;
 
             string memkey = $"zeflix:gohost:v4:{host}";
             if (hybridCache.TryGetValue(memkey, out string ztfhost))
