@@ -41,7 +41,7 @@ public static class PidTorPlayerSearch
         if (root?.Results == null)
             return response;
 
-        int minSeeders = isAnime ? Math.Max(0, settings.anime_min_sid) : settings.min_sid;
+        int minSeeders = isAnime ? ModInit.anime_min_sid : settings.min_sid;
         var candidates = root.Results
             .Where(i => i != null && i.Seeders >= minSeeders && !string.IsNullOrWhiteSpace(i.MagnetUri))
             .Where(i => !string.Equals(i.Tracker, "selezen", StringComparison.OrdinalIgnoreCase))

@@ -212,7 +212,7 @@ public class PiTor : BaseOnlineController
                     int sid = torrent.Seeders;
                     long? size = torrent.Size;
 
-                    int minSid = isAnime ? Math.Max(0, init.anime_min_sid) : init.min_sid;
+                    int minSid = isAnime ? ModInit.anime_min_sid : init.min_sid;
                     if (sid >= minSid)
                     {
                         string mediainfo = torrent.info?.sizeName ?? string.Empty;
