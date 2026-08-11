@@ -20,7 +20,8 @@ public static class PidTorPlayerSearch
     {
         bool isAnime = AnimeTitleResolver.IsAnime(request);
         int searchYear = resolved?.seasons?.FirstOrDefault(i => i.season == resolved.selected_season)?.year ?? request.year;
-        string uri = $"{settings.redapi}/api/v2.0/indexers/all/results?title={HttpUtility.UrlEncode(request.title)}&title_original={HttpUtility.UrlEncode(request.original_title)}&year={searchYear}&is_serial={(isAnime ? 5 : (request.serial ? 2 : 1))}&apikey={settings.apikey}";
+        var searchTitles = isAnime ? AnimeTitleResolver.SearchTitles(request, resolved) : (request.title, request.original_title);
+        string uri = $"{settings.redapi}/api/v2.0/indexers/all/results?title={HttpUtility.UrlEncode(searchTitles.Item1)}&title_original={HttpUtility.UrlEncode(searchTitles.Item2)}&year={searchYear}&is_serial={(isAnime ? 5 : (request.serial ? 2 : 1))}&apikey={settings.apikey}";
 
         if (resolved?.aliases != null)
         {
@@ -65,7 +66,7 @@ public static class PidTorPlayerSearch
             Candidate best = group.OrderByDescending(i => i.Result.Seeders).First();
             var variant = BuildVariant(best.Result);
             variant.id = CrypTo.md5(group.Key);
-            variant.probe_required = best.Result.ffprobe == null || best.Result.ffprobe.Count == 0;
+            variant.probe_required = !HasPlayableVideo(best.Result.ffprobe);
 
             foreach (Candidate candidate in group.OrderByDescending(i => i.Result.Seeders))
             {
@@ -94,7 +95,7 @@ public static class PidTorPlayerSearch
     static PidTorPlayerVariant BuildVariant(Result result)
     {
         var streams = result.ffprobe ?? new List<FfStream>();
-        FfStream video = streams.FirstOrDefault(i => string.Equals(i.codec_type, "video", StringComparison.OrdinalIgnoreCase));
+        FfStream video = streams.FirstOrDefault(IsPlayableVideo);
         string quality = Quality(result);
         var variant = new PidTorPlayerVariant
         {
@@ -104,6 +105,7 @@ public static class PidTorPlayerSearch
                 width = video?.width ?? 0,
                 height = video?.height ?? 0,
                 quality = quality,
+                source = Source(result.Title),
                 codec = video?.codec_name ?? CodecFromTitle(result.Title),
                 hdr = Hdr(result.Title, video),
                 bit_depth = BitDepth(result.Title, video),
@@ -172,16 +174,16 @@ public static class PidTorPlayerSearch
     static string TechnicalKey(Candidate candidate)
     {
         Result result = candidate.Result;
-        if (result.ffprobe == null || result.ffprobe.Count == 0)
-            return "unknown:" + candidate.InfoHash;
+        FfStream video = result.ffprobe?.FirstOrDefault(IsPlayableVideo);
+        if (video == null)
+            return $"estimated:{Quality(result)}:{Source(result.Title)}:{CodecFromTitle(result.Title)}:{Hdr(result.Title, null)}:{BitDepth(result.Title, null)}";
 
-        FfStream video = result.ffprobe.FirstOrDefault(i => i.codec_type == "video");
         string audio = string.Join(',', result.ffprobe
             .Where(i => i.codec_type == "audio")
             .Select(i => $"{i.codec_name}:{NormalizeLanguage(i.tags?.language)}:{Normalize(i.tags?.title)}:{i.channels}")
             .OrderBy(i => i, StringComparer.Ordinal));
         long sizeBucket = (result.Size ?? 0) / (50L * 1024 * 1024);
-        return $"{video?.width}x{video?.height}:{video?.codec_name}:{Hdr(result.Title, video)}:{BitDepth(result.Title, video)}:{audio}:{sizeBucket}";
+        return $"{video?.width}x{video?.height}:{Source(result.Title)}:{video?.codec_name}:{Hdr(result.Title, video)}:{BitDepth(result.Title, video)}:{audio}:{sizeBucket}";
     }
 
     static int QualityRank(Result result)
@@ -192,7 +194,7 @@ public static class PidTorPlayerSearch
 
     static string Quality(Result result)
     {
-        int height = result.ffprobe?.Where(i => i.codec_type == "video").Select(i => i.height ?? 0).DefaultIfEmpty().Max() ?? 0;
+        int height = result.ffprobe?.Where(IsPlayableVideo).Select(i => i.height ?? 0).DefaultIfEmpty().Max() ?? 0;
         if (height <= 0) height = result.info?.quality ?? 0;
         if (height >= 2000) return "2160p";
         if (height >= 1300) return "1440p";
@@ -212,7 +214,7 @@ public static class PidTorPlayerSearch
         if (Regex.IsMatch(value, @"hdr10\+|hdr10plus", RegexOptions.IgnoreCase)) return "hdr10_plus";
         if (string.Equals(video?.color_transfer, "smpte2084", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(value, "hdr10", RegexOptions.IgnoreCase)) return "hdr10";
         if (string.Equals(video?.color_transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase)) return "hlg";
-        if (Regex.IsMatch(value, "hdr", RegexOptions.IgnoreCase)) return "hdr";
+        if (Regex.IsMatch(value, @"(?:^|[ ._\-\[])hdr(?:[ ._\-\]]|$)", RegexOptions.IgnoreCase)) return "hdr10";
         return "sdr";
     }
 
@@ -220,7 +222,22 @@ public static class PidTorPlayerSearch
     {
         Match match = Regex.Match(video?.pix_fmt ?? string.Empty, @"p(?<depth>10|12)(?:le|be)?$", RegexOptions.IgnoreCase);
         if (!match.Success) match = Regex.Match(title ?? string.Empty, @"(?<depth>10|12)[ ._-]*bit", RegexOptions.IgnoreCase);
-        return match.Success && int.TryParse(match.Groups["depth"].Value, out int value) ? value : 8;
+        if (match.Success && int.TryParse(match.Groups["depth"].Value, out int value)) return value;
+        if (!string.IsNullOrWhiteSpace(video?.pix_fmt)) return 8;
+        if (Regex.IsMatch(title ?? string.Empty, @"(?:^|[^0-9])8[ ._-]*bit(?:[^0-9]|$)", RegexOptions.IgnoreCase)) return 8;
+        return 0;
+    }
+
+    static string Source(string title)
+    {
+        string value = title ?? string.Empty;
+        if (Regex.IsMatch(value, @"(?:bd|blu[ ._-]*ray)[ ._-]*remux|\bremux\b", RegexOptions.IgnoreCase)) return "BD Remux";
+        if (Regex.IsMatch(value, @"blu[ ._-]*ray|bd[ ._-]*rip", RegexOptions.IgnoreCase)) return "Blu-ray";
+        if (Regex.IsMatch(value, @"web[ ._-]*dl", RegexOptions.IgnoreCase)) return "WEB-DL";
+        if (Regex.IsMatch(value, @"web[ ._-]*rip", RegexOptions.IgnoreCase)) return "WEBRip";
+        if (Regex.IsMatch(value, @"hdtv", RegexOptions.IgnoreCase)) return "HDTV";
+        if (Regex.IsMatch(value, @"dvd[ ._-]*rip", RegexOptions.IgnoreCase)) return "DVD";
+        return null;
     }
 
     static string CodecFromTitle(string title)
@@ -229,6 +246,19 @@ public static class PidTorPlayerSearch
         if (Regex.IsMatch(title ?? string.Empty, @"av1", RegexOptions.IgnoreCase)) return "av1";
         if (Regex.IsMatch(title ?? string.Empty, @"h[ ._-]*264|x264|avc", RegexOptions.IgnoreCase)) return "h264";
         return null;
+    }
+
+    static bool HasPlayableVideo(IEnumerable<FfStream> streams)
+        => streams?.Any(IsPlayableVideo) == true;
+
+    static bool IsPlayableVideo(FfStream stream)
+    {
+        if (stream == null || !string.Equals(stream.codec_type, "video", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (stream.disposition?.attached_pic == 1)
+            return false;
+
+        return !Regex.IsMatch(stream.codec_name ?? string.Empty, @"^(?:apng|bmp|gif|jpeg|mjpeg|png|tiff|webp)$", RegexOptions.IgnoreCase);
     }
 
     static string TrackTitle(FfTags tags, string fallback)

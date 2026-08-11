@@ -47,7 +47,7 @@ public static class AnimeTitleResolver
             return null;
 
         string cardKey = CardKey(request);
-        string resolveKey = $"anime:resolver:{cardKey}:season:{Math.Max(0, request.season)}:{Math.Max(0, request.season_year)}";
+        string resolveKey = $"anime:resolver:v2:{cardKey}:season:{Math.Max(0, request.season)}:{Math.Max(0, request.season_year)}";
         var cache = HybridCache.Get();
 
         if (cache.TryGetValue(resolveKey, out AnimeResolveResult cached, textJson: true))
@@ -71,7 +71,7 @@ public static class AnimeTitleResolver
     static async Task<AnimeResolveResult> ResolveCoreAsync(AnimeResolveRequest request, string cardKey)
     {
         var cache = HybridCache.Get();
-        string matchKey = $"anime:resolver:{cardKey}";
+        string matchKey = $"anime:resolver:v2:{cardKey}";
         ShikimoriAnime matched = null;
         double matchedScore = 0;
 
@@ -133,14 +133,25 @@ public static class AnimeTitleResolver
 
         return new AnimeResolveResult
         {
-            id = ParseId(matched.id),
+            id = selected?.shikimori_id ?? ParseId(matched.id),
             matched_score = matchedScore,
-            kind = matched.kind,
-            year = matched.airedOn?.year ?? 0,
+            kind = selected?.kind ?? matched.kind,
+            year = selected?.year ?? matched.airedOn?.year ?? 0,
             selected_season = selected?.season ?? 0,
             aliases = aliases,
             seasons = seasons
         };
+    }
+
+    public static (string title, string originalTitle) SearchTitles(AnimeResolveRequest request, AnimeResolveResult resolved)
+    {
+        if (resolved?.aliases == null || resolved.aliases.Count == 0)
+            return (request.title, request.original_title);
+
+        string russian = resolved.aliases.FirstOrDefault(i => Regex.IsMatch(i, @"\p{IsCyrillic}"));
+        string latin = resolved.aliases.FirstOrDefault(i => Regex.IsMatch(i, @"[A-Za-z]"));
+        string fallback = resolved.aliases[0];
+        return (russian ?? fallback, latin ?? fallback);
     }
 
     static async Task<(ShikimoriAnime anime, double score)> SearchBestMatchAsync(AnimeResolveRequest request)

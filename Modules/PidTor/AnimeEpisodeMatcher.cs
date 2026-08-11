@@ -20,7 +20,7 @@ public static class AnimeEpisodeMatcher
     };
 
     static readonly Regex ExtraPattern = new(
-        @"(?:^|[\s._\-\[\]()])(ncop|nced|opening|ending|creditless|preview|trailer|sample|menu|extra(?:s)?|pv|ova|special|sp)(?:[\s._\-\[\]()\d]|$)",
+        @"(?:^|[\s._\-\[\]()])(ncop|nced|opening|ending|creditless|preview|trailer|sample|menu|extra(?:s)?|pv|ova|oad|special|sp)(?:[\s._\-\[\]()\d]|$)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     static readonly Regex SeasonEpisodePattern = new(
         @"(?:^|[^\p{L}\p{N}])s(?<s>\d{1,2})[\s._-]*e(?<e>\d{1,3})(?:v\d+)?(?:[^\p{L}\p{N}]|$)",
@@ -109,12 +109,16 @@ public static class AnimeEpisodeMatcher
         }
 
         match = EpisodePattern.Match(name);
-        if (!match.Success)
-            match = FlatPattern.Match(name);
+        if (match.Success)
+            return short.TryParse(match.Groups["e"].Value, out episode) && episode is > 0 and <= 100;
 
-        return match.Success
-            && short.TryParse(match.Groups["e"].Value, out episode)
-            && episode is > 0 and <= 100;
+        foreach (Match flat in FlatPattern.Matches(name).Cast<Match>().Reverse())
+        {
+            if (short.TryParse(flat.Groups["e"].Value, out episode) && episode is > 0 and <= 100)
+                return true;
+        }
+
+        return false;
     }
 
     static bool HasExplicitDifferentSeason(string path, short requestedSeason)

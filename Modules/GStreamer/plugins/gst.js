@@ -84,7 +84,7 @@
             title: title,
             subtitle: subtitleParts.join(' • '),
             padName: track.padName,
-            audioIndex: index || 0
+            audioIndex: Number.isFinite(parseInt(track.index, 10)) ? parseInt(track.index, 10) : index || 0
         };
     }
 
@@ -93,11 +93,11 @@
 
         if (data.playlist) {
             data.playlist.forEach(function (p) {
-                playlist.push({
-                    title: p.title,
-                    url_orig: p.url,
-                    url: account('{localhost}/gst/start.m3u8?linkencode=' + encodeURIComponent(Lampa.Base64.encode(p.url))) + '&audio=' + audioIndex
-                })
+                var item = {};
+                for (var key in p) item[key] = p[key];
+                item.url_orig = p.url_orig || p.url;
+                item.url = account('{localhost}/gst/start.m3u8?linkencode=' + encodeURIComponent(Lampa.Base64.encode(item.url_orig))) + '&audio=' + audioIndex;
+                playlist.push(item)
             })
         }
 
@@ -142,17 +142,23 @@
                             return formatAudioItem(track, index);
                         });
 
+                    var requestedAudioIndex = parseInt(e.data.pidtor_audio_stream_index, 10);
+                    var requestedAudio = items.filter(function (item) {
+                        return item.audioIndex === requestedAudioIndex;
+                    })[0];
+
                     
 
-                    delete e.data.torrent_hash;
+                    if (!e.data.pidtor_nextgen) delete e.data.torrent_hash;
                     e.data.hls_type = 'hlsjs';
                     e.data.hls_manifest_timeout = 20000;
 
-                    if (!items.length || items.length == 1) {
+                    if (requestedAudio || !items.length || items.length == 1) {
+                        var defaultAudioIndex = requestedAudio ? requestedAudio.audioIndex : items.length ? items[0].audioIndex : 0;
                         e.data.url_orig = e.data.url
-                        e.data.url = json.hls;
+                        e.data.url = json.hls + '?audio=' + defaultAudioIndex;
                         Lampa.Player.play(e.data);
-                        Lampa.Player.playlist(createPlaylist(e.data, json.audioIndex))
+                        Lampa.Player.playlist(createPlaylist(e.data, defaultAudioIndex))
                         Lampa.Player.callback(function () {
                             Lampa.Controller.toggle('modal')
 

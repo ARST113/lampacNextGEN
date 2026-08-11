@@ -90,7 +90,7 @@ public class PiTor : BaseOnlineController
         AnimeResolveResult resolved = AnimeTitleResolver.IsAnime(request)
             ? await AnimeTitleResolver.ResolveAsync(request).ConfigureAwait(false)
             : null;
-        string cacheKey = $"pidtor:v2:{id}:{tmdb_id}:{kinopoisk_id}:{imdb_id}:{title}:{original_title}:{year}:{serial}:{s}:{e}:{resolved?.id}";
+        string cacheKey = $"pidtor:v2:4:{id}:{tmdb_id}:{kinopoisk_id}:{imdb_id}:{title}:{original_title}:{year}:{serial}:{s}:{e}:{resolved?.id}";
         var cache = await InvokeCacheResult<PidTorPlayerResponse>(cacheKey, 15, textJson: true, onget: async result =>
         {
             var response = await PidTorPlayerSearch.SearchAsync(init, request, resolved, host).ConfigureAwait(false);
@@ -162,7 +162,8 @@ public class PiTor : BaseOnlineController
         var cache = await InvokeCacheResult<List<Torrent>>($"pidtor:{title}:{original_title}:{year}:{original_language}:{serial}:{s}:{resolverId}", 40, textJson: true, onget: async e =>
         {
             int searchYear = animeResolved?.seasons?.FirstOrDefault(i => i.season == animeResolved.selected_season)?.year ?? year;
-            string uri = $"{init.redapi}/api/v2.0/indexers/all/results?title={HttpUtility.UrlEncode(title)}&title_original={HttpUtility.UrlEncode(original_title)}&year={searchYear}&is_serial={(isAnime ? 5 : (serial + 1))}&apikey={init.apikey}";
+            var searchTitles = isAnime ? AnimeTitleResolver.SearchTitles(animeRequest, animeResolved) : (title, original_title);
+            string uri = $"{init.redapi}/api/v2.0/indexers/all/results?title={HttpUtility.UrlEncode(searchTitles.Item1)}&title_original={HttpUtility.UrlEncode(searchTitles.Item2)}&year={searchYear}&is_serial={(isAnime ? 5 : (serial + 1))}&apikey={init.apikey}";
             if (animeResolved?.aliases != null)
             {
                 foreach (string alias in animeResolved.aliases.Take(20))

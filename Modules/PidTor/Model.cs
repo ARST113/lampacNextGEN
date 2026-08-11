@@ -103,6 +103,7 @@ public class FfDisposition
 {
     public int @default { get; set; }
     public int forced { get; set; }
+    public int attached_pic { get; set; }
 }
 
 public class RootObject

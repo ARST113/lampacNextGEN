@@ -7,6 +7,7 @@
   var API = '{localhost}';
   var TOKEN = '{token}';
   var PROBE_LIMIT = 80;
+  var trackSelectionGeneration = 0;
 
   function account(url) {
     var email = Lampa.Storage.get('account_email', '');
@@ -19,6 +20,62 @@
 
   function isSerial(movie) {
     return !!(movie && (movie.name || movie.number_of_seasons));
+  }
+
+  function streamsByType(streams, type) {
+    return (streams || []).filter(function (item) { return item.codec_type === type; });
+  }
+
+  function streamHash(url) {
+    return ((url || '').match(/\/s([a-z0-9]+)/i) || [])[1] || '';
+  }
+
+  function scheduleNativeTracks(data) {
+    if (!data || !data.pidtor_nextgen || !Array.isArray(data.ffprobe)) return;
+
+    var generation = ++trackSelectionGeneration;
+    var attempts = 0;
+    var audioStreams = streamsByType(data.ffprobe, 'audio');
+    var subtitleStreams = streamsByType(data.ffprobe, 'subtitle');
+    var audioIndex = audioStreams.findIndex(function (item) {
+      return parseInt(item.index, 10) === parseInt(data.pidtor_audio_stream_index, 10);
+    });
+    var subtitleIndex = subtitleStreams.findIndex(function (item) {
+      return parseInt(item.index, 10) === parseInt(data.pidtor_subtitle_stream_index, 10);
+    });
+
+    var timer = setInterval(function () {
+      attempts++;
+      if (generation !== trackSelectionGeneration || attempts > 120) {
+        clearInterval(timer);
+        return;
+      }
+
+      var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+      if (!video) return;
+
+      var audioReady = audioIndex < 0;
+      if (video.audioTracks && audioIndex >= 0 && video.audioTracks[audioIndex]) {
+        for (var a = 0; a < video.audioTracks.length; a++) {
+          video.audioTracks[a].enabled = a === audioIndex;
+          video.audioTracks[a].selected = a === audioIndex;
+        }
+        audioReady = true;
+      }
+
+      var subtitleReady = subtitleIndex < 0;
+      if (video.textTracks) {
+        var offset = video.textTracks.length === subtitleStreams.length + 1 ? 1 : 0;
+        for (var s = 0; s < video.textTracks.length; s++) {
+          var selected = subtitleIndex >= 0 && s === subtitleIndex + offset;
+          video.textTracks[s].mode = selected ? 'showing' : 'disabled';
+          video.textTracks[s].selected = selected;
+        }
+        subtitleReady = subtitleIndex < 0 || !!video.textTracks[subtitleIndex + offset];
+      }
+
+      if (audioReady && subtitleReady) clearInterval(timer);
+    }, 250);
   }
 
   function query(movie, season, episode) {
@@ -165,6 +222,7 @@
     function variantLabel(variant) {
       var video = variant.video || {};
       var parts = [video.quality || 'SD'];
+      if (video.source) parts.push(video.source);
       if (video.hdr && video.hdr !== 'sdr') parts.push(video.hdr.replace('dolby_vision', 'Dolby Vision').replace('hdr10_plus', 'HDR10+').toUpperCase());
       if (video.codec) parts.push(video.codec.toUpperCase());
       if (video.bit_depth > 8) parts.push(video.bit_depth + '-bit');
@@ -177,6 +235,7 @@
         var replica = variant.replicas && variant.replicas[0];
         var details = [];
         if (variant.video && variant.video.width) details.push(variant.video.width + 'x' + variant.video.height);
+        if (variant.video && variant.video.bitrate) details.push((variant.video.bitrate / 1000000).toFixed(1) + ' Мбит/с');
         if (variant.audio && variant.audio.length) details.push(variant.audio.length + ' аудио');
         if (variant.subtitles && variant.subtitles.length) details.push(variant.subtitles.length + ' субтитров');
         appendOption(variantLabel(variant), details.join(' · '), function () {
@@ -187,16 +246,24 @@
     }
 
     function resolveVariant(variant, episode) {
-      var replica = variant.replicas && variant.replicas[0];
-      if (!replica) return showEmpty('Нет доступной копии');
-      if (!episode) return prepareTracks(variant, replica.stream_url, null, null);
-      request(replica.episodes_url, function (json) {
-        var episodes = json && json.data;
-        if (!Array.isArray(episodes)) return showEmpty('Не удалось открыть список серий');
-        var selected = episodes.filter(function (i) { return parseInt(i.e || 0, 10) === episode.episode; })[0];
-        if (!selected) return showEmpty('Серия отсутствует в выбранном качестве');
-        prepareTracks(variant, selected.url, episode, episodes);
-      });
+      var replicas = variant.replicas || [];
+
+      function attempt(index) {
+        var replica = replicas[index];
+        if (!replica) return showEmpty('Не удалось открыть ни одну доступную копию');
+        var failed = function () { attempt(index + 1); };
+
+        if (!episode) return prepareTracks(variant, replica.stream_url, null, null, failed);
+        request(replica.episodes_url, function (json) {
+          var episodes = json && json.data;
+          if (!Array.isArray(episodes)) return failed();
+          var selected = episodes.filter(function (i) { return parseInt(i.e || 0, 10) === episode.episode; })[0];
+          if (!selected) return failed();
+          prepareTracks(variant, selected.url, episode, episodes, failed);
+        }, failed);
+      }
+
+      attempt(0);
     }
 
     function probeKey(url) {
@@ -226,8 +293,8 @@
       return streams;
     }
 
-    function prepareTracks(variant, url, episode, playlist) {
-      if (!url) return showEmpty('Поток недоступен');
+    function prepareTracks(variant, url, episode, playlist, failed) {
+      if (!url) return failed ? failed() : showEmpty('Поток недоступен');
       var key = probeKey(url);
       var cached = probeCacheGet(key);
       if (cached) return showAudio(variant, url, episode, playlist, cached);
@@ -236,17 +303,16 @@
       request(API + '/ffprobe?media=' + encodeURIComponent(account(url)), function (probe) {
         self.activity.loader(false);
         var streams = probe && probe.streams;
-        if (!Array.isArray(streams)) streams = variantStreams(variant);
-        if (streams.length) probeCacheSet(key, streams);
+        if (!Array.isArray(streams) || !streams.some(function (item) { return item.codec_type === 'video' && !(item.disposition && item.disposition.attached_pic); })) {
+          return failed ? failed() : showEmpty('Не удалось прочитать медиадорожки');
+        }
+        probeCacheSet(key, streams);
         showAudio(variant, url, episode, playlist, streams);
       }, function () {
         self.activity.loader(false);
-        showAudio(variant, url, episode, playlist, variantStreams(variant));
+        if (failed) failed();
+        else showEmpty('Не удалось прочитать медиадорожки');
       });
-    }
-
-    function streamsByType(streams, type) {
-      return (streams || []).filter(function (i) { return i.codec_type === type; });
     }
 
     function streamName(stream) {
@@ -283,31 +349,8 @@
     }
 
     function withAudio(url, audio, streams) {
-      var index = audio ? streamsByType(streams, 'audio').indexOf(audio) : -1;
+      var index = audio ? parseInt(audio.index, 10) : -1;
       return index >= 0 ? Lampa.Utils.addUrlComponent(url, 'audio=' + index) : url;
-    }
-
-    function selectNativeTracks(audio, subtitle, streams) {
-      var attempts = 0;
-      var timer = setInterval(function () {
-        attempts++;
-        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-        if (!video || attempts > 30) {
-          if (attempts > 30) clearInterval(timer);
-          return;
-        }
-        var audioStreams = streamsByType(streams, 'audio');
-        var subtitleStreams = streamsByType(streams, 'subtitle');
-        var audioIndex = audio ? audioStreams.indexOf(audio) : -1;
-        var subtitleIndex = subtitle ? subtitleStreams.indexOf(subtitle) : -1;
-        if (video.audioTracks && audioIndex >= 0 && video.audioTracks[audioIndex]) {
-          for (var a = 0; a < video.audioTracks.length; a++) video.audioTracks[a].enabled = a === audioIndex;
-        }
-        if (video.textTracks) {
-          for (var s = 0; s < video.textTracks.length; s++) video.textTracks[s].mode = s === subtitleIndex ? 'showing' : 'disabled';
-        }
-        if ((!audio || video.audioTracks && video.audioTracks.length) && (!subtitle || video.textTracks && video.textTracks.length)) clearInterval(timer);
-      }, 250);
     }
 
     function play(variant, url, episode, playlist, streams, audio, subtitle) {
@@ -320,6 +363,10 @@
         episode: episode ? episode.episode : 0,
         voice_name: audio ? streamName(audio).title : '',
         ffprobe: streams,
+        torrent_hash: streamHash(url),
+        pidtor_nextgen: true,
+        pidtor_audio_stream_index: audio ? parseInt(audio.index, 10) : -1,
+        pidtor_subtitle_stream_index: subtitle ? parseInt(subtitle.index, 10) : -1,
         card: object.movie,
         movie: object.movie,
         isonline: true
@@ -327,24 +374,28 @@
       var playback = [first];
       if (episode && Array.isArray(playlist)) {
         playback = playlist.map(function (item) {
+          var itemUrl = account(withAudio(item.url, audio, streams));
           return {
             title: item.title || item.name,
-            url: account(withAudio(item.url, audio, streams)),
+            url: itemUrl,
             season: parseInt(item.s || episode.season, 10),
             episode: parseInt(item.e || 0, 10),
             voice_name: first.voice_name,
+            ffprobe: streams,
+            torrent_hash: streamHash(itemUrl),
+            pidtor_nextgen: true,
+            pidtor_audio_stream_index: first.pidtor_audio_stream_index,
+            pidtor_subtitle_stream_index: first.pidtor_subtitle_stream_index,
             card: object.movie,
             movie: object.movie,
             isonline: true
           };
         });
         first = playback.filter(function (i) { return i.episode === episode.episode; })[0] || first;
-        first.ffprobe = streams;
       }
       if (playback.length > 1) first.playlist = playback;
       Lampa.Player.play(first);
       Lampa.Player.playlist(playback);
-      selectNativeTracks(audio, subtitle, streams);
     }
 
     this.create = function () {
@@ -398,6 +449,7 @@
     Lampa.Template.add('pidtor_nextgen_css', '<style>.pidtor-nextgen__head{padding:1.2em 1.5em .7em;font-size:1.6em}.pidtor-nextgen__body{padding:0 1.5em 3em}.pidtor-nextgen__item{display:flex;align-items:center;gap:1em;min-height:5.4em;padding:.8em 1em;border-bottom:1px solid rgba(255,255,255,.12)}.pidtor-nextgen__item.focus{background:#fff;color:#111}.pidtor-nextgen__item-main{min-width:0;flex:1}.pidtor-nextgen__item-title{font-size:1.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pidtor-nextgen__item-details{margin-top:.35em;opacity:.68}.pidtor-nextgen__item-badge{font-size:.9em;opacity:.75;white-space:nowrap}.pidtor-nextgen--button svg{width:1.4em;height:1.4em}</style>');
     $('body').append(Lampa.Template.get('pidtor_nextgen_css', {}, true));
     Lampa.Component.add('pidtor_nextgen', PidTorComponent);
+    Lampa.Player.listener.follow('start', scheduleNativeTracks);
     Lampa.Listener.follow('full', function (e) {
       if (e.type === 'complite') addButton({ render: e.object.activity.render().find('.view--torrent'), movie: e.data.movie });
     });

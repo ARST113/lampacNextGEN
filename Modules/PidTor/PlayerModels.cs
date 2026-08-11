@@ -28,6 +28,7 @@ public sealed class PidTorVideoTrack
     public int width { get; set; }
     public int height { get; set; }
     public string quality { get; set; }
+    public string source { get; set; }
     public string codec { get; set; }
     public string hdr { get; set; }
     public int bit_depth { get; set; }
