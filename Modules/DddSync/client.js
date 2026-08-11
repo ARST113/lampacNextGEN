@@ -702,6 +702,42 @@
     return base;
   }
 
+  function playlistFromRemote(items) {
+    var playlist = [];
+    if (!Array.isArray(items)) return playlist;
+
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i] || {};
+      var url = stripFragment(item.uri || item.url || item.src || '');
+      if (!url) continue;
+
+      playlist.push({
+        url: url,
+        uri: url,
+        src: url,
+        title: item.title || item.filename || '',
+        name: item.title || item.filename || '',
+        filename: item.filename || '',
+        file_name: item.filename || '',
+        index: safeNumber(item.index, i),
+        season: safeNumber(item.season, 0),
+        episode: safeNumber(item.episode, 0),
+        timeline: {
+          hash: item.timelineHash || '',
+          time: toSeconds(item.position),
+          duration: toSeconds(item.duration),
+          percent: safeNumber(item.percent, 0)
+        }
+      });
+    }
+
+    playlist.sort(function (a, b) {
+      return safeNumber(a.index, 0) - safeNumber(b.index, 0);
+    });
+
+    return playlist;
+  }
+
   function saveContinueWatchRecord(item) {
     if (!item || !item.timelineHash || !window.Lampa || !Lampa.Storage) return false;
 
@@ -735,6 +771,8 @@
       record.season = parsedKey.season || old.season || 0;
       record.episode = parsedKey.episode || old.episode || 0;
       record.playlist_index = safeNumber(item.windowIndex, safeNumber(old.playlist_index, 0));
+      var remotePlaylist = playlistFromRemote(item.playlist);
+      if (remotePlaylist.length) record.playlist = remotePlaylist;
       record.file_index = stream ? stream.file_index : safeNumber(item.windowIndex, safeNumber(old.file_index, 0));
       record.file_name = item.filename || (stream && stream.file_name) || old.file_name || '';
       record.torrent_link = stream ? stream.torrent_link : old.torrent_link || '';

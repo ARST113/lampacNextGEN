@@ -37,6 +37,7 @@ public class BaseMod
             return _next(context);
 
         if (!HttpMethods.IsGet(context.Request.Method) &&
+            !HttpMethods.IsHead(context.Request.Method) &&
             !HttpMethods.IsPost(context.Request.Method))
             return Task.CompletedTask;
 

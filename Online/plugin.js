@@ -1002,6 +1002,8 @@
           }) : false;
           var episode_num = element.episode || index + 1;
           var episode_last = choice.episodes_view[element.season];
+          if (!element.voice_name && element.details) element.voice_name = element.details;
+          if (choice.voice_name == 'Неизвестно' && element.voice_name) choice.voice_name = element.voice_name;
           var voice_name = choice.voice_name || (filter_find.voice[0] ? filter_find.voice[0].title : false) || element.voice_name || (serial ? 'Неизвестно' : element.text) || 'Неизвестно';
           if (element.quality) {
             element.qualitys = element.quality;
@@ -1022,7 +1024,7 @@
           var info = [];
           if (element.season) {
             element.translate_episode_end = _this8.getLastEpisode(items);
-            element.translate_voice = element.voice_name;
+            element.translate_voice = element.voice_name || element.details;
           }
           if (element.text && !episode) element.title = element.text;
           element.timeline = Lampa.Timeline.view(hash_timeline);
@@ -1089,7 +1091,7 @@
               choice.episodes_view[element.season] = episode_num;
             }
             _this8.saveChoice(choice);
-            var voice_name_text = choice.voice_name || element.voice_name || element.title;
+            var voice_name_text = choice.voice_name || element.voice_name || element.details || element.title;
             if (voice_name_text.length > 30) voice_name_text = voice_name_text.slice(0, 30) + '...';
             _this8.watched({
               balanser: balanser,

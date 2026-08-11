@@ -61,6 +61,7 @@
       }
 
       syncLampacPlugins();
+      loadLampacManagedPluginEarly('{localhost}/lampac-js/continuewatch-ddd.js?v=20260811-v4.0.107', 'continuewatch-ddd');
 
       Lampa.Utils.putScriptAsync(["{localhost}/privateinit.js?account_email=" + encodeURIComponent(Lampa.Storage.get('account_email', '')) + "&uid=" + encodeURIComponent(Lampa.Storage.get('lampac_unic_id', ''))], function() {});
 
@@ -88,6 +89,20 @@
 
   function samePluginUrl(a, b) {
     return normalizePluginUrl(a) == normalizePluginUrl(b);
+  }
+
+  function exactPluginUrl(url) {
+    var value = String(url || '').replace(/\{localhost\}/g, location.origin);
+    if (!value) return '';
+    try {
+      var a = document.createElement('a');
+      a.href = value;
+      var path = (a.pathname || '').replace(/\/+/g, '/');
+      var prefix = a.protocol && a.host ? a.protocol + '//' + a.host : '';
+      return (prefix + path + (a.search || '')).toLowerCase();
+    }
+    catch (e) {}
+    return value.split('#')[0].toLowerCase();
   }
 
   function normalizePluginItem(item) {
@@ -122,7 +137,7 @@
   function samePluginList(a, b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (!samePluginUrl(a[i].__lampacSourceUrl || a[i].url, b[i].__lampacSourceUrl || b[i].url)) return false;
+      if (exactPluginUrl(a[i].__lampacSourceUrl || a[i].url) != exactPluginUrl(b[i].__lampacSourceUrl || b[i].url)) return false;
       if ((a[i].status == 0 ? 0 : 1) != (b[i].status == 0 ? 0 : 1)) return false;
       if ((a[i].name || '') != (b[i].name || '')) return false;
       if ((a[i].author || '') != (b[i].author || '')) return false;
@@ -132,7 +147,7 @@
     return true;
   }
 
-  function cleanupRemovedPluginCache(allowed) {
+  function cleanupRemovedPluginCache(allowed, currentUrls) {
     if (!window.caches) return;
 
     caches.keys().then(function(names) {
@@ -141,7 +156,8 @@
           cache.keys().then(function(requests) {
             requests.forEach(function(request) {
               var key = normalizePluginUrl(request.url);
-              if (key && !allowed[key] && /\/(lampac-js\/uploads|plugins)\//i.test(request.url)) {
+              var staleVersion = key && currentUrls[key] && exactPluginUrl(request.url) != currentUrls[key];
+              if (key && (!allowed[key] || staleVersion) && /\/(lampac-js\/uploads|plugins)\//i.test(request.url)) {
                 cache.delete(request);
               }
             });
@@ -190,6 +206,7 @@
 
     var status = syncStatus(installed);
     var allowed = {};
+    var currentUrls = {};
     var next = [];
 
     server.forEach(function(plugin) {
@@ -200,6 +217,7 @@
       if (!key || allowed[key]) return;
 
       allowed[key] = true;
+      currentUrls[key] = exactPluginUrl(plugin.url);
 
       var serverDisabled = plugin.status == 0 || plugin.status === false;
       var clientStatus = status[key];
@@ -211,6 +229,11 @@
     var removed = installed.some(function(plugin) {
       return !allowed[normalizePluginUrl(plugin.__lampacSourceUrl || plugin.url)];
     });
+    var versionChanged = installed.some(function(plugin) {
+      var source = plugin.__lampacSourceUrl || plugin.url;
+      var key = normalizePluginUrl(source);
+      return !!(allowed[key] && currentUrls[key] && exactPluginUrl(source) != currentUrls[key]);
+    });
 
     if (!samePluginList(installed, next)) {
       Lampa.Storage.set('plugins', next);
@@ -221,10 +244,31 @@
       });
     }
 
-    if (removed) {
-      cleanupRemovedPluginCache(allowed);
+    if (removed || versionChanged) {
+      cleanupRemovedPluginCache(allowed, currentUrls);
       cleanupRemovedPluginStorage(allowed);
     }
+  }
+
+  function loadLampacManagedPluginEarly(url, marker) {
+    var installed = [];
+    try { installed = Lampa.Storage.get('plugins', '[]') || []; } catch (e) { installed = []; }
+    if (!Array.isArray(installed)) return;
+
+    var enabled = installed.some(function(plugin) {
+      plugin = normalizePluginItem(plugin);
+      return plugin && samePluginUrl(plugin.__lampacSourceUrl || plugin.url, url) && plugin.status != 0;
+    });
+    if (!enabled) return;
+
+    var id = 'lampac-early-' + marker;
+    if (document.getElementById(id)) return;
+
+    var script = document.createElement('script');
+    script.id = id;
+    script.async = true;
+    script.src = String(url || '').replace(/\{localhost\}/g, location.origin);
+    (document.head || document.documentElement).appendChild(script);
   }
 
   function firstRunSettings() {
