@@ -39,6 +39,8 @@ public class PidTorSettings : Igroup, ICloneable
 
     public int min_sid { get; set; }
 
+    public int anime_min_sid { get; set; }
+
     public long max_size { get; set; }
 
     public long max_serial_size { get; set; }
