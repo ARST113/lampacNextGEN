@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260709-04-buffering';
+  var VERSION = '20260723-42-continuous-av';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {
@@ -39,6 +39,16 @@
 
   function sleep(ms) {
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function withTimeout(promise, timeoutMs, message) {
+    var timer = 0;
+    return Promise.race([
+      promise,
+      new Promise(function (_, reject) {
+        timer = setTimeout(function () { reject(new Error(message || 'operation timed out')); }, timeoutMs);
+      })
+    ]).finally(function () { clearTimeout(timer); });
   }
 
   function fromBase64(value) {
@@ -88,18 +98,18 @@
     var level = Number(track && track.level || 153);
     if (!isFinite(level) || level <= 0) level = 153;
     var variants = [
-      hevcCodecFromHvcC(description, 'hvc1'),
       hevcCodecFromHvcC(description, 'hev1'),
-      hevcCodec(track),
+      hevcCodecFromHvcC(description, 'hvc1'),
       hevcCodec(track).replace(/^hvc1/, 'hev1'),
-      'hvc1.1.6.L' + level + '.B0',
+      hevcCodec(track),
       'hev1.1.6.L' + level + '.B0',
-      'hvc1.2.4.L' + level + '.B0',
+      'hvc1.1.6.L' + level + '.B0',
       'hev1.2.4.L' + level + '.B0',
-      'hvc1.1.6.L153.B0',
+      'hvc1.2.4.L' + level + '.B0',
       'hev1.1.6.L153.B0',
-      'hvc1.2.4.L153.B0',
-      'hev1.2.4.L153.B0'
+      'hvc1.1.6.L153.B0',
+      'hev1.2.4.L153.B0',
+      'hvc1.2.4.L153.B0'
     ];
     return variants.filter(function (item, index) { return item && variants.indexOf(item) === index; });
   }
@@ -107,40 +117,40 @@
   function videoConfigs(track) {
     var description = fromBase64(track && track.extradata || '');
     var codec = String(track && track.codecName || '').toLowerCase();
-    var colorSpace = videoColorSpace(track);
     var base = {
       codedWidth: Number(track && track.width || 0),
-      codedHeight: Number(track && track.height || 0),
-      description: description,
-      hardwareAcceleration: 'prefer-hardware',
-      optimizeForLatency: true
+      codedHeight: Number(track && track.height || 0)
     };
-    if (colorSpace) base.colorSpace = colorSpace;
+
+    function candidates(codecName, codecDescription, extra) {
+      var list = [];
+      ['prefer-hardware', 'no-preference', ''].forEach(function (hardwareAcceleration) {
+        var config = Object.assign({}, base, extra || {}, { codec: codecName });
+        if (codecDescription && codecDescription.length) config.description = codecDescription;
+        if (hardwareAcceleration) config.hardwareAcceleration = hardwareAcceleration;
+        list.push(config);
+      });
+      return list;
+    }
 
     if (codec === 'h264') {
-      var avc = Object.assign({}, base, { codec: avcCodec(description), avc: { format: 'avc' } });
-      return [avc, Object.assign({}, base, { codec: avc.codec })];
+      return candidates(avcCodec(description), description, { avc: { format: 'avc' } });
     }
     if (codec === 'hevc') {
       var variants = hevcCodecVariants(track, description);
       var configs = [];
-      if (description) {
-        variants.forEach(function (item) {
-          configs.push(Object.assign({}, base, { codec: item }));
-          configs.push(Object.assign({}, base, { codec: item, hevc: { format: 'hevc' } }));
-        });
-      }
-      var noDescriptionBase = Object.assign({}, base);
-      delete noDescriptionBase.description;
       variants.forEach(function (item) {
-        configs.push(Object.assign({}, noDescriptionBase, { codec: item }));
-        configs.push(Object.assign({}, noDescriptionBase, { codec: item, hevc: { format: 'annexb' } }));
+        candidates(item, description).forEach(function (config) {
+          config._mpvwasmHevc = true;
+          config._mpvwasmNalLengthSize = description && description.length > 21 ? ((description[21] & 3) + 1) : 4;
+          configs.push(config);
+        });
       });
       return configs;
     }
-    if (codec === 'av1') return [Object.assign({}, base, { codec: 'av01.0.12M.08' })];
-    if (codec === 'vp9') return [Object.assign({}, base, { codec: 'vp09.00.51.08' })];
-    if (codec === 'vp8') return [Object.assign({}, base, { codec: 'vp8' })];
+    if (codec === 'av1') return candidates('av01.0.12M.08', description);
+    if (codec === 'vp9') return candidates('vp09.00.51.08', description);
+    if (codec === 'vp8') return candidates('vp8', description);
     return [];
   }
 
@@ -172,17 +182,49 @@
   async function supportedConfig(track) {
     if (typeof VideoDecoder !== 'function') return null;
     var configs = videoConfigs(track);
+    var report = {
+      version: VERSION,
+      track: {
+        codec: String(track && track.codecName || ''),
+        profile: String(track && track.profile || ''),
+        level: Number(track && track.level || 0),
+        width: Number(track && track.width || 0),
+        height: Number(track && track.height || 0),
+        descriptionBytes: fromBase64(track && track.extradata || '').length
+      },
+      candidates: []
+    };
     for (var i = 0; i < configs.length; i++) {
+      var config = configs[i];
+      var item = {
+        codec: config.codec,
+        hardwareAcceleration: config.hardwareAcceleration || 'default',
+        descriptionBytes: config.description ? config.description.byteLength : 0,
+        supported: false
+      };
       try {
-        var support = await VideoDecoder.isConfigSupported(configs[i]);
+        var support = await VideoDecoder.isConfigSupported(config);
+        item.supported = !!(support && support.supported);
+        report.candidates.push(item);
         if (support && support.supported) {
-          var supported = Object.assign({}, support.config || configs[i]);
-          if (configs[i].avc) supported.avc = configs[i].avc;
-          if (configs[i].hevc) supported.hevc = configs[i].hevc;
+          var supported = Object.assign({}, support.config || config);
+          if (config.avc) supported.avc = config.avc;
+          if (config._mpvwasmHevc) {
+            supported._mpvwasmHevc = true;
+            supported._mpvwasmNalLengthSize = config._mpvwasmNalLengthSize;
+          }
+          report.selected = item;
+          window.__mpvwasm_webcodecs_probe = report;
+          try { console.warn('[mpvwasm-webcodecs-probe] ' + JSON.stringify(report)); } catch (_) { }
           return supported;
         }
-      } catch (_) { }
+      } catch (error) {
+        item.error = String(error && (error.message || error) || error);
+        report.candidates.push(item);
+      }
     }
+    window.__mpvwasm_webcodecs_probe = report;
+    try { console.warn('[mpvwasm-webcodecs-probe] ' + JSON.stringify(report)); } catch (_) { }
     return null;
   }
 
@@ -192,6 +234,38 @@
     var dts = Number(packet && packet.dtsUs);
     if (isFinite(dts) && dts > INVALID_TS) return dts;
     return 0;
+  }
+
+  function hevcSampleInfo(data, lengthSize) {
+    var empty = { valid: false, keyframe: false, keyData: data, types: [] };
+    if (!data || !data.byteLength) return empty;
+    lengthSize = Number(lengthSize || 4);
+    if (lengthSize < 1 || lengthSize > 4) lengthSize = 4;
+    var offset = 0;
+    var units = [];
+    while (offset + lengthSize <= data.byteLength) {
+      var start = offset;
+      var size = 0;
+      for (var i = 0; i < lengthSize; i++) size = (size * 256) + data[offset + i];
+      offset += lengthSize;
+      if (!size || offset + size > data.byteLength) return empty;
+      units.push({ start: start, type: (data[offset] >> 1) & 0x3f });
+      offset += size;
+    }
+    if (!units.length || offset !== data.byteLength) return empty;
+    var firstIrap = -1;
+    for (var j = 0; j < units.length; j++) {
+      if (units[j].type >= 16 && units[j].type <= 23) {
+        firstIrap = j;
+        break;
+      }
+    }
+    return {
+      valid: true,
+      keyframe: firstIrap >= 0,
+      keyData: firstIrap > 0 ? data.subarray(units[firstIrap].start) : data,
+      types: units.map(function (unit) { return unit.type; })
+    };
   }
 
   function formatTrackTitle(track, fallback) {
@@ -389,11 +463,13 @@
     this.seenVideoKeyframe = false;
     this.dropAudioBeforeUs = 0;
     this.frameQueue = [];
+    this.pendingVideoPackets = [];
     this.subtitleItems = [];
     this.audioTracks = [];
     this.subtitleTracks = [];
     this.videoTracks = [];
     this.audioContext = null;
+    this.ownsAudioContext = true;
     this.audioNode = null;
     this.audioDecoder = null;
     this.audioDecoderMode = 'none';
@@ -405,6 +481,11 @@
     this.audioClockUs = 0;
     this.audioClockWallAt = 0;
     this.audioSyncPaused = false;
+    this.audioOutputPeak = 0;
+    this.audioProcessCalls = 0;
+    this.audioUnderruns = 0;
+    this.audioWorkletPaused = true;
+    this.audioProofLogged = false;
     this.buffering = false;
     this.pendingClockUs = 0;
     this.seekTargetUs = 0;
@@ -423,6 +504,14 @@
     this.seekStartedAt = 0;
     this.lastSeekReadyMs = 0;
     this.pumpRunning = false;
+    this.pumpGeneration = 0;
+    this.pumpActiveGeneration = 0;
+    this.pumpLastProgressAt = performance.now();
+    this.lastAudioProgressAt = performance.now();
+    this.lastWatchdogAt = 0;
+    this.lastStallLogAt = 0;
+    this.lastResumeAttemptAt = 0;
+    this.seekStage = '';
     this.volume = 1;
     this.raf = 0;
     this.subtitleNode = null;
@@ -440,8 +529,13 @@
 
   HybridWebCodecsPlayer.open = async function (canvas, url, callbacks, options) {
     var player = new HybridWebCodecsPlayer(canvas, url, callbacks, options);
-    await player.init();
-    return player;
+    try {
+      await player.init();
+      return player;
+    } catch (error) {
+      try { await player.destroy(); } catch (_) { }
+      throw error;
+    }
   };
 
   HybridWebCodecsPlayer.prototype.markTiming = function (name, extra) {
@@ -453,7 +547,7 @@
     this.timing.marks.push(mark);
     this.timing.last = mark;
     window.__mpvwasm_hybrid_timing = this.timing;
-    if (window.__MPV_WASM_DEBUG) console.log('[mpvwasm-hybrid-timing]', mark);
+    if (window.__MPV_WASM_DEBUG || /^seek-/.test(name)) console.info('[mpvwasm-hybrid-timing]', mark);
   };
 
   HybridWebCodecsPlayer.prototype.init = async function () {
@@ -474,6 +568,8 @@
     var tracks = this.session.info.tracks || [];
     this.videoTrack = tracks.filter(function (track) { return track.type === 'video'; })[0];
     if (!this.videoTrack) throw new Error('No video track');
+    var sourceUrl = this.options && this.options.data && this.options.data.url || this.url;
+    this.videoTrack.preferAnnexB = /\.mkv(?:$|[?#])/i.test(String(sourceUrl || ''));
 
     this.audioTrack = tracks.filter(function (track) { return track.type === 'audio'; })[0] || null;
     var subtitles = tracks.filter(function (track) { return track.type === 'subtitle'; });
@@ -489,7 +585,12 @@
 
     this.markTiming('webcodecs-probe-start', { codec: this.videoTrack.codecName, width: this.videoTrack.width, height: this.videoTrack.height });
     this.config = await supportedConfig(this.videoTrack);
-    if (!this.config) throw new Error('WebCodecs unsupported for ' + (this.videoTrack.codecName || 'video'));
+    if (!this.config) {
+      var failedProbe = window.__mpvwasm_webcodecs_probe;
+      var failedTrack = failedProbe && failedProbe.track;
+      var details = failedTrack ? ' (' + [failedTrack.profile, failedTrack.width + 'x' + failedTrack.height, failedProbe.candidates.length + ' configs'].filter(Boolean).join(', ') + ')' : '';
+      throw new Error('WebCodecs unsupported for ' + (this.videoTrack.codecName || 'video') + details);
+    }
     this.markTiming('webcodecs-probe-done', { config: this.config.codec });
 
     this.markTiming('video-config-start');
@@ -539,20 +640,34 @@
         call(self.callbacks, 'error', error);
       }
     });
-    this.videoDecoder.configure(this.config);
+    var decoderConfig = Object.assign({}, this.config);
+    delete decoderConfig._mpvwasmAnnexB;
+    delete decoderConfig._mpvwasmHevc;
+    delete decoderConfig._mpvwasmNalLengthSize;
+    this.videoDecoder.configure(decoderConfig);
   };
 
   HybridWebCodecsPlayer.prototype.configureAudio = async function () {
     if (!this.audioTrack) return;
     var AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass || !window.AudioWorkletNode) throw new Error('AudioWorklet is not available');
-    var wantedRate = Math.max(8000, Number(this.audioTrack.sampleRate || 48000));
-    try {
-      this.audioContext = new AudioContextClass({ sampleRate: wantedRate, latencyHint: 'playback' });
-    } catch (_) {
-      this.audioContext = new AudioContextClass({ latencyHint: 'playback' });
+    var sharedContext = window.__mpvwasm_shared_audio_context;
+    if (sharedContext && sharedContext.state !== 'closed') {
+      this.audioContext = sharedContext;
+      this.ownsAudioContext = false;
+    } else {
+      var wantedRate = Math.max(8000, Number(this.audioTrack.sampleRate || 48000));
+      try {
+        this.audioContext = new AudioContextClass({ sampleRate: wantedRate, latencyHint: 'playback' });
+      } catch (_) {
+        this.audioContext = new AudioContextClass({ latencyHint: 'playback' });
+      }
+      this.ownsAudioContext = true;
     }
-    await this.audioContext.audioWorklet.addModule('/mpvwasm/assets/mpvwasm-audio-worklet.js?v=' + VERSION);
+    if (!this.audioContext.__mpvwasmWorkletPromise) {
+      this.audioContext.__mpvwasmWorkletPromise = this.audioContext.audioWorklet.addModule('/mpvwasm/assets/mpvwasm-audio-worklet.js?v=' + VERSION);
+    }
+    await this.audioContext.__mpvwasmWorkletPromise;
     this.audioNode = new AudioWorkletNode(this.audioContext, 'mpvwasm-pcm-processor', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
@@ -562,17 +677,40 @@
     this.audioNode.port.onmessage = function (event) {
       var data = event.data || {};
       if (data.type !== 'clock') return;
+      self.audioOutputPeak = Number(data.outputPeak || 0);
+      self.audioProcessCalls = Number(data.processCalls || 0);
+      self.audioUnderruns = Number(data.underruns || 0);
+      self.audioWorkletPaused = !!data.paused;
+      if (!self.audioProofLogged && self.audioContext && self.audioContext.state === 'running' && self.audioProcessCalls > 0 && self.audioOutputPeak > 0.0001) {
+        self.audioProofLogged = true;
+        try {
+          console.warn('[mpvwasm-audio-output] ' + JSON.stringify({
+            version: VERSION,
+            context: self.audioContext.state,
+            decoder: self.audioDecoderMode,
+            peak: Math.round(self.audioOutputPeak * 10000) / 10000,
+            processCalls: self.audioProcessCalls,
+            underruns: self.audioUnderruns,
+            sampleRate: Number(data.sampleRate || 0),
+            channels: Number(data.channels || 0)
+          }));
+        } catch (_) { }
+      }
       if (self.audioBasePtsUs === null) return;
       if (Number(data.clockUs || 0) < self.audioBasePtsUs - 100000) return;
-      self.audioClockUs = Number(data.clockUs || 0);
+      var nextClockUs = Number(data.clockUs || 0);
+      if (nextClockUs > self.audioClockUs + 1000) self.lastAudioProgressAt = performance.now();
+      self.audioClockUs = nextClockUs;
       self.audioClockWallAt = performance.now();
       self.audioPlayedSamples = Number(data.playedSamples || 0);
       self.audioBufferUs = Number(data.bufferUs || 0);
       self.emitElapsed(false);
       self.updateDebug();
     };
+    this.audioNode.onprocessorerror = function (event) {
+      call(self.callbacks, 'error', event && event.error || new Error('AudioWorklet processor error'));
+    };
     this.audioNode.connect(this.audioContext.destination);
-    await this.audioContext.suspend();
     await this.openSelectedAudioDecoder();
     this.resetAudioClock(null);
   };
@@ -643,21 +781,36 @@
         hasBasePts: this.audioBasePtsUs !== null
       });
       this.audioNode.port.postMessage({ type: 'volume', volume: this.volume });
+      this.audioNode.port.postMessage({ type: 'state', paused: this.paused || this.buffering || this.seeking });
     }
   };
 
   HybridWebCodecsPlayer.prototype.resumeAudio = function () {
-    if (!this.audioContext || this.destroyed) return;
+    if (!this.audioContext || this.destroyed) return Promise.resolve(false);
     this.audioClockWallAt = performance.now();
+    if (this.audioNode) this.audioNode.port.postMessage({ type: 'state', paused: false });
+    this.audioWorkletPaused = false;
     var self = this;
-    this.audioContext.resume().catch(function (error) {
+    return this.audioContext.resume().then(function () {
+      var running = self.audioContext && self.audioContext.state === 'running';
+      self.audioUnlockPending = !running;
+      if (!running) call(self.callbacks, 'status', 'tap to enable audio');
+      return running;
+    }).catch(function (error) {
+      if (error && (error.name === 'NotAllowedError' || /gesture|not allowed/i.test(String(error.message || error)))) {
+        self.audioUnlockPending = true;
+        call(self.callbacks, 'status', 'tap to enable audio');
+        return false;
+      }
       call(self.callbacks, 'error', error);
+      return false;
     });
   };
 
   HybridWebCodecsPlayer.prototype.pauseAudio = function () {
     if (!this.audioContext || this.destroyed) return;
-    this.audioContext.suspend().catch(function () { });
+    if (this.audioNode) this.audioNode.port.postMessage({ type: 'state', paused: true });
+    this.audioWorkletPaused = true;
   };
 
   HybridWebCodecsPlayer.prototype.enterBuffering = function () {
@@ -690,29 +843,64 @@
     return width >= 3000 ? 48 : 24;
   };
 
+  HybridWebCodecsPlayer.prototype.maxPendingVideoPackets = function () {
+    var width = Number(this.videoTrack && this.videoTrack.width || 0);
+    return width >= 3000 ? 144 : 72;
+  };
+
+  HybridWebCodecsPlayer.prototype.maxRecoveryVideoPackets = function () {
+    return this.maxPendingVideoPackets() * 4;
+  };
+
   HybridWebCodecsPlayer.prototype.startupAudioBufferUs = function () {
     var width = Number(this.videoTrack && this.videoTrack.width || 0);
     return width >= 3000 ? 900000 : 500000;
   };
 
+  HybridWebCodecsPlayer.prototype.playbackAudioBufferUs = function () {
+    var width = Number(this.videoTrack && this.videoTrack.width || 0);
+    return width >= 3000 ? 3500000 : 2500000;
+  };
+
   HybridWebCodecsPlayer.prototype.throttleReason = function () {
     if (this.seekTargetUs && !this.hasFrameNear(this.seekTargetUs, 180000)) return '';
-    if (this.videoDecoder && this.videoDecoder.decodeQueueSize > 64) return 'video-decode';
-    if (this.frameQueue.length >= this.maxFrameQueue()) return 'video-buffer';
-    if (this.audioTrack && this.audioBufferUs > 6000000) return 'audio-buffer';
+    var decodeBlocked = !!(this.videoDecoder && this.videoDecoder.decodeQueueSize > 64);
+    var frameBlocked = this.frameQueue.length >= this.maxFrameQueue();
+    var videoBlocked = decodeBlocked || frameBlocked;
+    var audioReady = !this.audioTrack || this.audioBufferUs >= this.playbackAudioBufferUs();
+    if (this.pendingVideoPackets.length >= this.maxPendingVideoPackets() && audioReady) return 'video-packet-buffer';
+    if (videoBlocked && audioReady) return decodeBlocked ? 'video-decode' : 'video-buffer';
+    if (this.audioTrack && this.audioBufferUs > this.playbackAudioBufferUs() + 2500000 && this.frameQueue.length >= 2) return 'audio-buffer';
     if (!this.ready && this.audioTrack && this.audioBufferUs > this.startupAudioBufferUs() + 700000 && this.frameQueue.length > 8) return 'startup-buffer';
     return '';
   };
 
+  HybridWebCodecsPlayer.prototype.videoDecodeBlocked = function () {
+    return !!(this.videoDecoder && this.videoDecoder.decodeQueueSize > 64) || this.frameQueue.length >= this.maxFrameQueue();
+  };
+
+  HybridWebCodecsPlayer.prototype.drainPendingVideoPackets = function () {
+    var drained = 0;
+    while (this.pendingVideoPackets.length && !this.videoDecodeBlocked() && drained < 24) {
+      this.decodeVideoPacket(this.pendingVideoPackets.shift());
+      drained++;
+    }
+    return drained;
+  };
+
   HybridWebCodecsPlayer.prototype.pump = async function () {
     if (this.pumpRunning) return;
+    var generation = ++this.pumpGeneration;
+    this.pumpActiveGeneration = generation;
     this.pumpRunning = true;
     try {
-      while (!this.destroyed) {
+      while (!this.destroyed && generation === this.pumpGeneration) {
         if (this.seeking) {
           await sleep(15);
           continue;
         }
+
+        this.drainPendingVideoPackets();
 
         if (this.throttleReason()) {
           this.maybeReady();
@@ -725,6 +913,7 @@
         var limit = this.seekTargetUs ? (is4k ? 192 : 48) : (is4k ? 128 : 24);
         while (handled < limit && !this.destroyed && !this.seeking && !this.throttleReason()) {
           var packet = await this.session.readPacket();
+          if (generation !== this.pumpGeneration || this.destroyed || this.seeking) break;
           if (!packet) {
             call(this.callbacks, 'fileEnd');
             return;
@@ -735,6 +924,7 @@
           }
           handled++;
           this.packetsRead++;
+          this.pumpLastProgressAt = performance.now();
           await this.handlePacket(packet);
           if (this.videoDecoder && this.videoDecoder.decodeQueueSize > 64 && handled >= 2) break;
         }
@@ -743,10 +933,22 @@
         await sleep(this.videoDecoder && this.videoDecoder.decodeQueueSize > 56 ? 3 : 0);
       }
     } catch (error) {
-      if (!this.destroyed) call(this.callbacks, 'error', error);
+      var message = String(error && (error.message || error) || error || '');
+      if (!this.destroyed && generation === this.pumpGeneration && !/demux worker aborted/i.test(message)) call(this.callbacks, 'error', error);
     } finally {
-      this.pumpRunning = false;
+      if (generation === this.pumpActiveGeneration) {
+        this.pumpActiveGeneration = 0;
+        this.pumpRunning = false;
+      }
     }
+  };
+
+  HybridWebCodecsPlayer.prototype.stopPump = async function (timeoutMs) {
+    if (!this.pumpRunning) return true;
+    this.pumpGeneration++;
+    var deadline = performance.now() + Math.max(100, Number(timeoutMs || 2500));
+    while (this.pumpRunning && performance.now() < deadline) await sleep(10);
+    return !this.pumpRunning;
   };
 
   HybridWebCodecsPlayer.prototype.handlePacket = async function (packet) {
@@ -769,22 +971,49 @@
 
   HybridWebCodecsPlayer.prototype.handleVideoPacket = function (packet) {
     if (!this.videoDecoder || this.videoDecoder.state !== 'configured') return;
-    if (this.seenVideoKeyframe && (this.videoDecoder.decodeQueueSize > 96 || this.frameQueue.length >= this.maxFrameQueue())) return;
+    if (this.seenVideoKeyframe && this.videoDecodeBlocked()) {
+      if (this.pendingVideoPackets.length < this.maxRecoveryVideoPackets()) this.pendingVideoPackets.push(packet);
+      else this.droppedFrames++;
+      return;
+    }
+    this.decodeVideoPacket(packet);
+  };
+
+  HybridWebCodecsPlayer.prototype.decodeVideoPacket = function (packet) {
+    if (!this.videoDecoder || this.videoDecoder.state !== 'configured') return;
+    var firstChunk = !this.seenVideoKeyframe;
+    var hevcInfo = this.config && this.config._mpvwasmHevc
+      ? hevcSampleInfo(packet.data, this.config._mpvwasmNalLengthSize)
+      : null;
+    var keyframe = hevcInfo && hevcInfo.valid ? hevcInfo.keyframe : !!packet.keyframe;
     if (!this.seenVideoKeyframe) {
-      if (!packet.keyframe) return;
+      if (!keyframe) return;
       this.seenVideoKeyframe = true;
     }
     var timestamp = packetTimeUs(packet);
+    var packetData = firstChunk && hevcInfo && hevcInfo.keyframe ? hevcInfo.keyData : packet.data;
     try {
       this.videoDecoder.decode(new EncodedVideoChunk({
-        type: packet.keyframe ? 'key' : 'delta',
+        type: keyframe ? 'key' : 'delta',
         timestamp: timestamp,
         duration: packet.durationUs > 0 ? packet.durationUs : undefined,
-        data: packet.data
+        data: packetData
       }));
       this.submittedFrames++;
     } catch (error) {
       this.seenVideoKeyframe = false;
+      var decodeError = {
+        error: String(error && (error.message || error) || error || ''),
+        codec: this.config && this.config.codec,
+        timestamp: timestamp,
+        keyframe: keyframe,
+        size: packetData && packetData.byteLength || 0,
+        strippedPrefix: packetData !== packet.data,
+        nalTypes: hevcInfo && hevcInfo.types || [],
+        head: packetData ? Array.prototype.slice.call(packetData, 0, 16) : []
+      };
+      this.markTiming('video-decode-error', decodeError);
+      try { console.warn('[mpvwasm-hybrid-video-error] ' + JSON.stringify(decodeError)); } catch (_) { }
       call(this.callbacks, 'status', 'hybrid video decode retry ' + (error && (error.message || error) || error));
     }
   };
@@ -890,7 +1119,7 @@
   };
 
   HybridWebCodecsPlayer.prototype.maybeReady = function () {
-    if (this.destroyed || this.ready) return;
+    if (this.destroyed || this.ready || this.seeking) return;
     var videoReady = this.seekTargetUs ? this.hasFrameNear(this.seekTargetUs, 180000) && this.frameQueue.length >= 2 : this.frameQueue.length >= 2;
     var audioReady = !this.audioTrack || this.audioBufferUs >= this.startupAudioBufferUs();
     if (!videoReady || !audioReady) return;
@@ -1040,8 +1269,12 @@
 
   HybridWebCodecsPlayer.prototype._renderLoop = function () {
     if (this.destroyed) return;
+    this.drainPendingVideoPackets();
+    this.watchdog();
     if (this.ready && !this.paused && !this.buffering) this.renderFrame(false);
-    if (this.ready && !this.paused && !this.buffering && !this.frameQueue.length && (!this.lastRenderAt || performance.now() - this.lastRenderAt > 250)) {
+    if (this.ready && !this.paused && !this.buffering && !this.frameQueue.length &&
+      (!this.lastRenderAt || performance.now() - this.lastRenderAt > 750) &&
+      (!this.audioTrack || this.audioBufferUs < 50000)) {
       this.enterBuffering();
     }
     this.maybeResumeBuffering();
@@ -1050,6 +1283,70 @@
     this.syncAudioToVideo();
     this.emitElapsed(false);
     this.raf = requestAnimationFrame(this._renderLoop);
+  };
+
+  HybridWebCodecsPlayer.prototype.watchdog = function () {
+    var now = performance.now();
+    if (now - this.lastWatchdogAt < 500) return;
+    this.lastWatchdogAt = now;
+    if (this.destroyed || this.paused) return;
+
+    if (this.seeking) {
+      if (now - this.seekStartedAt > 3000 && now - this.lastStallLogAt > 2000) {
+        this.lastStallLogAt = now;
+        console.warn('[mpvwasm-hybrid-seek-state] ' + JSON.stringify({
+          version: VERSION,
+          stage: this.seekStage,
+          elapsedMs: Math.round(now - this.seekStartedAt),
+          pumpRunning: this.pumpRunning,
+          pumpGeneration: this.pumpGeneration
+        }));
+      }
+      return;
+    }
+
+    var contextState = this.audioContext ? this.audioContext.state : 'none';
+    var audioStalled = !!(this.audioTrack && this.audioBasePtsUs !== null && !this.buffering && now - this.lastAudioProgressAt > 1200);
+    var pumpStalled = !!(this.pumpRunning && now - this.pumpLastProgressAt > 5000);
+    var needsLog = this.buffering || audioStalled || pumpStalled || !this.pumpRunning;
+
+    if (audioStalled && contextState !== 'running' && now - this.lastResumeAttemptAt > 750) {
+      this.lastResumeAttemptAt = now;
+      this.resumeAudio();
+    }
+    if (!this.pumpRunning && !this.destroyed) this.pump();
+
+    if (needsLog && now - this.lastStallLogAt > 2000) {
+      this.lastStallLogAt = now;
+      try {
+        console.warn('[mpvwasm-hybrid-state] ' + JSON.stringify({
+          version: VERSION,
+          buffering: this.buffering,
+          paused: this.paused,
+          context: contextState,
+          audioStalled: audioStalled,
+          pumpRunning: this.pumpRunning,
+          pumpStalled: pumpStalled,
+          throttle: this.throttleReason(),
+          elapsed: Math.round(this.elapsed * 1000) / 1000,
+          audioClockUs: this.audioClockUs,
+          audioBufferUs: this.audioBufferUs,
+          audioOutputPeak: Math.round(this.audioOutputPeak * 10000) / 10000,
+          audioProcessCalls: this.audioProcessCalls,
+          audioUnderruns: this.audioUnderruns,
+          audioWorkletPaused: this.audioWorkletPaused,
+          renderFps: this.renderFps,
+          decodeFps: this.decodeFps,
+          frameIntervalMs: this.lastFrameIntervalMs,
+          frameJitterMs: Math.round(this.frameIntervalJitterMs * 10) / 10,
+          maxFrameIntervalMs: Math.round(this.maxFrameIntervalMs * 10) / 10,
+          videoQueue: this.frameQueue.length,
+          pendingVideoPackets: this.pendingVideoPackets.length,
+          decodeQueue: this.videoDecoder ? this.videoDecoder.decodeQueueSize : 0,
+          packetsRead: this.packetsRead
+        }));
+      } catch (_) { }
+    }
   };
 
   HybridWebCodecsPlayer.prototype.emitElapsed = function (force) {
@@ -1092,14 +1389,22 @@
       packetsRead: this.packetsRead,
       lastSeekReadyMs: this.lastSeekReadyMs,
       videoQueue: this.frameQueue.length,
+      pendingVideoPackets: this.pendingVideoPackets.length,
       decodeQueue: this.videoDecoder ? this.videoDecoder.decodeQueueSize : 0,
       audioBufferUs: this.audioBufferUs,
+      audioOutputPeak: this.audioOutputPeak,
+      audioProcessCalls: this.audioProcessCalls,
+      audioUnderruns: this.audioUnderruns,
+      audioWorkletPaused: this.audioWorkletPaused,
       frameIntervalMs: this.lastFrameIntervalMs,
       frameJitterMs: Math.round(this.frameIntervalJitterMs * 10) / 10,
       maxFrameIntervalMs: Math.round(this.maxFrameIntervalMs * 10) / 10,
       audioSyncPaused: this.audioSyncPaused,
       buffering: this.buffering,
       audioDecoder: this.audioDecoderMode,
+      audioContextState: this.audioContext ? this.audioContext.state : 'none',
+      pumpRunning: this.pumpRunning,
+      throttleReason: this.throttleReason(),
       renderer: this.renderer ? this.renderer.type : '2d',
       timing: this.timing,
       audioTrack: this.audioTrack && this.audioTrack.index,
@@ -1144,6 +1449,7 @@
     call(this.callbacks, 'status', 'hybrid seek ' + target.toFixed(3));
     this.markTiming('seek-start', { targetUs: targetUs, seekUs: seekUs });
     this.seeking = true;
+    this.seekStage = 'prepare';
     this.ready = false;
     this.audioSyncPaused = false;
     this.seekStartedAt = performance.now();
@@ -1152,26 +1458,86 @@
     this.seekTargetUs = targetUs;
     this.emitElapsed(true);
     clearFrames(this.frameQueue);
+    this.pendingVideoPackets = [];
     this.subtitleItems = [];
     this.seenVideoKeyframe = false;
     this.dropAudioBeforeUs = targetUs;
     this.resetAudioClock(null);
-    if (this.audioContext) await this.audioContext.suspend().catch(function () { });
+    this.lastAudioProgressAt = performance.now();
+    this.pumpLastProgressAt = performance.now();
+    this.seekStage = 'audio-suspend';
+    this.pauseAudio();
     this.configureVideoDecoder();
-    if (this.audioTrack) {
-      try { await this.closeSelectedAudioDecoder(); } catch (_) { }
+
+    var videoIndex = this.videoTrack && this.videoTrack.index;
+    var audioIndex = this.audioTrack && this.audioTrack.index;
+    var subtitleIndex = this.subtitleTrack && this.subtitleTrack.index;
+    if (this.audioDecoder) {
+      try { this.audioDecoder.close(); } catch (_) { }
+      this.audioDecoder = null;
     }
-    this.markTiming('seek-demux-start', { seekUs: seekUs });
-    var ret = await this.session.seek(seekUs);
+    this.audioDecoderMode = 'none';
+
+    this.markTiming('seek-demux-reset-start', { seekUs: seekUs });
+    this.seekStage = 'stop-pump';
+    var pumpStopped = await this.stopPump(2500);
+    var openError = null;
+    var ret = -1;
+    if (pumpStopped && this.session) {
+      this.seekStage = 'demux-seek';
+      this.markTiming('seek-demux-start', { seekUs: seekUs, reusedSession: true });
+      try {
+        ret = await withTimeout(this.session.seek(seekUs), 12000, 'demux seek timed out');
+      } catch (seekError) {
+        openError = seekError;
+        this.markTiming('seek-demux-retry', { error: String(seekError && (seekError.message || seekError) || seekError) });
+        try { if (this.session.abort) await this.session.abort(); } catch (_) { }
+        this.session = null;
+      }
+    } else if (this.session) {
+      try { if (this.session.abort) await this.session.abort(); } catch (_) { }
+      this.session = null;
+    }
+
+    for (var attempt = 0; attempt < 3 && !this.session; attempt++) {
+      try {
+        this.seekStage = 'open-session-' + (attempt + 1);
+        this.session = window.MpvWasmDemuxer.openWorker ? await window.MpvWasmDemuxer.openWorker(this.url) : await window.MpvWasmDemuxer.open(this.url);
+      } catch (error) {
+        openError = error;
+        if (attempt < 2) await sleep(attempt ? 900 : 350);
+      }
+    }
+    if (!this.session) {
+      this.seeking = false;
+      throw openError || new Error('demux reopen failed');
+    }
+
+    var tracks = this.session.info.tracks || [];
+    this.videoTrack = tracks.filter(function (track) { return Number(track.index) === Number(videoIndex); })[0] || tracks.filter(function (track) { return track.type === 'video'; })[0];
+    this.audioTrack = audioIndex === null || audioIndex === undefined ? null : tracks.filter(function (track) { return track.type === 'audio' && Number(track.index) === Number(audioIndex); })[0] || null;
+    this.subtitleTrack = subtitleIndex === null || subtitleIndex === undefined ? null : tracks.filter(function (track) { return track.type === 'subtitle' && Number(track.index) === Number(subtitleIndex); })[0] || null;
+    this.timing.worker = this.session.workerTiming || this.session.info.workerTiming || null;
+
+    if (ret < 0) {
+      this.seekStage = 'demux-seek';
+      this.markTiming('seek-demux-start', { seekUs: seekUs, reusedSession: false });
+      ret = await withTimeout(this.session.seek(seekUs), 15000, 'demux seek retry timed out');
+    }
+    this.seekStage = 'demux-seek';
     this.markTiming('seek-demux-done', { ret: ret });
     if (ret < 0) call(this.callbacks, 'status', 'hybrid seek ret ' + ret);
     else call(this.callbacks, 'status', 'hybrid seek ok ' + (seekUs / 1000000).toFixed(3));
     if (this.audioTrack) {
+      this.seekStage = 'audio-open';
       var audioRet = await this.openSelectedAudioDecoder();
       this.markTiming('seek-audio-open', { ret: audioRet });
       if (audioRet < 0) call(this.callbacks, 'status', 'hybrid audio reopen ret ' + audioRet);
     }
+    this.markTiming('seek-demux-reset-done', { seekUs: seekUs });
+    this.seekStage = 'done';
     this.seeking = false;
+    this.pumpLastProgressAt = performance.now();
     this.pump();
   };
 
@@ -1180,18 +1546,50 @@
     if (this.audioNode) this.audioNode.port.postMessage({ type: 'volume', volume: this.volume });
   };
 
-  HybridWebCodecsPlayer.prototype.setAudioTrack = function (id) {
+  HybridWebCodecsPlayer.prototype.setAudioTrack = async function (id) {
     var index = Number(id);
     var track = (this.session.info.tracks || []).filter(function (item) {
       return item.type === 'audio' && Number(item.index) === index;
     })[0];
     if (!track || (this.audioTrack && track.index === this.audioTrack.index)) return Promise.resolve();
+    var currentUs = Math.max(0, this.currentClockUs());
+    var wasPlaying = !this.paused;
+    this.seeking = true;
+    this.seekStartedAt = performance.now();
+    this.seekStage = 'audio-track-stop-pump';
+    if (wasPlaying) {
+      this.buffering = true;
+      this.pauseAudio();
+      call(this.callbacks, 'buffering', true);
+    }
+    var pumpStopped = await this.stopPump(2500);
+    if (!pumpStopped) {
+      this.seeking = false;
+      this.seekStartedAt = 0;
+      this.audioTrack = track;
+      return this.seek(currentUs / 1000000);
+    }
+    if (this.session && this.session.packetQueue) this.session.packetQueue = [];
     this.audioTrack = track;
     this.audioTracks = (this.session.info.tracks || []).filter(function (item) { return item.type === 'audio'; }).map(function (item) {
       return mapAudioTrack(item, item.index === track.index);
     });
     call(this.callbacks, 'audioTracks', this.audioTracks);
-    return this.seek(this.elapsed);
+    this.seekStage = 'audio-track-open';
+    this.dropAudioBeforeUs = Math.max(0, currentUs - 100000);
+    this.pendingClockUs = currentUs;
+    this.resetAudioClock(null);
+    try {
+      await this.openSelectedAudioDecoder();
+      this.seekStage = 'audio-track-done';
+    } finally {
+      this.seeking = false;
+      this.seekStartedAt = 0;
+      this.pumpLastProgressAt = performance.now();
+      this.pump();
+      if (!wasPlaying) this.buffering = false;
+    }
+    return Promise.resolve();
   };
 
   HybridWebCodecsPlayer.prototype.setSubtitleTrack = function (id) {
@@ -1212,7 +1610,7 @@
     this.subtitleTracks.forEach(function (item) { item.selected = Number(item.index) === index; });
     this.subtitleItems = [];
     call(this.callbacks, 'subtitleTracks', this.subtitleTracks);
-    return this.seek(this.elapsed);
+    return Promise.resolve();
   };
 
   HybridWebCodecsPlayer.prototype.setOptions = function (callbacks) {
@@ -1223,11 +1621,12 @@
     this.destroyed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
     clearFrames(this.frameQueue);
+    this.pendingVideoPackets = [];
     try { if (this.videoDecoder) this.videoDecoder.close(); } catch (_) { }
     try { if (this.renderer) this.renderer.destroy(); } catch (_) { }
     try { await this.closeSelectedAudioDecoder(); } catch (_) { }
     try { if (this.audioNode) this.audioNode.disconnect(); } catch (_) { }
-    try { if (this.audioContext) await this.audioContext.close(); } catch (_) { }
+    try { if (this.audioContext && this.ownsAudioContext) await this.audioContext.close(); } catch (_) { }
     try { if (this.session) await this.session.close(); } catch (_) { }
     this.videoDecoder = null;
     this.renderer = null;

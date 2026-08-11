@@ -32,6 +32,9 @@
     <None Update="plugins\mpvwasm-lampa-player.js">
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </None>
+    <None Update="plugins\mpvwasm-lampa-loader.js">
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </None>
     <None Update="plugins\on.js">
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </None>

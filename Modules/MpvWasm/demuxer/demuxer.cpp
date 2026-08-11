@@ -97,11 +97,12 @@ EM_JS(int, js_read_range, (const char* url_ptr, double offset, int length, uint8
       HEAPU8.set(cache.bytes.subarray(from, from + length), out_ptr);
       return length;
     }
-    var fetchLength = Math.max(length, 4 * 1024 * 1024);
+    var fetchLength = Math.max(length, 1024 * 1024);
     var fetchEnd = start + fetchLength - 1;
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, false);
     xhr.responseType = 'arraybuffer';
+    try { xhr.timeout = 12000; } catch (e) {}
     xhr.setRequestHeader('Range', 'bytes=' + start + '-' + fetchEnd);
     xhr.send(null);
     if (xhr.status !== 206 && xhr.status !== 200) return -1;
@@ -395,29 +396,53 @@ int demux_audio_open(int stream_index) {
   return 0;
 }
 
+static int append_audio_frame_pcm() {
+  int out_samples = swr_get_out_samples(g.swr, g.audio_frame->nb_samples);
+  if (out_samples <= 0) {
+    av_frame_unref(g.audio_frame);
+    return 0;
+  }
+
+  std::vector<float> converted_pcm((size_t)out_samples * (size_t)g.audio_channels, 0.0f);
+  uint8_t* out_planes[1] = { reinterpret_cast<uint8_t*>(converted_pcm.data()) };
+  int converted = swr_convert(g.swr, out_planes, out_samples, (const uint8_t**)g.audio_frame->extended_data, g.audio_frame->nb_samples);
+  av_frame_unref(g.audio_frame);
+  if (converted < 0) return converted;
+
+  converted_pcm.resize((size_t)converted * (size_t)g.audio_channels);
+  g.audio_pcm.insert(g.audio_pcm.end(), converted_pcm.begin(), converted_pcm.end());
+  g.audio_samples += converted;
+  return converted;
+}
+
+static int drain_audio_frames() {
+  while (true) {
+    int ret = avcodec_receive_frame(g.audio_ctx, g.audio_frame);
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) return 0;
+    if (ret < 0) return ret;
+    ret = append_audio_frame_pcm();
+    if (ret < 0) return ret;
+  }
+}
+
 EMSCRIPTEN_KEEPALIVE
 int demux_audio_decode_current_packet() {
   g.audio_samples = 0;
+  g.audio_pcm.clear();
   if (!g.audio_ctx || !g.swr || !g.audio_frame || !g.packet) return -1;
   if (g.packet->stream_index != g.audio_stream) return 0;
 
   int ret = avcodec_send_packet(g.audio_ctx, g.packet);
+  if (ret == AVERROR(EAGAIN)) {
+    ret = drain_audio_frames();
+    if (ret < 0) return ret;
+    ret = avcodec_send_packet(g.audio_ctx, g.packet);
+  }
   if (ret < 0) return ret;
 
-  ret = avcodec_receive_frame(g.audio_ctx, g.audio_frame);
-  if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) return 0;
+  ret = drain_audio_frames();
   if (ret < 0) return ret;
-
-  int out_samples = swr_get_out_samples(g.swr, g.audio_frame->nb_samples);
-  if (out_samples <= 0) return 0;
-  g.audio_pcm.assign((size_t)out_samples * (size_t)g.audio_channels, 0.0f);
-  uint8_t* out_planes[1] = { reinterpret_cast<uint8_t*>(g.audio_pcm.data()) };
-  int converted = swr_convert(g.swr, out_planes, out_samples, (const uint8_t**)g.audio_frame->extended_data, g.audio_frame->nb_samples);
-  av_frame_unref(g.audio_frame);
-  if (converted < 0) return converted;
-  g.audio_samples = converted;
-  g.audio_pcm.resize((size_t)converted * (size_t)g.audio_channels);
-  return converted;
+  return g.audio_samples;
 }
 
 EMSCRIPTEN_KEEPALIVE float* demux_audio_pcm_ptr() { return g.audio_pcm.empty() ? nullptr : g.audio_pcm.data(); }

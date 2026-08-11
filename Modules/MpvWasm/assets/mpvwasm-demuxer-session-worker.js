@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260709-04-buffering';
+  var VERSION = '20260723-42-continuous-av';
   var modulePromise = null;
   var module = null;
   var info = null;

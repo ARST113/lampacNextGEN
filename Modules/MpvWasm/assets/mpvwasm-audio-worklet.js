@@ -11,7 +11,11 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
     this.playedSamples = 0;
     this.queuedSamples = 0;
     this.volume = 1;
+    this.paused = true;
     this.lastReportFrame = 0;
+    this.processCalls = 0;
+    this.underruns = 0;
+    this.outputPeak = 0;
 
     this.port.onmessage = (event) => {
       const data = event.data || {};
@@ -23,12 +27,19 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
         this.hasBasePts = !!data.hasBasePts;
         this.playedSamples = 0;
         this.queuedSamples = 0;
+        this.outputPeak = 0;
         this.report(true);
         return;
       }
 
       if (data.type === 'volume') {
         this.volume = Math.max(0, Math.min(1, Number(data.volume || 0)));
+        return;
+      }
+
+      if (data.type === 'state') {
+        this.paused = !!data.paused;
+        this.report(true);
         return;
       }
 
@@ -92,15 +103,25 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
       bufferSamples,
       bufferUs: Math.round(bufferSamples / rate * 1000000),
       sampleRate: rate,
-      channels: this.sourceChannels
+      channels: this.sourceChannels,
+      paused: this.paused,
+      processCalls: this.processCalls,
+      underruns: this.underruns,
+      outputPeak: this.outputPeak
     });
   }
 
   process(inputs, outputs) {
     const output = outputs[0];
     if (!output || !output.length) return true;
+    this.processCalls++;
+    if (this.paused) {
+      this.report(false);
+      return true;
+    }
     const frames = output[0].length;
     let produced = 0;
+    let peak = 0;
 
     for (let i = 0; i < frames; i++) {
       const block = this.nextBlock();
@@ -109,6 +130,7 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
       for (let ch = 0; ch < output.length; ch++) {
         const value = this.sampleAt(block, this.currentOffset, ch) * this.volume;
         output[ch][i] = Math.max(-1, Math.min(1, value));
+        peak = Math.max(peak, Math.abs(output[ch][i]));
       }
 
       this.currentOffset++;
@@ -121,6 +143,8 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
     }
 
     if (produced) this.playedSamples += produced;
+    if (produced < frames) this.underruns++;
+    this.outputPeak = Math.max(peak, this.outputPeak * 0.85);
     this.report(false);
     return true;
   }

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260709-04-buffering';
+  var VERSION = '20260723-42-continuous-av';
   var modulePromise = null;
 
   function loadScript(src) {
@@ -57,7 +57,7 @@
     this.pending = {};
     this.closed = false;
     this.packetQueue = [];
-    this.batchLimit = 64;
+    this.batchLimit = 16;
     var self = this;
     this.tracks.forEach(function (track) {
       self.trackByIndex[track.index] = track;
@@ -127,6 +127,19 @@
       try { worker.terminate(); } catch (_) { }
       return 0;
     });
+  };
+
+  WorkerDemuxSession.prototype.abort = function () {
+    if (this.closed) return Promise.resolve(0);
+    this.closed = true;
+    var error = new Error('demux worker aborted');
+    Object.keys(this.pending).forEach(function (id) {
+      this.pending[id].reject(error);
+      delete this.pending[id];
+    }, this);
+    this.packetQueue = [];
+    try { this.worker.terminate(); } catch (_) { }
+    return Promise.resolve(0);
   };
 
   DemuxSession.prototype.readPacket = function () {
@@ -202,7 +215,14 @@
     if (typeof Worker !== 'function') return open(url);
     var worker = new Worker('/mpvwasm/assets/mpvwasm-demuxer-session-worker.js?v=' + VERSION, { name: 'mpvwasm-demuxer-session' });
     var session = new WorkerDemuxSession(worker, {});
-    var info = await session.call('open', { url: absoluteUrl(url) });
+    var info;
+    try {
+      info = await session.call('open', { url: absoluteUrl(url) });
+    } catch (error) {
+      session.closed = true;
+      try { worker.terminate(); } catch (_) { }
+      throw error;
+    }
     session.info = info || {};
     session.tracks = session.info.tracks || [];
     session.trackByIndex = {};

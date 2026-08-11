@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260708-87-range-cache';
+  var VERSION = '20260723-42-continuous-av';
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -41,9 +41,26 @@
   }
 
   function hevcCodec(track) {
+    var profile = Number(track && track.profile || 1);
+    if (!isFinite(profile) || profile <= 0) profile = 1;
     var level = Number(track && track.level || 153);
     if (!isFinite(level) || level <= 0) level = 153;
-    return 'hvc1.1.6.L' + level + '.B0';
+    return 'hvc1.' + profile + '.' + (profile === 2 ? 4 : 6) + '.L' + level + '.B0';
+  }
+
+  function hevcCodecFromHvcC(description, sampleEntry) {
+    if (!description || description.length < 23 || description[0] !== 1) return null;
+    var profileByte = description[1];
+    var profileSpace = profileByte >> 6;
+    var tierFlag = (profileByte >> 5) & 1;
+    var profileIdc = profileByte & 0x1f;
+    var compat = ((description[2] << 24) | (description[3] << 16) | (description[4] << 8) | description[5]) >>> 0;
+    var level = description[12];
+    var constraints = '';
+    for (var i = 6; i < 12; i++) constraints += hex(description[i]);
+    constraints = constraints.replace(/(00)+$/g, '') || '0';
+    var space = profileSpace === 1 ? 'A' : (profileSpace === 2 ? 'B' : (profileSpace === 3 ? 'C' : ''));
+    return sampleEntry + '.' + space + profileIdc + '.' + compat.toString(16).toUpperCase() + '.' + (tierFlag ? 'H' : 'L') + level + '.' + constraints.toUpperCase();
   }
 
   function videoConfigs(track) {
@@ -51,29 +68,39 @@
     var codec = String(track.codecName || '').toLowerCase();
     var base = {
       codedWidth: Number(track.width || 0),
-      codedHeight: Number(track.height || 0),
-      description: description,
-      hardwareAcceleration: 'prefer-hardware'
+      codedHeight: Number(track.height || 0)
     };
 
+    function candidates(codecName, extra) {
+      return ['prefer-hardware', 'no-preference', ''].map(function (hardwareAcceleration) {
+        var config = Object.assign({}, base, extra || {}, { codec: codecName });
+        if (description && description.length) config.description = description;
+        if (hardwareAcceleration) config.hardwareAcceleration = hardwareAcceleration;
+        return config;
+      });
+    }
+
     if (codec === 'h264') {
-      var avc = Object.assign({}, base, { codec: avcCodec(track, description), avc: { format: 'avc' } });
-      return [avc, Object.assign({}, base, { codec: avc.codec })];
+      return candidates(avcCodec(track, description), { avc: { format: 'avc' } });
     }
     if (codec === 'hevc') {
-      return [
-        Object.assign({}, base, { codec: hevcCodec(track), hevc: { format: 'hevc' } }),
-        Object.assign({}, base, { codec: hevcCodec(track) }),
-        Object.assign({}, base, { codec: 'hvc1.1.6.L153.B0' }),
-        Object.assign({}, base, { codec: 'hev1.1.6.L153.B0' })
-      ];
+      var codecs = [
+        hevcCodecFromHvcC(description, 'hvc1'),
+        hevcCodecFromHvcC(description, 'hev1'),
+        hevcCodec(track),
+        hevcCodec(track).replace(/^hvc1/, 'hev1')
+      ].filter(function (item, index, list) { return item && list.indexOf(item) === index; });
+      return codecs.reduce(function (all, codecName) { return all.concat(candidates(codecName)); }, []);
     }
-    if (codec === 'av1') return [Object.assign({}, base, { codec: 'av01.0.12M.08' })];
-    if (codec === 'vp9') return [Object.assign({}, base, { codec: 'vp09.00.51.08' })];
+    if (codec === 'av1') return candidates('av01.0.12M.08');
+    if (codec === 'vp9') return candidates('vp09.00.51.08');
     return [];
   }
 
   async function supportedConfig(track) {
+    if (window.HybridWebCodecsBackend && window.HybridWebCodecsBackend.supportedConfig) {
+      return window.HybridWebCodecsBackend.supportedConfig(track);
+    }
     if (typeof VideoDecoder !== 'function') return null;
     var configs = videoConfigs(track);
     for (var i = 0; i < configs.length; i++) {
@@ -88,6 +115,37 @@
       } catch (_) { }
     }
     return null;
+  }
+
+  function hevcSampleInfo(data, lengthSize) {
+    var empty = { valid: false, keyframe: false, keyData: data };
+    if (!data || !data.byteLength) return empty;
+    lengthSize = Number(lengthSize || 4);
+    if (lengthSize < 1 || lengthSize > 4) lengthSize = 4;
+    var offset = 0;
+    var units = [];
+    while (offset + lengthSize <= data.byteLength) {
+      var start = offset;
+      var size = 0;
+      for (var i = 0; i < lengthSize; i++) size = (size * 256) + data[offset + i];
+      offset += lengthSize;
+      if (!size || offset + size > data.byteLength) return empty;
+      units.push({ start: start, type: (data[offset] >> 1) & 0x3f });
+      offset += size;
+    }
+    if (!units.length || offset !== data.byteLength) return empty;
+    var firstIrap = -1;
+    for (var j = 0; j < units.length; j++) {
+      if (units[j].type >= 16 && units[j].type <= 23) {
+        firstIrap = j;
+        break;
+      }
+    }
+    return {
+      valid: true,
+      keyframe: firstIrap >= 0,
+      keyData: firstIrap > 0 ? data.subarray(units[firstIrap].start) : data
+    };
   }
 
   async function decodeVideoProbe(url, options) {
@@ -145,14 +203,19 @@
       var packet = session.readPacket();
       if (!packet) break;
       if (packet.streamIndex !== videoTrack.index) continue;
-      if (!seenKeyframe && !packet.keyframe) continue;
+      var hevcInfo = config._mpvwasmHevc
+        ? hevcSampleInfo(packet.data, config._mpvwasmNalLengthSize)
+        : null;
+      var keyframe = hevcInfo && hevcInfo.valid ? hevcInfo.keyframe : !!packet.keyframe;
+      if (!seenKeyframe && !keyframe) continue;
+      var firstChunk = !seenKeyframe;
       seenKeyframe = true;
       var timestamp = packet.ptsUs > -9000000000000000 ? packet.ptsUs : packet.dtsUs;
       decoder.decode(new EncodedVideoChunk({
-        type: packet.keyframe ? 'key' : 'delta',
+        type: keyframe ? 'key' : 'delta',
         timestamp: timestamp,
         duration: packet.durationUs > 0 ? packet.durationUs : undefined,
-        data: packet.data
+        data: firstChunk && hevcInfo && hevcInfo.keyframe ? hevcInfo.keyData : packet.data
       }));
       submitted++;
       if (decoder.decodeQueueSize > 16) await new Promise(function (resolve) { setTimeout(resolve, 0); });
