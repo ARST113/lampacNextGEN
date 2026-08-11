@@ -89,20 +89,26 @@ namespace Lampac.Modules.Audiobooks
 
         internal static HttpClient CreateClient(bool useProxy)
         {
+            var configuredProxy = Environment.GetEnvironmentVariable("AUDIOBOOK_PROXY");
+            Uri? proxyUri = null;
+            var hasConfiguredProxy = useProxy &&
+                Uri.TryCreate(configuredProxy, UriKind.Absolute, out proxyUri);
             var handler = new SocketsHttpHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-                UseProxy = useProxy
+                UseProxy = hasConfiguredProxy,
+                ConnectTimeout = TimeSpan.FromSeconds(8)
             };
 
-            if (useProxy)
+            if (hasConfiguredProxy)
             {
                 try
                 {
-                    handler.Proxy = new WebProxy("socks5://89.106.89.41:65525");
+                    handler.Proxy = new WebProxy(proxyUri!);
                 }
-                catch (Exception ex)
+                catch
                 {
+                    handler.UseProxy = false;
                 }
             }
 
@@ -483,6 +489,36 @@ namespace Lampac.Modules.Audiobooks
             );
         }
 
+        private static string AknigaCryptoJsDecrypt(string payload, string passphrase)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+                return string.Empty;
+
+            using var json = JsonDocument.Parse(payload);
+            var root = json.RootElement;
+            var ciphertext = Convert.FromBase64String(root.GetProperty("ct").GetString() ?? string.Empty);
+            var salt = Convert.FromHexString(root.GetProperty("s").GetString() ?? string.Empty);
+            var evp = AknigaEvpBytesToKey(Encoding.UTF8.GetBytes(passphrase), salt, 32, 16);
+
+            using var aes = Aes.Create();
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+            aes.Key = evp.key;
+            aes.IV = evp.iv;
+
+            using var decryptor = aes.CreateDecryptor();
+            var plainBytes = decryptor.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
+            var plain = Encoding.UTF8.GetString(plainBytes).Trim();
+            try
+            {
+                return JsonSerializer.Deserialize<string>(plain) ?? plain.Trim('"');
+            }
+            catch
+            {
+                return plain.Trim('"').Replace("\\/", "/");
+            }
+        }
+
         private static (byte[] key, byte[] iv) AknigaEvpBytesToKey(byte[] password, byte[] salt, int keyLen, int ivLen)
         {
             using var md5 = System.Security.Cryptography.MD5.Create();
@@ -613,6 +649,16 @@ namespace Lampac.Modules.Audiobooks
 
                 using var ajaxDoc = System.Text.Json.JsonDocument.Parse(ajaxJson);
                 var root = ajaxDoc.RootElement;
+                var hlsUrl = string.Empty;
+                if (root.TryGetProperty("hres", out var hresEl))
+                {
+                    var encryptedHls = hresEl.GetString();
+                    if (!string.IsNullOrWhiteSpace(encryptedHls))
+                    {
+                        try { hlsUrl = AknigaCryptoJsDecrypt(encryptedHls, Passphrase); }
+                        catch { hlsUrl = string.Empty; }
+                    }
+                }
 
                 if (root.TryGetProperty("author", out var authorEl))
                 {
@@ -723,6 +769,23 @@ namespace Lampac.Modules.Audiobooks
                     {
                         nestedDoc?.Dispose();
                     }
+                }
+
+                if (
+                    !string.IsNullOrWhiteSpace(hlsUrl) &&
+                    Uri.TryCreate(hlsUrl, UriKind.Absolute, out _)
+                )
+                {
+                    var totalDuration = items.Select(item => item.endTime).DefaultIfEmpty(0).Max();
+                    items.Clear();
+                    items.Add(new AudiobookChapter
+                    {
+                        fileurl = hlsUrl,
+                        fileIndex = 0,
+                        title = SafeName(string.IsNullOrWhiteSpace(nameValue) ? "Аудиокнига" : nameValue),
+                        startTime = 0,
+                        endTime = totalDuration
+                    });
                 }
             }
             catch (Exception ex)
@@ -1520,29 +1583,30 @@ namespace Lampac.Modules.Audiobooks
         public static readonly IReadOnlyDictionary<string, AudioProviderContract> Providers = new Dictionary<string, AudioProviderContract>(StringComparer.OrdinalIgnoreCase)
         {
             ["izibuk_graphql"] = new AudioProviderContract { id = "izibuk_graphql", root = "https://api.izib.uk/graphql/", search = "GET booksSearch(offset,count,q) + ru_audioknigi_app=1", list_selectors = "GraphQL JSON", detail_selectors = "book(id){authors,readers,genre,serie,files.full/files.mobile}", headers = AudioBookHeadersProfile.IziMp3, enabled = true },
-            ["pda_izibuk_html"] = new AudioProviderContract { id = "pda_izibuk_html", root = "https://pda.izib.uk", search = "GET /search?q=<query>", list_selectors = "div[id~=^book[0-9]*$], div._ccb9b7, div._cb0a41, div._3dc935 > a", detail_selectors = "mp3_url_prefix, [itemprop=description], script var player", headers = AudioBookHeadersProfile.PdaIzibuk },
+            ["pda_izibuk_html"] = new AudioProviderContract { id = "pda_izibuk_html", root = "https://pda.izib.uk", search = "GET /search?q=<query>", list_selectors = "div[id~=^book[0-9]*$], div._ccb9b7, div._cb0a41, div._3dc935 > a", detail_selectors = "mp3_url_prefix, [itemprop=description], script var player", headers = AudioBookHeadersProfile.PdaIzibuk, enabled = true },
             ["archive_org"] = new AudioProviderContract { id = "archive_org", root = "https://archive.org", search = "GET advancedsearch.php output=json", list_selectors = "JSON description, identifier, mediatype, title", detail_selectors = "metadata files, div[itemprop=hasPart], meta[itemprop=name/duration]", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
             ["akniga"] = new AudioProviderContract { id = "akniga", root = "https://akniga.org", search = "legacy parser search", list_selectors = "legacy AknigaModule", detail_selectors = "legacy AknigaModule playlist", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
             ["knigavuhe"] = new AudioProviderContract { id = "knigavuhe", root = "https://knigavuhe.org", search = "legacy parser search", list_selectors = "legacy KnigaVuheModule", detail_selectors = "legacy KnigaVuheModule playlist", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
             ["yakniga"] = new AudioProviderContract { id = "yakniga", root = "https://yakniga.org", search = "legacy parser search", list_selectors = "legacy YaKnigaModule", detail_selectors = "legacy YaKnigaModule playlist", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
-            ["audioboo_org"] = new AudioProviderContract { id = "audioboo_org", root = "https://audioboo.org", search = "DLE POST /index.php?do=search", list_selectors = "article.card, a.card__img, h2.card__title", detail_selectors = "header.page__header, div.page__text, script var player", headers = AudioBookHeadersProfile.Audioboo, enabled = false, egress = "ru" },
-            ["poleknig_com"] = new AudioProviderContract { id = "poleknig_com", root = "https://poleknig.com", search = "GET /?q=<query>&p=<page>", list_selectors = "div.media, a.book-title, img.cover", detail_selectors = "script var player, div.row.book-reader, div.description", headers = AudioBookHeadersProfile.PoleknigMp3, enabled = false },
-            ["otrub_in"] = new AudioProviderContract { id = "otrub_in", root = "https://otrub.in", search = "GET /search.html?q=<query>&p=<page>", list_selectors = "div._8a09a3, div._dad4fa, a._3dc935", detail_selectors = "[itemprop=description/name], script var player", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false, egress = "ru" },
-            ["slushat_knigi_com"] = new AudioProviderContract { id = "slushat_knigi_com", root = "https://slushat-knigi.com", search = "DLE POST /index.php?do=search", list_selectors = "div.sect__content, a.poster-item", detail_selectors = "header.page__header, script var player file:.txt", headers = AudioBookHeadersProfile.SlushatMp3, enabled = false, egress = "ru" },
-            ["slushkinvsem_ru"] = new AudioProviderContract { id = "slushkinvsem_ru", root = "https://slushkinvsem.ru", search = "DLE POST /index.php?do=search", list_selectors = "span.navigation, div.thumb-in, a.thumb-caption", detail_selectors = "div.dleaudioplayer li[data-title,data-url], strDecode", headers = AudioBookHeadersProfile.Slushkinvsem, enabled = false, egress = "ru" },
-            ["audioknigi_pro"] = new AudioProviderContract { id = "audioknigi_pro", root = "https://audioknigi.pro", search = "DLE POST /index.php?do=search", list_selectors = "div#pages-load, div.short.short-nm, a.name-kniga", detail_selectors = "div.dleaudioplayer li[data-title,data-url], script var player", headers = AudioBookHeadersProfile.AudioknigiPro, enabled = false, egress = "ru" },
-            ["audioknigivse_ru"] = new AudioProviderContract { id = "audioknigivse_ru", root = "https://audioknigivse.ru", search = "DLE POST /index.php?do=search", list_selectors = "a.sres-wrap, div.short-item, a.short-link", detail_selectors = "div.dleaudioplayer > ul li, div.dleplyrplayer audio[src]", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false, egress = "ru" },
-            ["aume_ru"] = new AudioProviderContract { id = "aume_ru", root = "https://aume.ru", search = "Yandex site search searchid=2529512", list_selectors = "div.b-serp-item__content, a.b-serp-item__title-link", detail_selectors = "iframe /embed/ -> /details/, archive-like parts", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false, egress = "ru" },
-            ["knigoblud_club"] = new AudioProviderContract { id = "knigoblud_club", root = "https://www.knigoblud.club", search = "GET /search?q=<query>&page=<page>", list_selectors = "div.bookListItem, div#BL", detail_selectors = "script KB.playerInit, playlist/litres/src/duration", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false },
-            ["baza_knig_rip"] = new AudioProviderContract { id = "baza_knig_rip", root = "https://baza-knig.rip", search = "DLE POST /index.php?do=search", list_selectors = "div.short, div.short-img, div.short-title", detail_selectors = "script var player, strDecode, /engine/go.php?url=", headers = AudioBookHeadersProfile.BazaMp3, enabled = false, egress = "ru" },
-            ["uknig_com"] = new AudioProviderContract { id = "uknig_com", root = "https://uknig.com", search = "GET /?q=<query>&p=<page>", list_selectors = "div.col-xs-12, a.book-title, img.cover", detail_selectors = "script var player, file:, div.row.book-duration", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false },
+            ["audioboo_org"] = new AudioProviderContract { id = "audioboo_org", root = "https://audioboo.org", search = "DLE POST /index.php?do=search", list_selectors = "article.card, a.card__img, h2.card__title", detail_selectors = "header.page__header, div.page__text, script var player", headers = AudioBookHeadersProfile.Audioboo, enabled = true },
+            ["poleknig_com"] = new AudioProviderContract { id = "poleknig_com", root = "https://poleknig.com", search = "GET /?q=<query>&p=<page>", list_selectors = "div.media containing a.book-title, img.cover", detail_selectors = "script var player, div.row.book-reader, div.description", headers = AudioBookHeadersProfile.PoleknigMp3, enabled = true },
+            ["otrub_in"] = new AudioProviderContract { id = "otrub_in", root = "https://otrub.in", search = "GET /search.html?q=<query>&p=<page>", list_selectors = "div._8a09a3, div._dad4fa, a._3dc935", detail_selectors = "[itemprop=description/name], script var player", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
+            ["slushat_knigi_com"] = new AudioProviderContract { id = "slushat_knigi_com", root = "https://slushat-knigi.com", search = "DLE POST /index.php?do=search", list_selectors = "div.sect__content, a.poster-item", detail_selectors = "header.page__header, script var player file:.txt", headers = AudioBookHeadersProfile.SlushatMp3, enabled = true },
+            ["slushkinvsem_ru"] = new AudioProviderContract { id = "slushkinvsem_ru", root = "https://slushkinvsem.ru", search = "DLE POST /index.php?do=search with Beget cookie", list_selectors = "span.navigation, div.thumb-in, a.thumb-caption", detail_selectors = "div.dleaudioplayer li[data-title,data-url], strDecode", headers = AudioBookHeadersProfile.Slushkinvsem, enabled = true },
+            ["audioknigi_pro"] = new AudioProviderContract { id = "audioknigi_pro", root = "https://audioknigi.pro", search = "DLE POST /index.php?do=search", list_selectors = "div#pages-load, div.short.short-nm, a.name-kniga", detail_selectors = "div.dleaudioplayer li[data-title,data-url], script var player", headers = AudioBookHeadersProfile.AudioknigiPro, enabled = true },
+            ["audioknigivse_ru"] = new AudioProviderContract { id = "audioknigivse_ru", root = "https://audioknigivse.ru", search = "DLE POST /index.php?do=search", list_selectors = "a.sres-wrap, div.short-item, a.short-link", detail_selectors = "div.dleaudioplayer > ul li, div.dleplyrplayer audio[src]", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
+            ["aume_ru"] = new AudioProviderContract { id = "aume_ru", root = "https://aume.ru", search = "Yandex site search searchid=2529512", list_selectors = "div.b-serp-item__content, a.b-serp-item__title-link", detail_selectors = "iframe /embed/ -> /details/, archive-like parts", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
+            ["knigoblud_club"] = new AudioProviderContract { id = "knigoblud_club", root = "https://www.knigoblud.club", search = "GET /search?q=<query>&page=<page>", list_selectors = "div.bookListItem, div#BL", detail_selectors = "script KB.playerInit, playlist/src/duration", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
+            ["baza_knig_rip"] = new AudioProviderContract { id = "baza_knig_rip", root = "https://baza-knig.top", search = "DLE POST /index.php?do=search", list_selectors = "div.short, div.short-img, div.short-title", detail_selectors = "script var player, strDecode, /engine/go.php?url=", headers = AudioBookHeadersProfile.BazaMp3, enabled = true },
+            ["uknig_com"] = new AudioProviderContract { id = "uknig_com", root = "https://uknig.com", search = "GET /?q=<query>&p=<page>", list_selectors = "div.col-xs-12 containing a.book-title, img.cover", detail_selectors = "script var player, file:, div.row.book-duration", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
             ["mp3knig_net"] = new AudioProviderContract { id = "mp3knig_net", root = "https://mp3knig.net", search = "all-server selector article.movie-box > a", list_selectors = "article.movie-box > a, div.img > img", detail_selectors = "script var player, div.info > div.film", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false },
-            ["audiokniga_one"] = new AudioProviderContract { id = "audiokniga_one", root = "https://audiokniga.one", search = "DLE POST /index.php?do=search", list_selectors = "div.short-item, a.short-title, img.xfieldimage", detail_selectors = "script playerInit, fields url,duration,title", headers = AudioBookHeadersProfile.AudioknigaOne, enabled = false, egress = "ru" },
+            ["audiokniga_one"] = new AudioProviderContract { id = "audiokniga_one", root = "https://audiokniga.one", search = "DLE POST /index.php?do=search", list_selectors = "div.short-item, a.short-title, img.xfieldimage", detail_selectors = "script playerInit, fields url,duration,title", headers = AudioBookHeadersProfile.AudioknigaOne, enabled = true },
             ["listenbook_ru"] = new AudioProviderContract { id = "listenbook_ru", root = "https://listenbook.ru", search = "DLE POST /index.php?do=search", list_selectors = "div.main-news, div.main-news-title", detail_selectors = "div.dleplyrplayer audio[src], source/title/url", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false, egress = "ru" },
-            ["lis10book_com"] = new AudioProviderContract { id = "lis10book_com", root = "https://lis10book.com", search = "GET /audio/?_post_type_search_box= ; POST /wp-json/", list_selectors = "div.col-6, /audio/ links", detail_selectors = "playlist txt, fields file,title", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false },
+            ["lis10book_com"] = new AudioProviderContract { id = "lis10book_com", root = "https://lis10book.com", search = "GET /audio/?_post_type_search_box= ; POST /wp-json/", list_selectors = "div.col-6, /audio/ links", detail_selectors = "playlist txt, fields file,title", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
             ["m_knigavuhe_org"] = new AudioProviderContract { id = "m_knigavuhe_org", root = "https://m.knigavuhe.org", search = "detail/parser only", list_selectors = "", detail_selectors = "script var player, [itemprop=description], div.book_title", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
-            ["audiopolka_club"] = new AudioProviderContract { id = "audiopolka_club", root = "https://audiopolka.club", search = "detail/parser only", list_selectors = "", detail_selectors = "playlist, script KB.playerInit, div.book-page-title", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false },
-            ["author_today_fantlab"] = new AudioProviderContract { id = "author_today_fantlab", root = "https://author.today", search = "aux metadata only; fantlab.ru/searchmain", list_selectors = "author.today work/series; fantlab search-results", detail_selectors = "no audio playlist", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = false }
+            ["audiopolka_club"] = new AudioProviderContract { id = "audiopolka_club", root = "https://audiopolka.club", search = "GET /search/?q=<query>", list_selectors = "div.book-list-item, a.book-list-item-cover", detail_selectors = "playlist, script KB.playerInit, div.book-page-title", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
+            ["author_today"] = new AudioProviderContract { id = "author_today", root = "https://author.today", search = "auxiliary metadata search", list_selectors = "work and series search results", detail_selectors = "metadata only; no audio playlist", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true },
+            ["fantlab_ru"] = new AudioProviderContract { id = "fantlab_ru", root = "https://fantlab.ru", search = "auxiliary metadata searchmain", list_selectors = "search results and work cards", detail_selectors = "metadata only; no audio playlist", headers = AudioBookHeadersProfile.DefaultBrowser, enabled = true }
         };
     }
 
@@ -1597,6 +1661,7 @@ CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, edition_id TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS chapters (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, chapter_index INTEGER NOT NULL, title TEXT, duration_seconds INTEGER, audio_url TEXT, audio_url_hash TEXT, audio_url_checked_at TEXT, UNIQUE(source_id, chapter_index));
 CREATE TABLE IF NOT EXISTS duplicate_candidates (id TEXT PRIMARY KEY, left_edition_id TEXT NOT NULL, right_edition_id TEXT NOT NULL, confidence REAL NOT NULL, reason TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS crawler_runs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL, query TEXT NOT NULL, offset INTEGER NOT NULL, providers INTEGER NOT NULL, parallelism INTEGER NOT NULL, works INTEGER NOT NULL, error TEXT);
+CREATE TABLE IF NOT EXISTS cover_lookup_cache (work_id TEXT PRIMARY KEY, lookup_key TEXT NOT NULL, provider TEXT, cover_url TEXT, status TEXT NOT NULL, attempted_at TEXT NOT NULL, next_retry_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_audio_editions_work ON editions(work_id);
 CREATE INDEX IF NOT EXISTS idx_audio_sources_edition ON sources(edition_id);
 CREATE INDEX IF NOT EXISTS idx_audio_chapters_source ON chapters(source_id);
@@ -1605,7 +1670,9 @@ CREATE INDEX IF NOT EXISTS idx_audio_work_genres_work ON work_genres(work_id);
 CREATE INDEX IF NOT EXISTS idx_audio_work_series_work ON work_series(work_id);
 CREATE INDEX IF NOT EXISTS idx_audio_edition_narrators_edition ON edition_narrators(edition_id);
 CREATE INDEX IF NOT EXISTS idx_audio_works_updated ON works(updated_at);
+CREATE INDEX IF NOT EXISTS idx_audio_works_created ON works(created_at);
 CREATE INDEX IF NOT EXISTS idx_audio_crawler_runs_finished ON crawler_runs(finished_at);
+CREATE INDEX IF NOT EXISTS idx_audio_cover_lookup_retry ON cover_lookup_cache(status,next_retry_at);
 ";
                 command.ExecuteNonQuery();
 
@@ -1649,16 +1716,23 @@ CREATE INDEX IF NOT EXISTS idx_audio_crawler_runs_finished ON crawler_runs(finis
 
             if (work.series != null && !string.IsNullOrWhiteSpace(work.series.id))
             {
-                Exec(connection, tx, "INSERT INTO series(id,title,normalized_title,source_provider,source_external_id) VALUES($id,$title,$normalized,$provider,$external) ON CONFLICT(id) DO UPDATE SET title=$title,normalized_title=$normalized,source_provider=$provider,source_external_id=$external",
-                    ("$id", work.series.id), ("$title", work.series.title), ("$normalized", Normalize(work.series.title)), ("$provider", work.series.source_provider), ("$external", work.series.source_external_id));
-                Exec(connection, tx, "INSERT OR IGNORE INTO work_series(work_id,series_id) VALUES($work,$series)", ("$work", work.id), ("$series", work.series.id));
+                Exec(connection, tx, "DELETE FROM work_series WHERE work_id=$work", ("$work", work.id));
+                if (IsUsableSeriesTitle(work.series.title))
+                {
+                    Exec(connection, tx, "INSERT INTO series(id,title,normalized_title,source_provider,source_external_id) VALUES($id,$title,$normalized,$provider,$external) ON CONFLICT(id) DO UPDATE SET title=$title,normalized_title=$normalized,source_provider=$provider,source_external_id=$external",
+                        ("$id", work.series.id), ("$title", work.series.title), ("$normalized", Normalize(work.series.title)), ("$provider", work.series.source_provider), ("$external", work.series.source_external_id));
+                    Exec(connection, tx, "INSERT OR IGNORE INTO work_series(work_id,series_id) VALUES($work,$series)", ("$work", work.id), ("$series", work.series.id));
+                }
             }
 
             foreach (var edition in work.editions)
             {
+                SanitizeEditionNarrators(edition);
                 Exec(connection, tx, "INSERT INTO editions(id,work_id,edition_type,duration_seconds,chapter_count,chapter_fingerprint,quality_score,created_at,updated_at) VALUES($id,$work,$type,$duration,$chapters,$fingerprint,$quality,$now,$now) ON CONFLICT(id) DO UPDATE SET work_id=$work,edition_type=$type,duration_seconds=$duration,chapter_count=$chapters,chapter_fingerprint=$fingerprint,quality_score=$quality,updated_at=$now",
                     ("$id", edition.id), ("$work", work.id), ("$type", edition.edition_type), ("$duration", edition.duration_seconds), ("$chapters", edition.chapter_count), ("$fingerprint", edition.chapter_fingerprint), ("$quality", edition.quality_score), ("$now", now));
 
+                if (edition.narrators.Count > 0)
+                    Exec(connection, tx, "DELETE FROM edition_narrators WHERE edition_id=$edition", ("$edition", edition.id));
                 foreach (var narrator in edition.narrators)
                 {
                     UpsertPerson(connection, tx, narrator, now);
@@ -1669,6 +1743,9 @@ CREATE INDEX IF NOT EXISTS idx_audio_crawler_runs_finished ON crawler_runs(finis
                 {
                     Exec(connection, tx, "INSERT INTO sources(id,edition_id,provider,external_id,page_url,status,last_checked_at,last_success_at,fail_count,last_error) VALUES($id,$edition,$provider,$external,$url,$status,$now,$now,0,NULL) ON CONFLICT(id) DO UPDATE SET edition_id=$edition,provider=$provider,external_id=$external,page_url=$url,status=$status,last_checked_at=$now,last_success_at=$now,last_error=NULL",
                         ("$id", source.id), ("$edition", edition.id), ("$provider", source.provider), ("$external", source.external_id), ("$url", source.page_url), ("$status", source.status), ("$now", now));
+
+                    if (source.chapters.Count > 0)
+                        Exec(connection, tx, "DELETE FROM chapters WHERE source_id=$source", ("$source", source.id));
 
                     foreach (var chapter in source.chapters)
                     {
@@ -1682,13 +1759,26 @@ CREATE INDEX IF NOT EXISTS idx_audio_crawler_runs_finished ON crawler_runs(finis
             tx.Commit();
         }
 
+        private enum StoredWorkOrder
+        {
+            Balanced,
+            Latest,
+            Popular
+        }
+
         public List<AudioFdbWork> ListWorks(int limit, int offset, bool playableOnly = false, string genre = "")
             => SearchStoredWorks(string.Empty, genre, limit, offset, playableOnly);
+
+        public List<AudioFdbWork> ListLatestWorks(int limit, int offset, bool playableOnly = false, string genre = "")
+            => SearchStoredWorks(string.Empty, genre, limit, offset, playableOnly, order: StoredWorkOrder.Latest);
+
+        public List<AudioFdbWork> ListPopularWorks(int limit, int offset, bool playableOnly = false, string genre = "")
+            => SearchStoredWorks(string.Empty, genre, limit, offset, playableOnly, order: StoredWorkOrder.Popular);
 
         public List<AudioFdbWork> SearchWorks(string query, string genre, int limit, int offset, bool playableOnly = true)
             => SearchStoredWorks(query, genre, limit, offset, playableOnly);
 
-        private List<AudioFdbWork> SearchStoredWorks(string query, string genre, int limit, int offset, bool playableOnly, bool includeChapters = false)
+        private List<AudioFdbWork> SearchStoredWorks(string query, string genre, int limit, int offset, bool playableOnly, bool includeChapters = false, StoredWorkOrder order = StoredWorkOrder.Balanced)
         {
             limit = Math.Max(1, Math.Min(limit <= 0 ? 20 : limit, 50));
             offset = Math.Max(0, offset);
@@ -1784,23 +1874,27 @@ CREATE INDEX IF NOT EXISTS idx_audio_crawler_runs_finished ON crawler_runs(finis
         ELSE 5
     END,"
                     : string.Empty;
+                var playableCountOrder = @"COALESCE((
+        SELECT COUNT(*)
+        FROM editions e
+        JOIN sources s ON s.edition_id = e.id
+        JOIN chapters c ON c.source_id = s.id
+        WHERE e.work_id = w.id AND IFNULL(c.audio_url, '') <> ''
+    ), 0) DESC";
+                var qualityOrder = "COALESCE((SELECT MAX(e.quality_score) FROM editions e WHERE e.work_id = w.id), 0) DESC";
+                var seriesOrder = "COALESCE((SELECT s.title FROM work_series ws JOIN series s ON s.id = ws.series_id WHERE ws.work_id = w.id LIMIT 1), w.title)";
+                var catalogOrder = (!hasQuery && order == StoredWorkOrder.Latest)
+                    ? "w.created_at DESC,\n    w.updated_at DESC,\n    " + playableCountOrder + ",\n    " + qualityOrder + ",\n    w.title"
+                    : (!hasQuery && order == StoredWorkOrder.Popular)
+                        ? playableCountOrder + ",\n    " + qualityOrder + ",\n    w.created_at DESC,\n    w.title"
+                        : playableCountOrder + ",\n    " + qualityOrder + ",\n    " + seriesOrder + ",\n    w.updated_at DESC,\n    w.title";
                 var sql = @"
 SELECT w.id
 FROM works w
 " + (where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : string.Empty) + @"
 ORDER BY
     " + relevanceOrder + @"
-    COALESCE((
-        SELECT COUNT(*)
-        FROM editions e
-        JOIN sources s ON s.edition_id = e.id
-        JOIN chapters c ON c.source_id = s.id
-        WHERE e.work_id = w.id AND IFNULL(c.audio_url, '') <> ''
-    ), 0) DESC,
-    COALESCE((SELECT MAX(e.quality_score) FROM editions e WHERE e.work_id = w.id), 0) DESC,
-    COALESCE((SELECT s.title FROM work_series ws JOIN series s ON s.id = ws.series_id WHERE ws.work_id = w.id LIMIT 1), w.title),
-    w.updated_at DESC,
-    w.title
+    " + catalogOrder + @"
 LIMIT $take";
                 ids = Query(connection, sql, args.ToArray()).Select(row => row["id"]).ToList();
             }
@@ -1869,12 +1963,38 @@ LIMIT $take";
 
         public static List<AudioFdbWork> DeduplicateWorks(IEnumerable<AudioFdbWork> works)
         {
+            var prepared = works
+                .Where(w => w != null && !string.IsNullOrWhiteSpace(w.id))
+                .Select(NormalizeWorkMetadata)
+                .ToList();
+            var knownAuthorsByTitle = prepared
+                .GroupBy(WorkTitleKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .Select(WorkAuthorKey)
+                        .Where(key => !string.IsNullOrWhiteSpace(key))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList(),
+                    StringComparer.OrdinalIgnoreCase
+                );
             var result = new List<AudioFdbWork>();
             var index = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var work in works.Where(w => w != null && !string.IsNullOrWhiteSpace(w.id)))
+            foreach (var work in prepared)
             {
-                var key = DeduplicateKey(work);
+                var titleKey = WorkTitleKey(work);
+                var authorKey = WorkAuthorKey(work);
+                if (
+                    string.IsNullOrWhiteSpace(authorKey) &&
+                    knownAuthorsByTitle.TryGetValue(titleKey, out var knownAuthors) &&
+                    knownAuthors.Count == 1
+                )
+                    authorKey = knownAuthors[0];
+
+                var key = string.IsNullOrWhiteSpace(authorKey)
+                    ? titleKey
+                    : titleKey + "|" + authorKey;
                 if (!index.TryGetValue(key, out var existing))
                 {
                     index[key] = result.Count;
@@ -1901,36 +2021,60 @@ LIMIT $take";
 
         private static string DeduplicateKey(AudioFdbWork work)
         {
-            var title = NormalizeTitleKey(work.title);
-            var author = NormalizePersonKey(FirstNonEmpty(work.authors.FirstOrDefault()?.display_name ?? string.Empty, InlineAuthorFromTitle(work.title)));
+            var serialTitle = SerialTitleKey(work.title);
+            if (!string.IsNullOrWhiteSpace(serialTitle))
+                return serialTitle;
+
+            work = NormalizeWorkMetadata(work);
+            var title = WorkTitleKey(work);
+            var author = WorkAuthorKey(work);
             if (string.IsNullOrWhiteSpace(title))
                 return work.id;
 
-            var words = title.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length <= 1 && !string.IsNullOrWhiteSpace(author))
-                return title + "|" + author;
+            return string.IsNullOrWhiteSpace(author) ? title : title + "|" + author;
+        }
 
-            return title;
+        private static string WorkTitleKey(AudioFdbWork work)
+            => NormalizeTitleKey(CanonicalBookTitle(work.title, out _));
+
+        private static string WorkAuthorKey(AudioFdbWork work)
+            => NormalizePersonKey(FirstNonEmpty(
+                work.authors.FirstOrDefault()?.display_name ?? string.Empty,
+                InferAuthor(work.title, work.description),
+                InlineAuthorFromTitle(work.title)
+            ));
+
+        private static string SerialTitleKey(string value)
+        {
+            var normalized = Normalize(value);
+            var match = Regex.Match(normalized, @"^\s*\u0433\u043b\u0443\u0431\u0438\u043d\u0430\s+\u043f\u043e\u0433\u0440\u0443\u0436\u0435\u043d\u0438\u0435\s+(?<number>\d+)\b", RegexOptions.IgnoreCase);
+            return match.Success ? "\u0433\u043b\u0443\u0431\u0438\u043d\u0430 \u043f\u043e\u0433\u0440\u0443\u0436\u0435\u043d\u0438\u0435 " + match.Groups["number"].Value : string.Empty;
         }
 
         private static string InlineAuthorFromTitle(string value)
         {
             var match = Regex.Match(HttpUtility.HtmlDecode(value ?? string.Empty), @"(?i)\s+\u0430\u0432\u0442\u043e\u0440\s*[:\-]\s*(?<author>.+)$");
-            return match.Success ? match.Groups["author"].Value.Trim() : string.Empty;
+            if (match.Success)
+                return CleanPersonDisplay(match.Groups["author"].Value);
+
+            CanonicalBookTitle(value, out var leadingAuthor);
+            return leadingAuthor;
         }
 
         private static string NormalizePersonKey(string value)
         {
-            var words = Normalize(value).Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            var words = Normalize(CleanPersonDisplay(value)).Split(' ', StringSplitOptions.RemoveEmptyEntries)
                 .Where(w => w.Length > 1)
-                .Take(3)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(w => w, StringComparer.OrdinalIgnoreCase)
+                .Take(5)
                 .ToList();
             return string.Join(" ", words);
         }
 
         private static string NormalizeTitleKey(string value)
         {
-            var normalized = Normalize(value);
+            var normalized = Normalize(CanonicalBookTitle(value, out _));
             normalized = Regex.Replace(normalized, @"\b(\u0430\u0432\u0442\u043e\u0440|\u0447\u0438\u0442\u0430\u0435\u0442|\u0438\u0441\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c|\u043e\u0437\u0432\u0443\u0447\u0438\u0432\u0430\u0435\u0442)\b.*$", " ").Trim();
             normalized = Regex.Replace(normalized, @"\b(\u0430\u0443\u0434\u0438\u043e\u043a\u043d\u0438\u0433\u0430|\u0441\u043b\u0443\u0448\u0430\u0442\u044c|\u043e\u043d\u043b\u0430\u0439\u043d|mp3|\u043f\u043e\u043b\u043d\u0430\u044f|\u0432\u0435\u0440\u0441\u0438\u044f|\u043a\u043d\u0438\u0433\u0430)\b", " ");
             normalized = Regex.Replace(normalized, @"\b(автор|читает|исполнитель|озвучивает)\b.*$", " ").Trim();
@@ -1941,9 +2085,227 @@ LIMIT $take";
             };
             var words = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                 .Where(w => !stop.Contains(w) && !IsRussianTitleStopWord(w))
-                .Take(3)
+                .Take(8)
                 .ToList();
             return string.Join(" ", words);
+        }
+
+        private static AudioFdbWork NormalizeWorkMetadata(AudioFdbWork work)
+        {
+            if (work == null)
+                return work;
+
+            var originalTitle = work.title;
+            work.title = CanonicalBookTitle(originalTitle, out var leadingAuthor);
+            work.normalized_title = Normalize(work.title);
+
+            var author = FirstNonEmpty(
+                work.authors
+                    .Select(person => CleanPersonDisplay(person.display_name))
+                    .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? string.Empty,
+                InferAuthor(originalTitle, work.description),
+                leadingAuthor
+            );
+            work.authors.RemoveAll(person => string.IsNullOrWhiteSpace(CleanPersonDisplay(person.display_name)));
+            foreach (var person in work.authors)
+                person.display_name = CleanPersonDisplay(person.display_name);
+            DeduplicatePeopleInPlace(work.authors);
+
+            if (work.authors.Count == 0 && !string.IsNullOrWhiteSpace(author))
+            {
+                work.authors.Add(new AudioFdbPerson
+                {
+                    id = "person:normalized:author:" + StableHash(NormalizePersonKey(author)),
+                    display_name = author,
+                    kind = "author",
+                    source_provider = "normalized"
+                });
+            }
+
+            var inferredNarrator = InferNarrator(originalTitle, work.description);
+            foreach (var edition in work.editions)
+            {
+                edition.narrators.RemoveAll(person => string.IsNullOrWhiteSpace(CleanPersonDisplay(person.display_name)));
+                foreach (var person in edition.narrators)
+                    person.display_name = CleanPersonDisplay(person.display_name);
+                DeduplicatePeopleInPlace(edition.narrators);
+                SanitizeEditionNarrators(edition);
+
+                if (
+                    edition.narrators.Count == 0 &&
+                    !string.IsNullOrWhiteSpace(inferredNarrator) &&
+                    work.editions.Count == 1
+                )
+                {
+                    edition.narrators.Add(new AudioFdbPerson
+                    {
+                        id = "person:normalized:narrator:" + StableHash(NormalizePersonKey(inferredNarrator)),
+                        display_name = inferredNarrator,
+                        kind = "narrator",
+                        source_provider = "normalized"
+                    });
+                }
+            }
+
+            return work;
+        }
+
+        public static void SanitizeEditionNarrators(AudioFdbEdition edition)
+        {
+            if (edition == null || edition.narrators.Count <= 1)
+                return;
+
+            var evidenceKeys = edition.sources
+                .SelectMany(source => source.chapters)
+                .Take(16)
+                .SelectMany(chapter => new[]
+                {
+                    chapter.title ?? string.Empty,
+                    HttpUtility.UrlDecode(chapter.audio_url ?? string.Empty)
+                })
+                .SelectMany(value => Regex.Matches(
+                        value,
+                        @"(?i)\b(?:читает|чтец|исполняет|исполнитель|озвучивает|озвучка)\s*[:—–-]?\s*(?<name>[\p{L}'’.-]+(?:\s+[\p{L}'’.-]+){0,3})"
+                    )
+                    .Cast<Match>()
+                    .Select(match => NormalizePersonKey(match.Groups["name"].Value)))
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (evidenceKeys.Count == 0)
+                return;
+
+            var matched = edition.narrators.Where(narrator =>
+            {
+                var narratorWords = NormalizePersonKey(narrator.display_name)
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return evidenceKeys.Any(evidence =>
+                {
+                    var evidenceWords = evidence
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    return evidenceWords.Count > 0 && evidenceWords.All(narratorWords.Contains);
+                });
+            }).ToList();
+            if (matched.Count == 0 || matched.Count == edition.narrators.Count)
+                return;
+
+            edition.narrators.Clear();
+            edition.narrators.AddRange(matched);
+        }
+
+        private static void DeduplicatePeopleInPlace(List<AudioFdbPerson> people)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            people.RemoveAll(person =>
+            {
+                var key = NormalizePersonKey(person.display_name);
+                return string.IsNullOrWhiteSpace(key) || !seen.Add(key);
+            });
+        }
+
+        private static string CanonicalBookTitle(string value, out string leadingAuthor)
+        {
+            var title = HttpUtility.HtmlDecode(value ?? string.Empty).Trim();
+            leadingAuthor = string.Empty;
+            title = Regex.Replace(
+                title,
+                @"^\s*Rated\s+\d+(?:[.,]\d+)?\s+out\s+of\s+5\s+",
+                string.Empty,
+                RegexOptions.IgnoreCase
+            ).Trim();
+
+            var match = Regex.Match(
+                title,
+                @"^\s*(?<author>(?:[\p{Lu}Ё][\p{L}'’.-]*)(?:\s+[\p{Lu}Ё][\p{L}'’.-]*){1,4})\s*[-–—]\s*(?<title>.+)$"
+            );
+            if (match.Success && LooksLikePersonName(match.Groups["author"].Value))
+            {
+                leadingAuthor = CleanPersonDisplay(match.Groups["author"].Value);
+                title = match.Groups["title"].Value.Trim();
+            }
+
+            var trailingAuthor = Regex.Match(
+                title,
+                @"^(?<title>.+?)\s*/\s*(?<author>(?:[\p{Lu}Ё][\p{L}'’.-]*)(?:\s+[\p{Lu}Ё][\p{L}'’.-]*){1,4})\s*$"
+            );
+            if (trailingAuthor.Success && LooksLikePersonName(trailingAuthor.Groups["author"].Value))
+            {
+                if (string.IsNullOrWhiteSpace(leadingAuthor))
+                    leadingAuthor = CleanPersonDisplay(trailingAuthor.Groups["author"].Value);
+                title = trailingAuthor.Groups["title"].Value.Trim();
+            }
+
+            title = Regex.Replace(
+                title,
+                @"\s+\b(?:автор|author)\s*[:—–-].*$",
+                string.Empty,
+                RegexOptions.IgnoreCase
+            ).Trim(' ', '-', '–', '—', ':', '.', ',');
+            return string.IsNullOrWhiteSpace(title) ? value?.Trim() ?? string.Empty : title;
+        }
+
+        private static string InferAuthor(string title, string description)
+        {
+            var text = HttpUtility.HtmlDecode((title ?? string.Empty) + "\n" + (description ?? string.Empty));
+            var surname = Regex.Match(text, @"(?i)\bфамилия\s+автора\s*[:—–-]\s*(?<v>[\p{L}'’.-]{2,40})").Groups["v"].Value;
+            var firstName = Regex.Match(text, @"(?i)\bимя\s+автора\s*[:—–-]\s*(?<v>[\p{L}'’.-]{2,40})").Groups["v"].Value;
+            var paired = CleanPersonDisplay((firstName + " " + surname).Trim());
+            if (LooksLikePersonName(paired))
+                return paired;
+
+            var explicitAuthor = Regex.Match(
+                text,
+                @"(?i)\b(?:автор(?:ы)?|писатель|author)\s*[:—–-]\s*(?<v>.{2,100}?)(?=\s+(?:читает|чтец|исполнитель|жанр|цикл|серия|год|издательство|описание)\s*[:—–-]|\r|\n|\||;|$)"
+            ).Groups["v"].Value;
+            explicitAuthor = CleanPersonDisplay(explicitAuthor);
+            if (LooksLikePersonName(explicitAuthor))
+                return explicitAuthor;
+
+            CanonicalBookTitle(title, out var leadingAuthor);
+            return LooksLikePersonName(leadingAuthor) ? leadingAuthor : string.Empty;
+        }
+
+        private static string InferNarrator(string title, string description)
+        {
+            var text = HttpUtility.HtmlDecode((title ?? string.Empty) + "\n" + (description ?? string.Empty));
+            var match = Regex.Match(
+                text,
+                @"(?i)\b(?:исполнитель|читает|чтец|диктор|озвучивает)\s*[:—–-]\s*(?<v>.{2,100}?)(?=\s+(?:автор|жанр|цикл|серия|год|издательство|описание|время|длительность)\s*[:—–-]|\r|\n|\||;|$)"
+            );
+            var narrator = CleanPersonDisplay(match.Groups["v"].Value);
+            return LooksLikePersonName(narrator) ? narrator : string.Empty;
+        }
+
+        private static bool LooksLikePersonName(string value)
+        {
+            value = CleanPersonDisplay(value);
+            if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsDigit))
+                return false;
+            var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length < 2 || words.Length > 6 || value.Length > 80)
+                return false;
+            return words.All(word => Regex.IsMatch(word, @"^[\p{L}][\p{L}'’.-]*$"));
+        }
+
+        private static string CleanPersonDisplay(string value)
+        {
+            value = HttpUtility.HtmlDecode(value ?? string.Empty);
+            value = Regex.Replace(value, @"\s+", " ").Trim();
+            value = Regex.Replace(
+                value,
+                @"(?i)\s+(?:читает|чтец|исполнитель|озвучивает|диктор|жанр|романы|аудиокниг\w*|описание|издательство|длительность|время)\b.*$",
+                string.Empty
+            );
+            value = Regex.Replace(
+                value,
+                @"\s+\d+\s*(?:час(?:а|ов)?|минут(?:а|ы)?|секунд(?:а|ы)?)\b.*$",
+                string.Empty,
+                RegexOptions.IgnoreCase
+            );
+            value = value.Trim(' ', '\t', '\r', '\n', ':', '-', '–', '—', ',', '.', '"', '«', '»');
+            return value.Length > 80 ? string.Empty : value;
         }
 
         private static bool IsRussianTitleStopWord(string value)
@@ -1951,17 +2313,20 @@ LIMIT $take";
 
         private static bool IsLikelyBadPersonName(string value)
         {
-            value = HttpUtility.HtmlDecode(value ?? string.Empty).Trim();
+            var original = HttpUtility.HtmlDecode(value ?? string.Empty).Trim();
+            value = CleanPersonDisplay(original);
             if (string.IsNullOrWhiteSpace(value))
                 return true;
             if (value.Length > 80)
                 return true;
-            if (value.Contains('/'))
+            if (original.Contains('/') || original.Any(char.IsDigit))
                 return true;
 
-            var normalized = Normalize(value);
+            var normalized = Normalize(original);
             return normalized.Contains("\u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u043d\u0438\u0433\u0438", StringComparison.OrdinalIgnoreCase) ||
-                   normalized.Contains("\u043a\u043b\u0430\u0441\u0441\u0438\u043a\u0430 \u0440\u043e\u043c\u0430\u043d\u044b", StringComparison.OrdinalIgnoreCase);
+                   normalized.Contains("\u043a\u043b\u0430\u0441\u0441\u0438\u043a\u0430 \u0440\u043e\u043c\u0430\u043d\u044b", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("\u0434\u043b\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("\u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool BetterWork(AudioFdbWork candidate, AudioFdbWork current)
@@ -2016,8 +2381,9 @@ LIMIT $take";
                     continue;
 
                 var id = person.id ?? string.Empty;
-                var normalized = Normalize(person.display_name);
-                if (target.Any(p => (!string.IsNullOrWhiteSpace(id) && string.Equals(p.id, id, StringComparison.OrdinalIgnoreCase)) || Normalize(p.display_name) == normalized))
+                person.display_name = CleanPersonDisplay(person.display_name);
+                var normalized = NormalizePersonKey(person.display_name);
+                if (target.Any(p => (!string.IsNullOrWhiteSpace(id) && string.Equals(p.id, id, StringComparison.OrdinalIgnoreCase)) || NormalizePersonKey(p.display_name) == normalized))
                     continue;
 
                 target.Add(person);
@@ -2099,9 +2465,19 @@ LIMIT $take";
 
         private static string EditionMergeKey(AudioFdbEdition edition)
         {
-            var narrators = Normalize(string.Join(" ", edition.narrators.Select(n => n.display_name).Where(n => !string.IsNullOrWhiteSpace(n))));
+            var narrators = string.Join(
+                "|",
+                edition.narrators
+                    .Select(n => NormalizePersonKey(n.display_name))
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            );
+            if (!string.IsNullOrWhiteSpace(narrators))
+                return "reader|" + narrators;
+
             var fingerprint = FirstNonEmpty(edition.chapter_fingerprint, edition.chapter_count + ":" + edition.duration_seconds);
-            return narrators + "|" + fingerprint;
+            return "unknown|" + fingerprint;
         }
 
         private static string SourceMergeKey(AudioFdbSource source)
@@ -2276,17 +2652,20 @@ LIMIT $limit OFFSET $offset", ("$query", "%" + normalized + "%"), ("$limit", lim
             var where = string.IsNullOrWhiteSpace(normalized) ? string.Empty : "AND s.normalized_title LIKE $query";
             using var connection = Open();
             return Query(connection, @"
-SELECT s.id,s.title,s.source_provider,s.source_external_id,COUNT(DISTINCT ws.work_id) works_count
+SELECT MIN(s.id) id,MIN(s.title) title,'' source_provider,'' source_external_id,
+       COUNT(DISTINCT ws.work_id) works_count,MAX(w.updated_at) newest
 FROM series s
 JOIN work_series ws ON ws.series_id=s.id
+JOIN works w ON w.id=ws.work_id
 WHERE EXISTS (
     SELECT 1 FROM editions e
     JOIN sources so ON so.edition_id=e.id
     JOIN chapters c ON c.source_id=so.id
     WHERE e.work_id=ws.work_id AND IFNULL(c.audio_url,'')<>''
 ) " + where + @"
-GROUP BY s.id,s.title,s.source_provider,s.source_external_id
-ORDER BY works_count DESC,s.title
+GROUP BY s.normalized_title
+HAVING COUNT(DISTINCT ws.work_id)>1
+ORDER BY newest DESC,works_count DESC,title
 LIMIT $limit OFFSET $offset", ("$query", "%" + normalized + "%"), ("$limit", limit), ("$offset", offset))
                 .Select(row => new AudioFdbSeries
                 {
@@ -2296,6 +2675,7 @@ LIMIT $limit OFFSET $offset", ("$query", "%" + normalized + "%"), ("$limit", lim
                     source_external_id = row["source_external_id"],
                     works_count = (int)ToLong(row["works_count"])
                 })
+                .Where(series => IsUsableSeriesTitle(series.title))
                 .ToList();
         }
 
@@ -2307,7 +2687,7 @@ EXISTS (
     SELECT 1 FROM work_genres wg
     JOIN genres g ON g.id=wg.genre_id
     WHERE wg.work_id=w.id AND (g.id=$id OR g.normalized_title LIKE $query)
-)", genreId, normalized, limit, offset);
+)", genreId, normalized, limit, offset, newestFirst: true);
         }
 
         public List<AudioFdbWork> ListWorksByPerson(string personId, string kind, int limit, int offset)
@@ -2327,12 +2707,23 @@ EXISTS (
     JOIN persons p ON p.id=wa.person_id
     WHERE wa.work_id=w.id AND (p.id=$id OR p.normalized_name LIKE $query)
 )";
-            return ListWorksByRelation(relation, personId, normalized, limit, offset);
+            return ListWorksByRelation(relation, personId, normalized, limit, offset, newestFirst: true);
         }
 
         public List<AudioFdbWork> ListWorksBySeries(string seriesId, int limit, int offset)
         {
-            var normalized = Normalize(seriesId ?? string.Empty);
+            var normalized = string.Empty;
+            using (var connection = Open())
+            {
+                var stored = QueryOne(
+                    connection,
+                    "SELECT normalized_title FROM series WHERE id=$id LIMIT 1",
+                    ("$id", seriesId ?? string.Empty)
+                );
+                normalized = stored?["normalized_title"] ?? string.Empty;
+            }
+            if (string.IsNullOrWhiteSpace(normalized))
+                normalized = Normalize(seriesId ?? string.Empty);
             return ListWorksByRelation(@"
 EXISTS (
     SELECT 1 FROM work_series ws
@@ -2341,7 +2732,7 @@ EXISTS (
 )", seriesId, normalized, limit, offset);
         }
 
-        private List<AudioFdbWork> ListWorksByRelation(string relationWhere, string id, string normalized, int limit, int offset)
+        private List<AudioFdbWork> ListWorksByRelation(string relationWhere, string id, string normalized, int limit, int offset, bool newestFirst = false)
         {
             limit = Math.Max(1, Math.Min(limit <= 0 ? 20 : limit, 50));
             offset = Math.Max(0, offset);
@@ -2351,6 +2742,9 @@ EXISTS (
             List<string> ids;
             using (var connection = Open())
             {
+                var order = newestFirst
+                    ? "w.created_at DESC,w.updated_at DESC,"
+                    : string.Empty;
                 ids = Query(connection, @"
 SELECT w.id
 FROM works w
@@ -2362,6 +2756,7 @@ WHERE EXISTS (
 )
 AND " + relationWhere + @"
 ORDER BY
+    " + order + @"
     COALESCE((SELECT MAX(e.quality_score) FROM editions e WHERE e.work_id = w.id), 0) DESC,
     COALESCE((SELECT s.title FROM work_series ws JOIN series s ON s.id = ws.series_id WHERE ws.work_id = w.id LIMIT 1), w.title),
     w.title
@@ -2379,6 +2774,93 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             }
 
             return DeduplicateWorks(result).Skip(offset).Take(limit).ToList();
+        }
+
+        public List<AudioFdbWork> ListWorksMissingPosters(int limit)
+        {
+            limit = Math.Max(1, Math.Min(limit <= 0 ? 12 : limit, 50));
+            var now = DateTimeOffset.UtcNow.ToString("O");
+            List<string> ids;
+            using (var connection = Open())
+            {
+                ids = Query(connection, @"
+SELECT w.id
+FROM works w
+LEFT JOIN cover_lookup_cache cc ON cc.work_id=w.id
+WHERE (
+    TRIM(IFNULL(w.poster_url,''))='' OR
+    w.poster_url LIKE 'data:image%' OR
+    w.poster_url LIKE '%/images/poster.png%'
+)
+AND (cc.work_id IS NULL OR cc.next_retry_at<=$now)
+AND EXISTS (
+    SELECT 1 FROM editions e
+    JOIN sources s ON s.edition_id=e.id
+    JOIN chapters c ON c.source_id=s.id
+    WHERE e.work_id=w.id AND IFNULL(c.audio_url,'')<>''
+)
+ORDER BY w.updated_at DESC,w.created_at DESC
+LIMIT $limit", ("$now", now), ("$limit", limit))
+                    .Select(row => row["id"])
+                    .ToList();
+            }
+
+            return ids
+                .Select(id => GetWork(id))
+                .Where(work => work != null)
+                .Cast<AudioFdbWork>()
+                .ToList();
+        }
+
+        public void RecordCoverLookup(AudioFdbWork work, string provider, string coverUrl)
+        {
+            if (work == null || string.IsNullOrWhiteSpace(work.id))
+                return;
+
+            var now = DateTimeOffset.UtcNow;
+            var found = !string.IsNullOrWhiteSpace(coverUrl);
+            var retrySoon = !found && provider.Equals("retry", StringComparison.OrdinalIgnoreCase);
+            var author = work.authors.FirstOrDefault(person => !IsLikelyBadPersonName(person.display_name))?.display_name ?? string.Empty;
+            var lookupKey = StableHash(Normalize(work.title) + "|" + Normalize(author));
+            using var connection = Open();
+            using var tx = connection.BeginTransaction();
+            Exec(connection, tx, @"
+INSERT INTO cover_lookup_cache(work_id,lookup_key,provider,cover_url,status,attempted_at,next_retry_at)
+VALUES($work,$key,$provider,$url,$status,$attempted,$retry)
+ON CONFLICT(work_id) DO UPDATE SET
+lookup_key=$key,provider=$provider,cover_url=$url,status=$status,attempted_at=$attempted,next_retry_at=$retry",
+                ("$work", work.id),
+                ("$key", lookupKey),
+                ("$provider", provider ?? string.Empty),
+                ("$url", coverUrl ?? string.Empty),
+                ("$status", found ? "found" : retrySoon ? "retry" : "not_found"),
+                ("$attempted", now.ToString("O")),
+                ("$retry", (found ? now.AddYears(5) : retrySoon ? now.AddHours(48) : now.AddDays(7)).ToString("O")));
+            if (found)
+            {
+                Exec(connection, tx, @"
+UPDATE works SET poster_url=$url,updated_at=$now
+WHERE id=$work AND (
+    TRIM(IFNULL(poster_url,''))='' OR
+    poster_url LIKE 'data:image%' OR
+    poster_url LIKE '%/images/poster.png%'
+)", ("$url", coverUrl), ("$now", now.ToString("O")), ("$work", work.id));
+            }
+            tx.Commit();
+        }
+
+        public Dictionary<string, long> CoverLookupStats()
+        {
+            using var connection = Open();
+            var rows = Query(connection, @"
+SELECT status,COUNT(*) count
+FROM cover_lookup_cache
+GROUP BY status");
+            return rows.ToDictionary(
+                row => row["status"],
+                row => ToLong(row["count"]),
+                StringComparer.OrdinalIgnoreCase
+            );
         }
 
         public AudioFdbEdition? GetEdition(string id)
@@ -2490,6 +2972,42 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             return Regex.Replace(value, @"\s+", " ");
         }
 
+        public static bool IsUsableSeriesTitle(string value)
+        {
+            value = HttpUtility.HtmlDecode(value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 100)
+                return false;
+
+            var normalized = Normalize(value);
+            if (string.IsNullOrWhiteSpace(normalized) || normalized == "\u0436\u0430\u043d\u0440\u044b")
+                return false;
+            if (Regex.IsMatch(normalized, "^(?:\u0430\\s+)?\u0436\u0430\u043d\u0440\\b", RegexOptions.IgnoreCase))
+                return false;
+            if (Regex.IsMatch(normalized, "\\b(litrpg|\u043b\u0438\u0442\u0440\u043f\u0433|\u0436\u0430\u043d\u0440\\w*)\\b", RegexOptions.IgnoreCase))
+                return false;
+            if (value.Length > 24 && Regex.IsMatch(normalized, "\\b\\d+\\s+(?:\u0434\u0435\u043d\u044c|\u0434\u043d\u044f|\u0434\u043d\u0435\u0439|\u0447\u0430\u0441|\u0447\u0430\u0441\u0430|\u0447\u0430\u0441\u043e\u0432|\u043c\u0438\u043d\u0443\u0442\u0430|\u043c\u0438\u043d\u0443\u0442\u044b|\u043c\u0438\u043d\u0443\u0442)\\s*$", RegexOptions.IgnoreCase))
+                return false;
+            if (Regex.IsMatch(normalized, "\\b(\u0441\u043b\u0443\u0448\u0430\u0442\u044c|\u0430\u0443\u0434\u0438\u043e\u043a\u043d\u0438\u0433|\u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435|\u043f\u0440\u0430\u0432\u0438\u043b\u0430|\u043f\u0440\u0430\u0432\u043e\u043e\u0431\u043b\u0430\u0434|\u043f\u0440\u043e\u0441\u043b\u0443\u0448\u0438\u0432|\u0434\u043b\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c)\\b", RegexOptions.IgnoreCase))
+                return false;
+            if (normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 12)
+                return false;
+            if (Regex.IsMatch(normalized, "\\b(\u0432\u043f\u0435\u0447\u0430\u0442\u043b\u0435\u043d\u0438|\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u0435 \u0442\u0438\u043f\u0430|\u043e\u0437\u0432\u0443\u0447\u043a\u0430|\u043e\u0437\u0432\u0443\u0447\u0438\u043b)\\b", RegexOptions.IgnoreCase))
+                return false;
+
+            return true;
+        }
+
+        public static bool HasUsablePoster(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return !string.IsNullOrWhiteSpace(value) &&
+                   !value.StartsWith("data:image", StringComparison.OrdinalIgnoreCase) &&
+                   !value.Contains("/images/poster.png", StringComparison.OrdinalIgnoreCase) &&
+                   !value.Contains("empty-poster", StringComparison.OrdinalIgnoreCase) &&
+                   !value.Contains("no-cover", StringComparison.OrdinalIgnoreCase) &&
+                   !value.Contains("nophoto", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static string StableHash(string value)
         {
             using var sha = SHA256.Create();
@@ -2499,6 +3017,244 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
 
         private static long ToLong(string value) => long.TryParse(value, out var result) ? result : 0;
         private static double ToDouble(string value) => double.TryParse(value, out var result) ? result : 0;
+    }
+
+    public sealed class AudioCoverEnricher
+    {
+        private static readonly SemaphoreSlim Gate = new(1, 1);
+        private readonly AudioFdbStore _store;
+
+        public AudioCoverEnricher(AudioFdbStore store)
+        {
+            _store = store;
+        }
+
+        public async Task<int> EnrichMissingAsync(int limit = 12)
+        {
+            if (!await Gate.WaitAsync(0))
+                return 0;
+
+            try
+            {
+                var works = _store.ListWorksMissingPosters(limit);
+                if (works.Count == 0)
+                    return 0;
+
+                using var http = AudiobookModuleBase.CreateClient(useProxy: false);
+                http.Timeout = TimeSpan.FromSeconds(12);
+                http.DefaultRequestHeaders.UserAgent.Clear();
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("SlovoAudiobooks/1.8.5 (+https://lampac.fun)");
+                http.DefaultRequestHeaders.Accept.Clear();
+                http.DefaultRequestHeaders.Accept.ParseAdd("application/json,image/*;q=0.9,*/*;q=0.5");
+
+                var found = 0;
+                foreach (var work in works)
+                {
+                    if (AudioFdbStore.HasUsablePoster(work.poster_url))
+                        continue;
+
+                    var resolved = await ResolveAsync(http, work);
+                    _store.RecordCoverLookup(work, resolved.Provider, resolved.Url);
+                    if (!string.IsNullOrWhiteSpace(resolved.Url))
+                        found++;
+
+                    // Keep background enrichment polite and well below public API limits.
+                    await Task.Delay(TimeSpan.FromMilliseconds(900));
+                }
+
+                return found;
+            }
+            finally
+            {
+                Gate.Release();
+            }
+        }
+
+        public async Task<AudioFdbWork?> EnrichOneAsync(AudioFdbWork? work)
+        {
+            if (work == null || AudioFdbStore.HasUsablePoster(work.poster_url))
+                return work;
+            if (!await Gate.WaitAsync(0))
+                return work;
+
+            try
+            {
+                using var http = AudiobookModuleBase.CreateClient(useProxy: false);
+                http.Timeout = TimeSpan.FromSeconds(10);
+                http.DefaultRequestHeaders.UserAgent.Clear();
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("SlovoAudiobooks/1.8.5 (+https://lampac.fun)");
+                var resolved = await ResolveAsync(http, work);
+                _store.RecordCoverLookup(work, resolved.Provider, resolved.Url);
+                return _store.GetWork(work.id) ?? work;
+            }
+            finally
+            {
+                Gate.Release();
+            }
+        }
+
+        private static async Task<(string Provider, string Url)> ResolveAsync(HttpClient http, AudioFdbWork work)
+        {
+            var transientFailure = false;
+            try
+            {
+                var openLibrary = await ResolveOpenLibraryAsync(http, work);
+                if (!string.IsNullOrWhiteSpace(openLibrary))
+                    return ("openlibrary", openLibrary);
+            }
+            catch
+            {
+                transientFailure = true;
+            }
+
+            try
+            {
+                var googleBooks = await ResolveGoogleBooksAsync(http, work);
+                if (!string.IsNullOrWhiteSpace(googleBooks))
+                    return ("google_books", googleBooks);
+            }
+            catch
+            {
+                transientFailure = true;
+            }
+
+            return (transientFailure ? "retry" : "none", string.Empty);
+        }
+
+        private static async Task<string> ResolveOpenLibraryAsync(HttpClient http, AudioFdbWork work)
+        {
+            var isbn = FindIsbn(work.description);
+            if (!string.IsNullOrWhiteSpace(isbn))
+            {
+                var isbnCover = $"https://covers.openlibrary.org/b/isbn/{isbn}-L.jpg?default=false";
+                using var coverResponse = await http.GetAsync(isbnCover, HttpCompletionOption.ResponseHeadersRead);
+                if (coverResponse.IsSuccessStatusCode &&
+                    (coverResponse.Content.Headers.ContentType?.MediaType ?? string.Empty)
+                        .StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                    return isbnCover;
+            }
+
+            var author = PreferredAuthor(work);
+            var url = "https://openlibrary.org/search.json?title=" + HttpUtility.UrlEncode(work.title) +
+                      (string.IsNullOrWhiteSpace(author) ? string.Empty : "&author=" + HttpUtility.UrlEncode(author)) +
+                      "&fields=cover_i,title,author_name&limit=5&lang=ru";
+            using var response = await http.GetAsync(url);
+            if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
+                throw new HttpRequestException("Open Library temporarily unavailable: " + (int)response.StatusCode);
+            if (!response.IsSuccessStatusCode)
+                return string.Empty;
+
+            var root = JsonNode.Parse(await response.Content.ReadAsStringAsync()) as JsonObject;
+            foreach (var item in (root?["docs"] as JsonArray)?.OfType<JsonObject>() ?? Enumerable.Empty<JsonObject>())
+            {
+                var title = NodeText(item["title"]);
+                var authors = (item["author_name"] as JsonArray)?.Select(NodeText).Where(value => !string.IsNullOrWhiteSpace(value)).ToList()
+                              ?? new List<string>();
+                if (!ReliableMatch(work.title, author, title, authors))
+                    continue;
+                if (!long.TryParse(NodeText(item["cover_i"]), out var coverId) || coverId <= 0)
+                    continue;
+                return $"https://covers.openlibrary.org/b/id/{coverId}-L.jpg?default=false";
+            }
+
+            return string.Empty;
+        }
+
+        private static async Task<string> ResolveGoogleBooksAsync(HttpClient http, AudioFdbWork work)
+        {
+            var author = PreferredAuthor(work);
+            var query = "intitle:\"" + work.title + "\"" +
+                        (string.IsNullOrWhiteSpace(author) ? string.Empty : " inauthor:\"" + author + "\"");
+            var url = "https://www.googleapis.com/books/v1/volumes?q=" + HttpUtility.UrlEncode(query) +
+                      "&maxResults=5&projection=lite";
+            using var response = await http.GetAsync(url);
+            if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
+                throw new HttpRequestException("Google Books temporarily unavailable: " + (int)response.StatusCode);
+            if (!response.IsSuccessStatusCode)
+                return string.Empty;
+
+            var root = JsonNode.Parse(await response.Content.ReadAsStringAsync()) as JsonObject;
+            foreach (var item in (root?["items"] as JsonArray)?.OfType<JsonObject>() ?? Enumerable.Empty<JsonObject>())
+            {
+                var info = item["volumeInfo"] as JsonObject;
+                if (info == null)
+                    continue;
+                var title = NodeText(info["title"]);
+                var authors = (info["authors"] as JsonArray)?.Select(NodeText).Where(value => !string.IsNullOrWhiteSpace(value)).ToList()
+                              ?? new List<string>();
+                if (!ReliableMatch(work.title, author, title, authors))
+                    continue;
+
+                var images = info["imageLinks"] as JsonObject;
+                if (images == null)
+                    continue;
+                foreach (var size in new[] { "extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail" })
+                {
+                    var image = NodeText(images[size]);
+                    if (string.IsNullOrWhiteSpace(image))
+                        continue;
+                    if (image.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                        image = "https://" + image["http://".Length..];
+                    return image;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string PreferredAuthor(AudioFdbWork work)
+            => work.authors
+                .Select(person => person.display_name)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+        private static string FindIsbn(string text)
+        {
+            var match = Regex.Match(
+                text ?? string.Empty,
+                @"(?i)\b(?:ISBN(?:-1[03])?\s*:?\s*)?(?<isbn>(?:97[89][\s-]?)?(?:\d[\s-]?){9}[\dX])\b"
+            );
+            if (!match.Success)
+                return string.Empty;
+            var value = Regex.Replace(match.Groups["isbn"].Value, @"[\s-]", string.Empty).ToUpperInvariant();
+            return value.Length is 10 or 13 ? value : string.Empty;
+        }
+
+        private static bool ReliableMatch(string wantedTitle, string wantedAuthor, string resultTitle, List<string> resultAuthors)
+        {
+            if (!TextMatches(wantedTitle, resultTitle, 0.68))
+                return false;
+            if (string.IsNullOrWhiteSpace(wantedAuthor))
+                return true;
+            return resultAuthors.Any(author => TextMatches(wantedAuthor, author, 0.6));
+        }
+
+        private static bool TextMatches(string left, string right, double minimumOverlap)
+        {
+            var a = AudioFdbStore.Normalize(left);
+            var b = AudioFdbStore.Normalize(right);
+            if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
+                return false;
+            if (a.Equals(b, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (Math.Min(a.Length, b.Length) >= 5 &&
+                (a.Contains(b, StringComparison.OrdinalIgnoreCase) || b.Contains(a, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            var leftTokens = a.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(token => token.Length > 1).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var rightTokens = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(token => token.Length > 1).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (leftTokens.Count == 0 || rightTokens.Count == 0)
+                return false;
+            var overlap = leftTokens.Intersect(rightTokens, StringComparer.OrdinalIgnoreCase).Count();
+            return overlap / (double)Math.Max(leftTokens.Count, rightTokens.Count) >= minimumOverlap;
+        }
+
+        private static string NodeText(JsonNode? node)
+        {
+            if (node == null)
+                return string.Empty;
+            try { return node.GetValue<string>(); }
+            catch { return node.ToString(); }
+        }
     }
 
     public sealed class IzibukFdbProvider
@@ -2590,7 +3346,7 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 title = Str(s, "name"),
                 source_provider = ProviderId,
                 source_external_id = Str(s, "id")
-            }).Where(s => !string.IsNullOrWhiteSpace(s.title)).ToList();
+            }).Where(s => AudioFdbStore.IsUsableSeriesTitle(s.title)).ToList();
         }
 
         private async Task<List<AudioFdbPerson>> PeopleAsync(string body, string kind)
@@ -2733,7 +3489,7 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             if (item == null) return;
             var id = Str(item, "id");
             var title = Str(item, "name");
-            if (string.IsNullOrWhiteSpace(title)) return;
+            if (!AudioFdbStore.IsUsableSeriesTitle(title)) return;
             work.series = new AudioFdbSeries { id = "series:izibuk:" + id, title = title, source_provider = ProviderId, source_external_id = id };
         }
 
@@ -2855,11 +3611,11 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 root = "https://poleknig.com",
                 search_url = "https://poleknig.com/?q={query}&p={page}",
                 headers = AudioBookHeadersProfile.PoleknigMp3,
-                item_xpaths = new[] { "//div[contains(@class,'media')]" },
+                item_xpaths = new[] { "//div[contains(@class,'media')][.//a[contains(@class,'book-title')]]" },
                 link_xpaths = new[] { ".//a[contains(@class,'book-title')][1]", ".//a[@href][1]" },
                 title_xpaths = new[] { ".//a[contains(@class,'book-title')][1]" },
                 image_xpaths = new[] { ".//img[contains(@class,'cover') and @data-original][1]", ".//img[contains(@class,'cover') and @src][1]", ".//img[@src][1]" },
-                detail_title_xpaths = new[] { "//div[contains(@class,'book-title')][1]", "//h1[1]" },
+                detail_title_xpaths = new[] { "//div[contains(@class,'book-title')]//h1[1]", "//h1[1]" },
                 detail_description_xpaths = new[] { "//div[contains(@class,'description')][1]" },
                 detail_image_xpaths = new[] { "//img[contains(@class,'cover') and @data-original][1]", "//img[contains(@class,'cover') and @src][1]" }
             },
@@ -2900,7 +3656,7 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 headers = AudioBookHeadersProfile.Slushkinvsem,
                 use_proxy = true,
                 item_xpaths = new[] { "//div[contains(@class,'thumb-in')]", "//a[contains(@class,'poster')]" },
-                link_xpaths = new[] { ".//a[contains(@class,'thumb-caption')][not(contains(@href,'/blok/'))][1]", ".//a[contains(@class,'poster')][1]", ".//a[@href][1]" },
+                link_xpaths = new[] { ".//a[contains(@class,'thumb-caption')][1]", ".//a[contains(@class,'poster')][1]", ".//a[@href][1]" },
                 title_xpaths = new[] { ".//a[contains(@class,'thumb-caption')][1]", ".//h3[contains(@class,'poster__title')][1]" },
                 image_xpaths = new[] { ".//img[@src][1]", ".//img[@data-src][1]" },
                 detail_title_xpaths = new[] { "//h1[1]", "//h3[contains(@class,'poster__title')][1]" },
@@ -2967,7 +3723,7 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             ["baza_knig_rip"] = new RuBookFdbProviderSpec
             {
                 id = "baza_knig_rip",
-                root = "https://baza-knig.rip",
+                root = "https://baza-knig.top",
                 mode = "dle",
                 headers = AudioBookHeadersProfile.BazaMp3,
                 use_proxy = true,
@@ -2984,11 +3740,11 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 id = "uknig_com",
                 root = "https://uknig.com",
                 search_url = "https://uknig.com/?q={query}&p={page}",
-                item_xpaths = new[] { "//div[contains(@class,'col-xs-12')]" },
+                item_xpaths = new[] { "//div[contains(@class,'col-xs-12')][.//a[contains(@class,'book-title')]]" },
                 link_xpaths = new[] { ".//a[contains(@class,'book-title')][1]", ".//a[@href][1]" },
                 title_xpaths = new[] { ".//a[contains(@class,'book-title')][1]" },
                 image_xpaths = new[] { ".//img[contains(@class,'cover') and @data-original][1]", ".//img[contains(@class,'cover') and @src][1]" },
-                detail_title_xpaths = new[] { "//div[contains(@class,'book-title')][1]", "//h1[1]" },
+                detail_title_xpaths = new[] { "//div[contains(@class,'book-title')]//h1[1]", "//h1[1]" },
                 detail_description_xpaths = new[] { "//div[contains(@class,'description')][1]" },
                 detail_image_xpaths = new[] { "//img[contains(@class,'cover') and @data-original][1]", "//img[contains(@class,'cover') and @src][1]" }
             },
@@ -3043,10 +3799,10 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 item_xpaths = new[] { "//div[contains(@class,'col-6')]" },
                 link_xpaths = new[] { ".//a[contains(@href,'/audio/')][1]", ".//a[@href][1]" },
                 title_xpaths = new[] { ".//div[contains(@class,'p-2')][1]", ".//a[@href][1]" },
-                image_xpaths = new[] { ".//img[@src][1]" },
+                image_xpaths = new[] { ".//img[@data-lazy-src][1]", ".//img[@data-src][1]", ".//img[@src][1]" },
                 detail_title_xpaths = new[] { "//h1[contains(@class,'d-inline-block')][1]", "//h1[1]" },
                 detail_description_xpaths = new[] { "//div[contains(@class,'description')][1]" },
-                detail_image_xpaths = new[] { "//img[@src][1]" }
+                detail_image_xpaths = new[] { "//meta[@property='og:image'][1]", "//img[@data-lazy-src][1]", "//img[@data-src][1]", "//img[@src][1]" }
             },
             ["m_knigavuhe_org"] = new RuBookFdbProviderSpec
             {
@@ -3061,14 +3817,18 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             {
                 id = "audiopolka_club",
                 root = "https://audiopolka.club",
-                detail_only = true,
+                search_url = "https://audiopolka.club/search/?q={query}",
+                item_xpaths = new[] { "//div[contains(@class,'book-list-item')][.//a[contains(@class,'book-list-item-name-link')]]" },
+                link_xpaths = new[] { ".//a[contains(@class,'book-list-item-name-link')][1]", ".//a[contains(@class,'book-list-item-cover')][1]" },
+                title_xpaths = new[] { ".//a[contains(@class,'book-list-item-name-link')][1]", ".//a[contains(@class,'book-list-item-cover')]//img[@alt][1]" },
+                image_xpaths = new[] { ".//a[contains(@class,'book-list-item-cover')]//img[@data-src][1]", ".//a[contains(@class,'book-list-item-cover')]//img[@src][1]" },
                 detail_title_xpaths = new[] { "//div[contains(@class,'book-page-title')][1]", "//h1[1]" },
                 detail_description_xpaths = new[] { "//div[contains(@class,'book-page-annotation')][1]" },
                 detail_image_xpaths = new[] { "//div[@id='book-page-cover']//img[1]", "//img[@src][1]" }
             },
-            ["author_today_fantlab"] = new RuBookFdbProviderSpec
+            ["author_today"] = new RuBookFdbProviderSpec
             {
-                id = "author_today_fantlab",
+                id = "author_today",
                 root = "https://author.today",
                 mode = "metadata",
                 metadata_only = true,
@@ -3076,6 +3836,17 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 item_xpaths = new[] { "//div[contains(@class,'book-row')]", "//div[contains(@class,'search-results')]//div[contains(@class,'one')]" },
                 link_xpaths = new[] { ".//a[contains(@href,'/work')][1]", ".//a[@href][1]" },
                 title_xpaths = new[] { ".//div[contains(@class,'book-title')][1]", ".//div[contains(@class,'title')][1]", ".//a[@href][1]" }
+            },
+            ["fantlab_ru"] = new RuBookFdbProviderSpec
+            {
+                id = "fantlab_ru",
+                root = "https://fantlab.ru",
+                mode = "metadata",
+                metadata_only = true,
+                search_url = "https://fantlab.ru/searchmain?searchstr={query}",
+                item_xpaths = new[] { "//div[contains(@class,'search-result')]", "//table[contains(@class,'search')]//tr[.//a]" },
+                link_xpaths = new[] { ".//a[contains(@href,'/work')][1]", ".//a[@href][1]" },
+                title_xpaths = new[] { ".//a[contains(@href,'/work')][1]", ".//a[@href][1]" }
             }
         };
 
@@ -3120,6 +3891,86 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             return work;
         }
 
+        public async Task<AudioFdbWork?> EnrichMetadataAsync(AudioFdbWork? work)
+        {
+            if (work == null || string.IsNullOrWhiteSpace(work.title) || work.authors.Count > 0)
+                return work;
+
+            foreach (var provider in new[] { "author_today", "fantlab_ru" })
+            {
+                if (!Specs.TryGetValue(provider, out var spec))
+                    continue;
+                try
+                {
+                    var html = await GetStringAsync(BuildSearchUrl(spec, work.title, 1), spec);
+                    var doc = LoadDocument(html);
+                    var nodes = provider == "fantlab_ru"
+                        ? SelectNodes(doc.DocumentNode, new[]
+                        {
+                            "//div[contains(@class,'search-block') and contains(@class,'works')]//div[contains(concat(' ',normalize-space(@class),' '),' one ')]"
+                        })
+                        : SelectNodes(doc.DocumentNode, new[]
+                        {
+                            "//div[contains(@class,'book-row')]",
+                            "//div[contains(@class,'book-item')][.//a[contains(@href,'/work')]]"
+                        });
+
+                    foreach (var node in nodes.Take(12))
+                    {
+                        var titleNode = provider == "fantlab_ru"
+                            ? FirstNode(node, new[] { ".//div[contains(@class,'title')]//a[contains(@href,'/work')][1]" })
+                            : FirstNode(node, new[] { ".//a[contains(@href,'/work/') or starts-with(@href,'/work')][1]" });
+                        var candidateTitle = SafeText(titleNode);
+                        if (!MetadataTitleMatches(work.title, candidateTitle))
+                            continue;
+
+                        var author = provider == "fantlab_ru"
+                            ? TextsFromFirstXPath(node, new[] { ".//div[contains(@class,'autor')]//a" })
+                            : TextsFromFirstXPath(node, new[] { ".//a[contains(@href,'/u/') or contains(@href,'/author/')]" });
+                        foreach (var authorName in SplitPeople(author))
+                        {
+                            work.authors.Add(new AudioFdbPerson
+                            {
+                                id = "person:" + provider + ":author:" + AudioFdbStore.StableHash(authorName),
+                                display_name = authorName,
+                                kind = "author",
+                                source_provider = provider
+                            });
+                        }
+                        if (work.authors.Count > 0)
+                        {
+                            _store.UpsertWork(work);
+                            return work;
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return work;
+        }
+
+        private static bool MetadataTitleMatches(string expected, string candidate)
+        {
+            string Primary(string value)
+            {
+                value = Clean(value);
+                value = Regex.Split(value, @"\s+[/|]\s+").FirstOrDefault() ?? value;
+                value = Regex.Replace(value, @"\s*\([^)]{1,80}\)\s*$", string.Empty).Trim();
+                return AudioFdbStore.Normalize(value);
+            }
+
+            var left = Primary(expected);
+            var right = Primary(candidate);
+            return !string.IsNullOrWhiteSpace(left) &&
+                !string.IsNullOrWhiteSpace(right) &&
+                (left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+                 (Math.Min(left.Length, right.Length) >= 8 &&
+                  (left.StartsWith(right + " ", StringComparison.OrdinalIgnoreCase) ||
+                   right.StartsWith(left + " ", StringComparison.OrdinalIgnoreCase))));
+        }
+
         private List<AudioFdbWork> ParseSearchHtml(RuBookFdbProviderSpec spec, string html, int limit, int offset)
         {
             var doc = LoadDocument(html);
@@ -3137,6 +3988,7 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 var url = AbsoluteUrl(spec.root, Attr(link, "href"));
                 if (string.IsNullOrWhiteSpace(url) || !seen.Add(url)) continue;
                 if (spec.id == "aume_ru" && !url.Contains("aume.ru", StringComparison.OrdinalIgnoreCase)) continue;
+                if (spec.id == "otrub_in" && url.Contains("/search", StringComparison.OrdinalIgnoreCase)) continue;
 
                 if (skipped++ < offset % Math.Max(1, limit)) continue;
 
@@ -3145,11 +3997,30 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 if (string.IsNullOrWhiteSpace(title)) continue;
 
                 var imageNode = FirstNode(node, spec.image_xpaths);
-                var image = AbsoluteUrl(spec.root, FirstNonEmpty(Attr(imageNode, "data-original"), Attr(imageNode, "data-src"), Attr(imageNode, "data-img"), Attr(imageNode, "src")));
+                var image = AbsoluteUrl(spec.root, FirstNonEmpty(Attr(imageNode, "data-original"), Attr(imageNode, "data-lazy-src"), Attr(imageNode, "data-src"), Attr(imageNode, "data-img"), Attr(imageNode, "src")));
                 var text = SafeText(node);
-                var author = LabelValue(text, "Автор", "Писатель", "Автор:");
-                var reader = LabelValue(text, "Исполнитель", "Читает", "Озвучивает", "Диктор");
-                var series = LabelValue(text, "Цикл", "Серия", "Из цикла");
+                var author = FirstNonEmpty(
+                    TextsFromFirstXPath(node, new[]
+                    {
+                        ".//*[@itemprop='author']//a",
+                        ".//a[contains(@class,'author-link')]",
+                        ".//a[contains(@class,'author-name')]",
+                        ".//a[contains(@href,'/authors/') or contains(@href,'/author/')]"
+                    }),
+                    LabelValue(text, "Автор", "Писатель", "Автор:")
+                );
+                var reader = FirstNonEmpty(
+                    TextsFromFirstXPath(node, new[]
+                    {
+                        ".//a[contains(@class,'reader-link')]",
+                        ".//a[contains(@href,'/readers') or contains(@href,'/reader') or contains(@href,'/voice')]"
+                    }),
+                    LabelValue(text, "Исполнитель", "Читает", "Озвучивает", "Диктор")
+                );
+                var series = FirstNonEmpty(
+                    TextsFromFirstXPath(node, new[] { ".//a[contains(@href,'/series/') or contains(@href,'/serie/')]" }),
+                    LabelValue(text, "Цикл", "Серия", "Из цикла")
+                );
 
                 result.Add(BuildWork(spec.id, url, title, image, string.Empty, author, reader, series, new List<AudioFdbChapter>()));
                 if (result.Count >= limit) break;
@@ -3167,10 +4038,42 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             var text = SafeText(doc.DocumentNode);
             var title = FirstNonEmpty(Attr(titleNode, "content"), Attr(titleNode, "alt"), SafeText(titleNode), TitleFromUrl(url));
             var description = FirstNonEmpty(Attr(descriptionNode, "content"), SafeText(descriptionNode));
-            var image = AbsoluteUrl(spec.root, FirstNonEmpty(Attr(imageNode, "data-original"), Attr(imageNode, "data-src"), Attr(imageNode, "data-img"), Attr(imageNode, "src"), Attr(imageNode, "content")));
-            var author = LabelValue(text, "Автор", "Писатель", "span[itemprop=author]");
-            var reader = LabelValue(text, "Исполнитель", "Читает", "Озвучивает", "Диктор");
-            var series = LabelValue(text, "Цикл", "Серия", "Входит в серию", "Из цикла");
+            var image = AbsoluteUrl(spec.root, FirstNonEmpty(Attr(imageNode, "data-original"), Attr(imageNode, "data-lazy-src"), Attr(imageNode, "data-src"), Attr(imageNode, "data-img"), Attr(imageNode, "src"), Attr(imageNode, "content")));
+            var author = FirstNonEmpty(
+                TextsFromFirstXPath(doc.DocumentNode, new[]
+                {
+                    "//*[@itemprop='author']//a",
+                    "//*[@itemprop='author']",
+                    "//*[@data-schema-author]//a",
+                    "//*[contains(@class,'short-info-item')][contains(normalize-space(.),'Писатель')]//a",
+                    "//li[.//span[contains(normalize-space(.),'Автор')]]//a",
+                    "//div[contains(@class,'book-page-meta-line')]//a[contains(@href,'/author/')]",
+                    "//a[contains(@class,'author-name')]"
+                }),
+                LabelValue(text, "Автор", "Писатель")
+            );
+            var reader = FirstNonEmpty(
+                TextsFromFirstXPath(doc.DocumentNode, new[]
+                {
+                    "//div[contains(@class,'book-page-meta-line')][.//*[contains(normalize-space(.),'Диктор')]]//a",
+                    "//div[contains(@class,'_8f5765')][contains(normalize-space(.),'Читает')]//a",
+                    "//*[@data-schema-readby]//a",
+                    "//*[contains(@class,'short-info-item')][contains(normalize-space(.),'Озвучивает')]//a",
+                    "//li[.//span[contains(normalize-space(.),'Озвучка') or contains(normalize-space(.),'Читает')]]//a",
+                    "//a[contains(@href,'/reader') or contains(@href,'/readers') or contains(@href,'/voice')]",
+                    "//a[contains(@class,'reader-name')]"
+                }),
+                LabelValue(text, "Исполнитель", "Читает", "Озвучивает", "Диктор")
+            );
+            var series = FirstNonEmpty(
+                TextsFromFirstXPath(doc.DocumentNode, new[]
+                {
+                    "//*[@itemprop='isPartOf']//a",
+                    "//*[@data-schema-series]//a",
+                    "//a[contains(@href,'/series/') or contains(@href,'/serie/')]"
+                }),
+                LabelValue(text, "Цикл", "Серия", "Входит в серию", "Из цикла")
+            );
             var chapters = await ExtractChaptersAsync(spec, url, html, doc);
             return BuildWork(spec.id, url, title, image, description, author, reader, series, chapters);
         }
@@ -3179,6 +4082,7 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
         {
             var chapters = new List<AudioFdbChapter>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var embeddedPlaylists = new List<string>();
 
             void Add(string rawUrl, string title, string duration)
             {
@@ -3196,6 +4100,13 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 });
             }
 
+            string JsonValueText(JsonNode? node)
+            {
+                if (node == null) return string.Empty;
+                try { return node.GetValue<string>() ?? string.Empty; }
+                catch { return node.ToJsonString().Trim('"'); }
+            }
+
             foreach (var node in SelectNodes(doc.DocumentNode, new[] { "//*[@data-url or @data-file or @data-src or @src]" }))
             {
                 var raw = FirstNonEmpty(Attr(node, "data-url"), Attr(node, "data-file"), Attr(node, "data-src"), Attr(node, "src"));
@@ -3203,14 +4114,64 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 Add(raw, FirstNonEmpty(Attr(node, "data-title"), Attr(node, "title"), SafeText(node)), Attr(node, "data-duration"));
             }
 
-            foreach (Match m in Regex.Matches(html, @"(?is)(?:file|url|src)\s*[:=]\s*[""'](?<url>[^""']+)[""'][^{}]{0,240}?(?:title\s*[:=]\s*[""'](?<title>[^""']+)[""'])?[^{}]{0,120}?(?:duration\s*[:=]\s*[""']?(?<duration>[0-9:.]+))?"))
+            foreach (var node in SelectNodes(doc.DocumentNode, new[] { "//*[@data-ap-encoded and @data-ap-id]" }))
+            {
+                var decoded = DecodeAudioknigiProPlaylist(Attr(node, "data-ap-encoded"), Attr(node, "data-ap-id"));
+                if (!string.IsNullOrWhiteSpace(decoded))
+                    embeddedPlaylists.Add(decoded);
+            }
+
+            foreach (Match m in Regex.Matches(html, @"(?is)KB\.playerInit\((?<json>\{.*?\})\)\s*;"))
+            {
+                try
+                {
+                    var player = JsonNode.Parse(m.Groups["json"].Value)?.AsObject();
+                    foreach (var item in (player?["playlist"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+                    {
+                        Add(
+                            FirstNonEmpty(JsonValueText(item["src"]), JsonValueText(item["file"]), JsonValueText(item["url"])),
+                            FirstNonEmpty(JsonValueText(item["title"]), JsonValueText(item["name"])),
+                            FirstNonEmpty(JsonValueText(item["duration"]), JsonValueText(item["time"]))
+                        );
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            foreach (Match m in Regex.Matches(html, @"(?is)new\s+XSPlayer\((?<json>\{.*?\})\)\s*;"))
+            {
+                try
+                {
+                    var player = JsonNode.Parse(m.Groups["json"].Value)?.AsObject();
+                    var prefix = JsonValueText(player?["mp3_url_prefix"]).Trim().TrimEnd('/');
+                    if (!prefix.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                        !prefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                        prefix = "https://" + prefix.TrimStart('/');
+                    var sign = JsonValueText(player?["sign"]);
+                    foreach (var track in (player?["tracks"] as JsonArray ?? new JsonArray()).OfType<JsonArray>())
+                    {
+                        var title = track.Count > 1 ? JsonValueText(track[1]) : string.Empty;
+                        var duration = track.Count > 2 ? JsonValueText(track[2]) : string.Empty;
+                        var fileName = track.Count > 4 ? JsonValueText(track[4]) : string.Empty;
+                        if (!string.IsNullOrWhiteSpace(fileName))
+                            Add(prefix + "/" + fileName.TrimStart('/') + sign, title, duration);
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            foreach (Match m in Regex.Matches(html, @"(?is)[""']?(?:file|url|src)[""']?\s*[:=]\s*[""'](?<url>[^""']+)[""'][^{}]{0,240}?(?:[""']?title[""']?\s*[:=]\s*[""'](?<title>[^""']+)[""'])?[^{}]{0,120}?(?:[""']?duration[""']?\s*[:=]\s*[""']?(?<duration>[0-9:.]+))?"))
             {
                 var raw = m.Groups["url"].Value;
                 if (!LooksLikeAudio(raw)) continue;
                 Add(raw, JsDecode(m.Groups["title"].Value), m.Groups["duration"].Value);
             }
 
-            foreach (Match m in Regex.Matches(html, @"(?is)(?:title\s*[:=]\s*[""'](?<title>[^""']+)[""'])[^{}]{0,240}?(?:file|url|src)\s*[:=]\s*[""'](?<url>[^""']+)[""'][^{}]{0,120}?(?:duration\s*[:=]\s*[""']?(?<duration>[0-9:.]+))?"))
+            foreach (Match m in Regex.Matches(html, @"(?is)(?:[""']?title[""']?\s*[:=]\s*[""'](?<title>[^""']+)[""'])[^{}]{0,240}?[""']?(?:file|url|src)[""']?\s*[:=]\s*[""'](?<url>[^""']+)[""'][^{}]{0,120}?(?:[""']?duration[""']?\s*[:=]\s*[""']?(?<duration>[0-9:.]+))?"))
             {
                 var raw = m.Groups["url"].Value;
                 if (!LooksLikeAudio(raw)) continue;
@@ -3224,16 +4185,118 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                     Add(u.Groups["url"].Value, string.Empty, string.Empty);
             }
 
-            foreach (Match m in Regex.Matches(html, @"https?://[^""'\s<>]+\.txt"))
+            void AddPlaylistChapters(string playlistText)
+            {
+                if (string.IsNullOrWhiteSpace(playlistText))
+                    return;
+
+                try
+                {
+                    if (JsonNode.Parse(playlistText) is JsonArray array)
+                    {
+                        foreach (var item in array.OfType<JsonObject>())
+                        {
+                            var raw = FirstNonEmpty(JsonValueText(item["file"]), JsonValueText(item["url"]), JsonValueText(item["src"]));
+                            if (string.IsNullOrWhiteSpace(raw)) continue;
+                            Add(raw, FirstNonEmpty(JsonValueText(item["title"]), JsonValueText(item["name"])), FirstNonEmpty(JsonValueText(item["duration"]), JsonValueText(item["time"])));
+                        }
+                    }
+                }
+                catch { }
+
+                if (chapters.Count > 0)
+                    return;
+
+                foreach (Match u in Regex.Matches(playlistText, @"(?is)(?:file|url|src)\s*[""']?\s*[:=]\s*[""'](?<url>[^""']+)[""'][^{}]{0,240}?(?:title\s*[""']?\s*[:=]\s*[""'](?<title>[^""']+)[""'])?[^{}]{0,120}?(?:duration\s*[""']?\s*[:=]\s*[""']?(?<duration>[0-9:.]+))?"))
+                    Add(u.Groups["url"].Value, JsDecode(u.Groups["title"].Value), u.Groups["duration"].Value);
+            }
+
+            foreach (var playlist in embeddedPlaylists)
+                AddPlaylistChapters(playlist);
+
+            if (chapters.Count == 0)
+            {
+                var archiveIds = Regex.Matches(
+                        html,
+                        @"(?is)archive\.org/(?:embed|download)/(?<id>[^/?&""'<>\s]+)"
+                    )
+                    .Select(match => HttpUtility.HtmlDecode(match.Groups["id"].Value))
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(4)
+                    .ToList();
+
+                foreach (var archiveId in archiveIds)
+                {
+                    try
+                    {
+                        var metadataText = await GetStringAsync(
+                            "https://archive.org/metadata/" + HttpUtility.UrlEncode(archiveId),
+                            Specs["archive_org"]
+                        );
+                        var files = JsonNode.Parse(metadataText)?["files"]?.AsArray();
+                        foreach (var file in (files ?? new JsonArray()).OfType<JsonObject>())
+                        {
+                            var name = JsonValueText(file["name"]);
+                            var format = JsonValueText(file["format"]);
+                            if (string.IsNullOrWhiteSpace(name) ||
+                                (!name.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) &&
+                                 !format.Contains("MP3", StringComparison.OrdinalIgnoreCase)))
+                                continue;
+                            var encodedName = string.Join("/", name.Split('/').Select(Uri.EscapeDataString));
+                            Add(
+                                "https://archive.org/download/" + archiveId + "/" + encodedName,
+                                FirstNonEmpty(JsonValueText(file["title"]), name),
+                                FirstNonEmpty(JsonValueText(file["length"]), JsonValueText(file["duration"]))
+                            );
+                        }
+                    }
+                    catch
+                    {
+                    }
+                    if (chapters.Count > 0)
+                        break;
+                }
+            }
+
+            if (chapters.Count == 0)
+            {
+                foreach (var node in SelectNodes(doc.DocumentNode, new[] { "//meta[@property='og:audio' and @content]" }))
+                    Add(Attr(node, "content"), string.Empty, string.Empty);
+            }
+
+            foreach (Match m in Regex.Matches(html, @"https?://[^""'\s<>]+\.txt(?:\?[^""'\s<>]+)?"))
             {
                 if (chapters.Count > 0) break;
                 try
                 {
                     var playlistText = await GetStringAsync(m.Value, spec);
-                    foreach (Match u in Regex.Matches(playlistText, @"(?is)(?:file|url|src)\s*[:=]\s*[""']?(?<url>https?://[^""'\s,]+)"))
-                        Add(u.Groups["url"].Value, string.Empty, string.Empty);
+                    AddPlaylistChapters(playlistText);
                 }
                 catch { }
+            }
+
+            if (chapters.Count == 0 && spec.id == "lis10book_com")
+            {
+                var cover = FirstNonEmpty(
+                    Attr(doc.DocumentNode.SelectSingleNode("//meta[@property='og:image'][1]"), "content"),
+                    Attr(doc.DocumentNode.SelectSingleNode("//img[contains(@src,'_cover')][1]"), "src")
+                );
+                var playlistId = Regex.Match(
+                    cover ?? string.Empty,
+                    @"/(?<id>[^/_?]+)_cover",
+                    RegexOptions.IgnoreCase
+                ).Groups["id"].Value;
+                if (!string.IsNullOrWhiteSpace(playlistId))
+                {
+                    try
+                    {
+                        var playlistUrl = spec.root.TrimEnd('/') +
+                            "/wp-content/uploads/playlist/" + playlistId + ".txt";
+                        AddPlaylistChapters(await GetStringAsync(playlistUrl, spec));
+                    }
+                    catch { }
+                }
             }
 
             return chapters;
@@ -3241,30 +4304,111 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
 
         private async Task<string> GetStringAsync(string url, RuBookFdbProviderSpec spec)
         {
-            using var http = AudiobookModuleBase.CreateClient(useProxy: spec.use_proxy);
-            http.Timeout = TimeSpan.FromSeconds(15);
-            ConfigureHeaders(http, spec, url);
-            return await http.GetStringAsync(url);
+            async Task<string> Fetch(string target, bool useProxy)
+            {
+                using var http = AudiobookModuleBase.CreateClient(useProxy);
+                http.Timeout = TimeSpan.FromSeconds(18);
+                ConfigureHeaders(http, spec, target);
+                using var response = await http.GetAsync(target);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync();
+            }
+
+            Exception? lastError = null;
+            try
+            {
+                return await Fetch(url, spec.use_proxy);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+
+            if (spec.use_proxy && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AUDIOBOOK_PROXY")))
+            {
+                try
+                {
+                    return await Fetch(url, false);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    return await Fetch("http://" + url.Substring("https://".Length), false);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            throw lastError ?? new HttpRequestException("Источник не ответил: " + url);
         }
 
         private async Task<string> PostDleSearchAsync(RuBookFdbProviderSpec spec, string query, int resultFrom)
         {
-            using var http = AudiobookModuleBase.CreateClient(useProxy: spec.use_proxy);
-            http.Timeout = TimeSpan.FromSeconds(15);
-            ConfigureHeaders(http, spec, spec.root);
-            using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+            async Task<string> Post(string root, bool useProxy)
             {
-                ["do"] = "search",
-                ["subaction"] = "search",
-                ["story"] = query ?? string.Empty,
-                ["search_start"] = "0",
-                ["result_from"] = Math.Max(1, resultFrom).ToString(),
-                ["full_search"] = "0",
-                ["search_star"] = "0",
-                ["titleonly"] = "3"
-            });
-            var response = await http.PostAsync(spec.root.TrimEnd('/') + "/index.php?do=search", form);
-            return await response.Content.ReadAsStringAsync();
+                using var http = AudiobookModuleBase.CreateClient(useProxy);
+                http.Timeout = TimeSpan.FromSeconds(18);
+                ConfigureHeaders(http, spec, root);
+                using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["do"] = "search",
+                    ["subaction"] = "search",
+                    ["story"] = query ?? string.Empty,
+                    ["search_start"] = "0",
+                    ["result_from"] = Math.Max(1, resultFrom).ToString(),
+                    ["full_search"] = "0",
+                    ["search_star"] = "0",
+                    ["titleonly"] = "3"
+                });
+                using var response = await http.PostAsync(root.TrimEnd('/') + "/index.php?do=search", form);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync();
+            }
+
+            Exception? lastError = null;
+            try
+            {
+                return await Post(spec.root, spec.use_proxy);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+
+            if (spec.use_proxy && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AUDIOBOOK_PROXY")))
+            {
+                try
+                {
+                    return await Post(spec.root, false);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (spec.root.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    return await Post("http://" + spec.root.Substring("https://".Length), false);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            throw lastError ?? new HttpRequestException("Поиск источника не ответил: " + spec.id);
         }
 
         private async Task<List<AudioFdbWork>> SearchArchiveAsync(string query, int limit, int offset)
@@ -3324,21 +4468,26 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
 
         private static AudioFdbWork BuildWork(string provider, string pageUrl, string title, string poster, string description, string author, string reader, string series, List<AudioFdbChapter> chapters)
         {
+            var cleanTitle = Clean(title);
+            var cleanDescription = Clean(description);
+            var cleanAuthor = Clean(author);
+            var cleanReader = Clean(reader);
+            var cleanSeries = FirstNonEmpty(SeriesFromTitle(cleanTitle), CleanSeriesName(series));
             var workId = "work:" + provider + ":" + AudioFdbStore.StableHash(pageUrl);
-            var editionId = "edition:" + provider + ":" + AudioFdbStore.StableHash(pageUrl + "|" + reader);
+            var editionId = "edition:" + provider + ":" + AudioFdbStore.StableHash(pageUrl + "|" + cleanReader);
             var sourceId = "source:" + provider + ":" + AudioFdbStore.StableHash(pageUrl);
             var work = new AudioFdbWork
             {
                 id = workId,
-                title = Clean(title),
-                normalized_title = AudioFdbStore.Normalize(title),
-                description = Clean(description),
-                poster_url = poster
+                title = cleanTitle,
+                normalized_title = AudioFdbStore.Normalize(cleanTitle),
+                description = cleanDescription,
+                poster_url = IsPlaceholderPoster(poster) ? string.Empty : poster
             };
-            if (!string.IsNullOrWhiteSpace(author))
-                work.authors.Add(new AudioFdbPerson { id = "person:" + provider + ":author:" + AudioFdbStore.StableHash(author), display_name = Clean(author), kind = "author", source_provider = provider });
-            if (!string.IsNullOrWhiteSpace(series))
-                work.series = new AudioFdbSeries { id = "series:" + provider + ":" + AudioFdbStore.StableHash(series), title = Clean(series), source_provider = provider };
+            foreach (var authorName in SplitPeople(cleanAuthor))
+                work.authors.Add(new AudioFdbPerson { id = "person:" + provider + ":author:" + AudioFdbStore.StableHash(authorName), display_name = authorName, kind = "author", source_provider = provider });
+            if (!string.IsNullOrWhiteSpace(cleanSeries))
+                work.series = new AudioFdbSeries { id = "series:" + provider + ":" + AudioFdbStore.StableHash(cleanSeries), title = cleanSeries, source_provider = provider };
 
             var edition = new AudioFdbEdition
             {
@@ -3350,8 +4499,8 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 chapter_fingerprint = string.Join(",", chapters.Select(c => c.duration_seconds)),
                 quality_score = chapters.Count > 0 ? 0.8 : 0.35
             };
-            if (!string.IsNullOrWhiteSpace(reader))
-                edition.narrators.Add(new AudioFdbPerson { id = "person:" + provider + ":narrator:" + AudioFdbStore.StableHash(reader), display_name = Clean(reader), kind = "narrator", source_provider = provider });
+            foreach (var readerName in SplitPeople(cleanReader))
+                edition.narrators.Add(new AudioFdbPerson { id = "person:" + provider + ":narrator:" + AudioFdbStore.StableHash(readerName), display_name = readerName, kind = "narrator", source_provider = provider });
 
             var source = new AudioFdbSource { id = sourceId, edition_id = editionId, provider = provider, external_id = pageUrl, page_url = pageUrl, status = chapters.Count > 0 ? "ok" : "listed" };
             for (var i = 0; i < chapters.Count; i++)
@@ -3361,9 +4510,35 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
                 source.chapters.Add(chapters[i]);
             }
             edition.sources.Add(source);
+            AudioFdbStore.SanitizeEditionNarrators(edition);
             work.editions.Add(edition);
             return work;
         }
+
+        private static List<string> SplitPeople(string value)
+        {
+            var cleaned = Clean(value);
+            if (string.IsNullOrWhiteSpace(cleaned))
+                return new List<string>();
+
+            var parts = Regex.Split(cleaned, @"\s*(?:,|;|\||/|\s+и\s+)\s*", RegexOptions.IgnoreCase)
+                .Select(Clean)
+                .Where(part => !string.IsNullOrWhiteSpace(part))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var plausible = parts.Where(part =>
+            {
+                var words = part.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                return words.Length >= 2 && words.Length <= 6 && !part.Any(char.IsDigit);
+            }).ToList();
+            return plausible.Count == parts.Count && plausible.Count > 0
+                ? plausible
+                : new List<string> { cleaned };
+        }
+
+        private static bool IsPlaceholderPoster(string value)
+            => string.IsNullOrWhiteSpace(value) ||
+               Regex.IsMatch(value, @"(?:empty[-_]?poster|no[-_]?cover|nophoto|/images/poster\.png)(?:[/?]|$)", RegexOptions.IgnoreCase);
 
         private static string BuildSearchUrl(RuBookFdbProviderSpec spec, string query, int page)
             => spec.search_url.Replace("{query}", HttpUtility.UrlEncode(query ?? string.Empty)).Replace("{page}", page.ToString());
@@ -3377,6 +4552,8 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             if (!http.DefaultRequestHeaders.AcceptLanguage.Any())
                 http.DefaultRequestHeaders.AcceptLanguage.ParseAdd("ru-RU,ru;q=0.9,en;q=0.8");
             http.DefaultRequestHeaders.TryAddWithoutValidation("Dnt", "1");
+            if (spec.id == "slushkinvsem_ru")
+                http.DefaultRequestHeaders.TryAddWithoutValidation("Cookie", "beget=begetok");
             if (Uri.TryCreate(Root(url), UriKind.Absolute, out var referrer))
                 http.DefaultRequestHeaders.Referrer = referrer;
         }
@@ -3403,6 +4580,31 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
             return result.Distinct().ToList();
         }
 
+        private static string TextsFromFirstXPath(HtmlNode root, IEnumerable<string> xpaths)
+        {
+            foreach (var xpath in xpaths.Where(x => !string.IsNullOrWhiteSpace(x)))
+            {
+                try
+                {
+                    var nodes = root.SelectNodes(xpath);
+                    if (nodes == null)
+                        continue;
+                    var values = nodes
+                        .Select(SafeText)
+                        .Where(value => !string.IsNullOrWhiteSpace(value))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(12)
+                        .ToList();
+                    if (values.Count > 0)
+                        return string.Join(", ", values);
+                }
+                catch
+                {
+                }
+            }
+            return string.Empty;
+        }
+
         private static HtmlNode? FirstNode(HtmlNode root, IEnumerable<string> xpaths)
             => SelectNodes(root, xpaths).FirstOrDefault();
 
@@ -3417,6 +4619,80 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
 
         private static string Clean(string value)
             => Regex.Replace(HttpUtility.HtmlDecode(value ?? string.Empty), @"\s+", " ").Trim();
+
+        private static string CleanSeriesName(string value)
+        {
+            var series = Clean(value);
+            if (string.IsNullOrWhiteSpace(series))
+                return string.Empty;
+            if (Regex.IsMatch(series, @"^(?:\u0430\s*,?\s*)?\u0436\u0430\u043d\u0440\b", RegexOptions.IgnoreCase))
+                return string.Empty;
+
+            foreach (var pattern in new[]
+            {
+                @"^«(?<v>[^»]{2,90})»\s+\d+(?:[.,]\d+)?\.",
+                @"^(?:а\s+)?«(?<v>[^»]{2,90})»,?\s+жанр\b",
+                @"^(?:\u0430\s+)?[\u00ab""](?<v>[^\u00bb""]{2,90})[\u00bb""],?.{0,180}?\b\u0436\u0430\u043d\u0440\w*\b",
+                @"^(?<v>[^:]{4,90}):\s+\d+(?:[.,]\d+)?\."
+            })
+            {
+                var match = Regex.Match(series, pattern, RegexOptions.IgnoreCase);
+                if (match.Success)
+                {
+                    var candidate = CleanSeriesCandidate(match.Groups["v"].Value);
+                    if (!string.IsNullOrWhiteSpace(candidate))
+                        return candidate;
+                }
+            }
+
+            series = Regex.Replace(series, @"^(?:Цикл|Серия|Входит в серию|Из цикла)\s*:?\s*", string.Empty, RegexOptions.IgnoreCase);
+            foreach (var marker in new[]
+            {
+                "Слушать аудиокнигу", "Описание аудиокниги", "Правила сайта", "Аудиокниги слушать онлайн",
+                "Прослушиваний", "Отзывы", "Оценить", "Длительность"
+            })
+            {
+                var index = series.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (index > 0)
+                    series = series[..index];
+            }
+
+            series = Regex.Replace(series, @"\s+\d+\s*(?:час(?:а|ов)?|минут(?:а|ы|у)?|секунд(?:а|ы)?)(?:\s+\d+\s*минут\w*)?.*$", " ", RegexOptions.IgnoreCase);
+            series = Regex.Replace(series, @"\s*\(#?\s*\d+(?:[.,]\d+)?\s*\).*$", " ", RegexOptions.IgnoreCase);
+            series = Regex.Replace(series, @"\s+#\s*\d+(?:[.,]\d+)?.*$", " ", RegexOptions.IgnoreCase);
+            series = Clean(series).Trim(' ', '-', ':', ';', ',', '.');
+            series = CleanSeriesCandidate(series);
+
+            return series.Length > 120 ? string.Empty : series;
+        }
+
+        private static string CleanSeriesCandidate(string value)
+        {
+            value = Clean(value).Trim(' ', '-', ':', ';', ',', '.', '«', '»', '"', '\'');
+            if (value.Length < 2 || value.Length > 120)
+                return string.Empty;
+            if (value.StartsWith("(#", StringComparison.OrdinalIgnoreCase))
+                return string.Empty;
+            if (Regex.IsMatch(value, @"^(?:а|ов|из|вида|опедия)$", RegexOptions.IgnoreCase))
+                return string.Empty;
+            if (!Regex.IsMatch(value, @"[A-Za-zА-Яа-яЁё]"))
+                return string.Empty;
+            if (Regex.IsMatch(value, @"(слушать|аудиокниг|описание|правила сайта|правооблад|прослушив|длительность|исполнитель|читает|жанр\s)", RegexOptions.IgnoreCase))
+                return string.Empty;
+            if (Regex.IsMatch(value, @"\b\u0436\u0430\u043d\u0440\w*\b|litrpg|\u043b\u0438\u0442\u0440\u043f\u0433", RegexOptions.IgnoreCase))
+                return string.Empty;
+            if (!AudioFdbStore.IsUsableSeriesTitle(value))
+                return string.Empty;
+            return value;
+        }
+
+        private static string SeriesFromTitle(string title)
+        {
+            title = Clean(title);
+            if (Regex.IsMatch(title, @"^\s*ГЛУБИНА\s*[\.:]\s*Погружение\b", RegexOptions.IgnoreCase))
+                return "Глубина";
+            return string.Empty;
+        }
 
         private static string StripHtml(string html)
         {
@@ -3439,6 +4715,11 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
         {
             url = HttpUtility.HtmlDecode(url ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(url)) return string.Empty;
+            if (
+                url.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("blob:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)
+            ) return string.Empty;
             if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return url;
             if (url.StartsWith("//")) return "https:" + url;
             return root.TrimEnd('/') + "/" + url.TrimStart('/');
@@ -3474,10 +4755,59 @@ LIMIT $take", ("$id", id), ("$query", query), ("$take", take))
         private static bool LooksLikeAudio(string url)
         {
             url = url ?? string.Empty;
+            if (
+                url.Contains("lis10book.com/audio/", StringComparison.OrdinalIgnoreCase) &&
+                !url.Contains(".mp3", StringComparison.OrdinalIgnoreCase) &&
+                !url.Contains(".m4a", StringComparison.OrdinalIgnoreCase)
+            )
+                return false;
+
             return url.Contains(".mp3", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains(".m4a", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/audio/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/files/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/engine/go.php", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string DecodeAudioknigiProPlaylist(string encoded, string newsId)
+        {
+            if (string.IsNullOrWhiteSpace(encoded))
+                return string.Empty;
+            try
+            {
+                const string alphabet = "f3RqmzK8TvNpLn0Xd7WhjYeA9QobsSl1HCgu5cyEDi4GBwrk2aFxJtMOPZUIV6+/=";
+                var encrypted = new List<byte>();
+                for (var i = 0; i < encoded.Length;)
+                {
+                    var e1 = alphabet.IndexOf(encoded[i++]);
+                    var e2 = i < encoded.Length ? alphabet.IndexOf(encoded[i++]) : -1;
+                    var e3 = i < encoded.Length ? alphabet.IndexOf(encoded[i++]) : -1;
+                    var e4 = i < encoded.Length ? alphabet.IndexOf(encoded[i++]) : -1;
+                    if (e1 < 0 || e2 < 0)
+                        break;
+                    encrypted.Add((byte)((e1 << 2) | (e2 >> 4)));
+                    if (e3 >= 0 && e3 != 64)
+                        encrypted.Add((byte)(((e2 & 15) << 4) | (e3 >> 2)));
+                    if (e4 >= 0 && e4 != 64)
+                        encrypted.Add((byte)(((e3 & 3) << 6) | e4));
+                }
+
+                var key = new List<byte>(encrypted.Count);
+                for (var block = 0; key.Count < encrypted.Count; block++)
+                {
+                    var input = Encoding.UTF8.GetBytes((newsId ?? "0") + ":KxOdv42AVmaq:" + block);
+                    key.AddRange(MD5.HashData(input));
+                }
+
+                var decoded = new byte[encrypted.Count];
+                for (var i = 0; i < encrypted.Count; i++)
+                    decoded[i] = (byte)(encrypted[i] ^ key[i]);
+                return Encoding.UTF8.GetString(decoded);
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         private static string JsDecode(string value)
@@ -3730,19 +5060,56 @@ namespace Lampac.Controllers
             try
             {
                 http = AudiobookModuleBase.CreateClient(useProxy: false);
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                foreach (var candidate in AudioUrlCandidates(url))
+                {
+                    try
+                    {
+                        using var request = CreateAudioRequest(candidate);
+                        response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, HttpContext.RequestAborted);
+                        var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+                        var textResponse =
+                            mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
+                            mediaType.Contains("application/json", StringComparison.OrdinalIgnoreCase) ||
+                            mediaType.Contains("application/xml", StringComparison.OrdinalIgnoreCase) ||
+                            mediaType.Contains("text/xml", StringComparison.OrdinalIgnoreCase);
+                        if (response.IsSuccessStatusCode && !textResponse)
+                            break;
 
-                request.Headers.Referrer = new Uri(GetAudioRefererForUrl(url));
+                        response.Dispose();
+                        response = null;
+                    }
+                    catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
+                    {
+                        response?.Dispose();
+                        response = null;
+                    }
+                    catch (HttpRequestException)
+                    {
+                        response?.Dispose();
+                        response = null;
+                    }
+                }
 
-                if (Request.Headers.TryGetValue("Range", out var range))
-                    request.Headers.TryAddWithoutValidation("Range", range.ToString());
-
-                response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, HttpContext.RequestAborted);
-
-                if (!response.IsSuccessStatusCode)
-                    return StatusCode((int)response.StatusCode);
+                if (response == null)
+                    return NotFound();
 
                 var contentType = response.Content.Headers.ContentType?.MediaType ?? "audio/mpeg";
+                var responseUrl = response.RequestMessage?.RequestUri?.ToString() ?? url;
+                var isHls =
+                    contentType.Contains("mpegurl", StringComparison.OrdinalIgnoreCase) ||
+                    responseUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+
+                if (isHls)
+                {
+                    var playlist = await response.Content.ReadAsStringAsync(HttpContext.RequestAborted);
+                    var rewritten = RewriteHlsPlaylist(playlist, responseUrl);
+                    Response.StatusCode = (int)response.StatusCode;
+                    Response.ContentType = "application/vnd.apple.mpegurl";
+                    Response.Headers["Access-Control-Allow-Origin"] = "*";
+                    Response.Headers["Cache-Control"] = "no-cache";
+                    await Response.Body.WriteAsync(Encoding.UTF8.GetBytes(rewritten), HttpContext.RequestAborted);
+                    return new EmptyResult();
+                }
 
                 Response.StatusCode = (int)response.StatusCode;
                 Response.ContentType = contentType;
@@ -3777,8 +5144,77 @@ namespace Lampac.Controllers
             }
         }
 
+        private static string RewriteHlsPlaylist(string playlist, string playlistUrl)
+        {
+            if (!Uri.TryCreate(playlistUrl, UriKind.Absolute, out var baseUri))
+                return playlist;
+
+            string ProxyResource(string value)
+            {
+                if (!Uri.TryCreate(baseUri, value, out var absolute))
+                    return value;
+                return "/audiobooks/audio?url=" + HttpUtility.UrlEncode(absolute.ToString());
+            }
+
+            var lines = (playlist ?? string.Empty).Replace("\r\n", "\n").Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i].Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                if (!line.StartsWith("#", StringComparison.Ordinal))
+                {
+                    lines[i] = ProxyResource(line);
+                    continue;
+                }
+
+                lines[i] = Regex.Replace(
+                    lines[i],
+                    "URI=\"(?<url>[^\"]+)\"",
+                    match => "URI=\"" + ProxyResource(match.Groups["url"].Value) + "\"",
+                    RegexOptions.IgnoreCase
+                );
+            }
+
+            return string.Join("\n", lines);
+        }
+
+        private HttpRequestMessage CreateAudioRequest(string url)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            var izi = url.Contains("audioknigi.xyz", StringComparison.OrdinalIgnoreCase) ||
+                      url.Contains("izib.uk", StringComparison.OrdinalIgnoreCase);
+            request.Headers.UserAgent.ParseAdd(izi
+                ? "izimobile/1.11.17"
+                : "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36");
+            request.Headers.Accept.ParseAdd("audio/mpeg,audio/*;q=0.9,*/*;q=0.8");
+            request.Headers.Referrer = new Uri(GetAudioRefererForUrl(url));
+            request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "audio");
+
+            if (Request.Headers.TryGetValue("Range", out var range))
+                request.Headers.TryAddWithoutValidation("Range", range.ToString());
+
+            return request;
+        }
+
+        private static IEnumerable<string> AudioUrlCandidates(string url)
+        {
+            yield return url;
+            if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                yield return "http://" + url["https://".Length..];
+            else if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                yield return "https://" + url["http://".Length..];
+        }
+
         private static string GetAudioRefererForUrl(string url)
         {
+            if (url.Contains("audioknigi.xyz", StringComparison.OrdinalIgnoreCase) || url.Contains("izib.uk", StringComparison.OrdinalIgnoreCase))
+                return "https://izib.uk/";
+
+            if (url.Contains("fantbox", StringComparison.OrdinalIgnoreCase) || url.Contains("lis10book", StringComparison.OrdinalIgnoreCase))
+                return "https://lis10book.com/";
+
             if (url.Contains("akniga", StringComparison.OrdinalIgnoreCase) || url.Contains("akniga.club", StringComparison.OrdinalIgnoreCase))
                 return "https://akniga.org/";
 
@@ -3804,6 +5240,7 @@ namespace Lampac.Controllers
 
                 var bytes = await response.Content.ReadAsByteArrayAsync();
                 var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+                Response.Headers.CacheControl = "public,max-age=604800,stale-while-revalidate=86400";
                 return File(bytes, contentType);
             }
             catch
@@ -3818,14 +5255,22 @@ namespace Lampac.Controllers
     public sealed class AudioController : Controller
     {
         private static readonly AudioFdbStore Store = new();
+        private static readonly AudioCoverEnricher Covers = new(Store);
 
         private static IzibukFdbProvider Izibuk => new(Store);
         private static RuBookFdbProvider RuBook => new(Store);
         private static readonly string[] LegacyFdbSearchProviders = { "akniga", "knigavuhe", "yakniga" };
         private static readonly object CrawlerSync = new();
-        private static readonly TimeSpan CrawlerInterval = TimeSpan.FromMinutes(15);
-        private const int CrawlerParallelism = 24;
-        private static readonly string[] CrawlerQueries = { "а", "пушкин", "фантастика", "детектив", "фэнтези", "сказки", "роман", "приключения", "попаданцы", "любовь", "история", "ужасы", "триллер", "космос", "магия", "война" };
+        private static readonly TimeSpan CrawlerInterval = TimeSpan.FromMinutes(10);
+        private const int CrawlerParallelism = 12;
+        private static readonly string[] CrawlerQueries =
+        {
+            "а", "пушкин", "фантастика", "детектив", "фэнтези", "сказки", "роман",
+            "приключения", "попаданцы", "любовь", "история", "ужасы", "триллер",
+            "космос", "магия", "война", "классика", "литрпг", "постапокалипсис",
+            "бизнес", "психология", "биография", "нон-фикшн", "детям",
+            "русская литература", "зарубежная литература"
+        };
         private static bool CrawlerStarted;
         private static int CrawlerCursor;
         private static DateTimeOffset? CrawlerLastStartedAt;
@@ -3869,6 +5314,7 @@ namespace Lampac.Controllers
                 last_offset = CrawlerLastOffset,
                 last_works = CrawlerLastWorks,
                 last_error = CrawlerLastError,
+                cover_lookup_cache = Store.CoverLookupStats(),
                 recent_runs = Store.ListCrawlerRuns(10)
             });
         }
@@ -3911,7 +5357,9 @@ namespace Lampac.Controllers
             work ??= Store.GetWork(workId);
             work = MergeKnownVariants(work);
             work = await EnsureWorkDetailsAsync(work);
+            work = await RuBook.EnrichMetadataAsync(work);
             work = MergeKnownVariants(work);
+            work = await Covers.EnrichOneAsync(work);
             return work == null ? NotFound() : Json(work);
         }
 
@@ -3943,12 +5391,204 @@ namespace Lampac.Controllers
             if (editionId.StartsWith("edition:izibuk:", StringComparison.OrdinalIgnoreCase))
                 await Izibuk.GetBookAsync(editionId);
 
-            await EnsureEditionDetailsAsync(Store.GetEdition(editionId));
-            var chapter = Store.GetChapter(editionId, chapterIndex);
-            if (chapter == null || string.IsNullOrWhiteSpace(chapter.audio_url))
+            var selectedEdition = await EnsureEditionDetailsAsync(Store.GetEdition(editionId));
+            if (selectedEdition == null)
                 return NotFound();
 
-            return Redirect("/audiobooks/audio?url=" + HttpUtility.UrlEncode(chapter.audio_url));
+            if (selectedEdition.sources.Any(source =>
+                    source.provider.Equals("akniga", StringComparison.OrdinalIgnoreCase) &&
+                    !source.chapters.Any(chapter => chapter.audio_url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase))))
+            {
+                foreach (var source in selectedEdition.sources.Where(source =>
+                             source.provider.Equals("akniga", StringComparison.OrdinalIgnoreCase) &&
+                             CanHydrateSource(selectedEdition, source)))
+                    await HydrateSourceAsync(selectedEdition, source);
+            }
+
+            var candidates = PlaybackCandidates(editionId, chapterIndex);
+            var audioUrl = await FirstAvailableAudioUrlAsync(candidates);
+
+            if (string.IsNullOrWhiteSpace(audioUrl))
+            {
+                var work = Store.GetWork(selectedEdition.work_id);
+                var merged = MergeKnownVariants(work);
+                if (merged != null)
+                {
+                    foreach (var pair in merged.editions
+                                 .SelectMany(edition => edition.sources.Select(source => new { Edition = edition, Source = source }))
+                                 .Where(pair => CanHydrateSource(pair.Edition, pair.Source))
+                                 .GroupBy(pair => pair.Source.id)
+                                 .Select(group => group.First())
+                                 .Take(16))
+                        await HydrateSourceAsync(pair.Edition, pair.Source);
+                }
+
+                candidates = PlaybackCandidates(editionId, chapterIndex);
+                audioUrl = await FirstAvailableAudioUrlAsync(candidates);
+            }
+
+            if (string.IsNullOrWhiteSpace(audioUrl))
+                return NotFound();
+
+            return Redirect("/audiobooks/audio?url=" + HttpUtility.UrlEncode(audioUrl));
+        }
+
+        private static List<string> PlaybackCandidates(string editionId, int chapterIndex)
+        {
+            var storedEdition = Store.GetEdition(editionId);
+            if (storedEdition == null)
+                return new List<string>();
+
+            var storedWork = Store.GetWork(storedEdition.work_id);
+            var work = MergeKnownVariants(storedWork) ?? storedWork;
+            if (work == null)
+                return new List<string>();
+
+            var selected = work.editions.FirstOrDefault(edition =>
+                               edition.id.Equals(editionId, StringComparison.OrdinalIgnoreCase))
+                           ?? storedEdition;
+            var readerKey = CanonicalReaderKey(selected);
+            var chapterIndices = selected.sources
+                .SelectMany(source => source.chapters)
+                .Select(chapter => chapter.chapter_index)
+                .Distinct()
+                .OrderBy(index => index)
+                .ToList();
+            var requestedOrdinal = chapterIndices.IndexOf(chapterIndex);
+
+            var orderedEditions = work.editions
+                .Append(storedEdition)
+                .DistinctBy(edition => edition.id, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(edition =>
+                {
+                    if (edition.id.Equals(editionId, StringComparison.OrdinalIgnoreCase))
+                        return 0;
+                    if (!string.IsNullOrWhiteSpace(readerKey) &&
+                        CanonicalReaderKey(edition).Equals(readerKey, StringComparison.OrdinalIgnoreCase))
+                        return 1;
+                    if (edition.chapter_count == selected.chapter_count)
+                        return 2;
+                    return 3;
+                })
+                .ThenByDescending(edition => edition.quality_score)
+                .ToList();
+
+            var urls = new List<string>();
+            foreach (var edition in orderedEditions)
+            {
+                foreach (var source in edition.sources.OrderByDescending(source =>
+                             source.status.Equals("ok", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var chapter = source.chapters.FirstOrDefault(item => item.chapter_index == chapterIndex);
+                    if (chapter == null && requestedOrdinal >= 0)
+                    {
+                        var alternate = source.chapters.OrderBy(item => item.chapter_index).ToList();
+                        if (requestedOrdinal < alternate.Count)
+                            chapter = alternate[requestedOrdinal];
+                    }
+
+                    if (chapter != null && IsPlausibleAudioUrl(chapter.audio_url))
+                        urls.Add(chapter.audio_url);
+                }
+            }
+
+            return urls.Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToList();
+        }
+
+        private static string CanonicalReaderKey(AudioFdbEdition edition)
+        {
+            return string.Join(
+                "|",
+                edition.narrators
+                    .Select(person => AudioFdbStore.Normalize(person.display_name)
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                        .Where(word => word.Length > 1)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(word => word, StringComparer.OrdinalIgnoreCase))
+                    .Select(words => string.Join(" ", words))
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            );
+        }
+
+        private async Task<string> FirstAvailableAudioUrlAsync(IEnumerable<string> candidates)
+        {
+            using var http = AudiobookModuleBase.CreateClient(useProxy: false);
+            http.Timeout = TimeSpan.FromSeconds(7);
+
+            foreach (var candidate in candidates.Take(16))
+            {
+                foreach (var url in AudioCandidateSchemes(candidate))
+                {
+                    try
+                    {
+                        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                        request.Headers.UserAgent.ParseAdd(
+                            url.Contains("audioknigi.xyz", StringComparison.OrdinalIgnoreCase) ||
+                            url.Contains("izib.uk", StringComparison.OrdinalIgnoreCase)
+                                ? "izimobile/1.11.17"
+                                : "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"
+                        );
+                        request.Headers.Accept.ParseAdd("audio/mpeg,audio/*,application/vnd.apple.mpegurl,application/x-mpegURL,*/*;q=0.8");
+                        request.Headers.TryAddWithoutValidation("Range", "bytes=0-1023");
+                        request.Headers.Referrer = new Uri(AudioReferer(url));
+
+                        using var response = await http.SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            HttpContext.RequestAborted
+                        );
+                        var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+                        var rejectedText =
+                            mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
+                            mediaType.Contains("application/json", StringComparison.OrdinalIgnoreCase) ||
+                            mediaType.Contains("application/xml", StringComparison.OrdinalIgnoreCase);
+                        if (response.IsSuccessStatusCode && !rejectedText)
+                            return url;
+                    }
+                    catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
+                    {
+                    }
+                    catch (HttpRequestException)
+                    {
+                    }
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static IEnumerable<string> AudioCandidateSchemes(string url)
+        {
+            yield return url;
+            if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                yield return "http://" + url["https://".Length..];
+            else if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                yield return "https://" + url["http://".Length..];
+        }
+
+        private static string AudioReferer(string url)
+        {
+            if (url.Contains("audioknigi.xyz", StringComparison.OrdinalIgnoreCase) ||
+                url.Contains("izib.uk", StringComparison.OrdinalIgnoreCase))
+                return "https://izib.uk/";
+            if (url.Contains("fantbox", StringComparison.OrdinalIgnoreCase) ||
+                url.Contains("lis10book", StringComparison.OrdinalIgnoreCase))
+                return "https://lis10book.com/";
+            if (url.Contains("akniga", StringComparison.OrdinalIgnoreCase))
+                return "https://akniga.org/";
+            if (url.Contains("knigavuhe", StringComparison.OrdinalIgnoreCase))
+                return "https://knigavuhe.org/";
+            try
+            {
+                var uri = new Uri(url);
+                return uri.Scheme + "://" + uri.Host + "/";
+            }
+            catch
+            {
+                return "https://lampac.fun/";
+            }
         }
 
         [HttpGet("proxy/{token}")]
@@ -4026,9 +5666,12 @@ namespace Lampac.Controllers
             limit = Math.Max(1, Math.Min(limit <= 0 ? 20 : limit, 50));
             offset = Math.Max(0, offset);
 
-            var local = string.IsNullOrWhiteSpace(genre)
-                ? Store.ListWorks(limit, offset, playableOnly: true)
-                : Store.SearchWorks(genre, genre, limit, offset, playableOnly: true);
+            var isPopular = (Request?.Path.Value ?? string.Empty).Contains("/popular", StringComparison.OrdinalIgnoreCase);
+            var local = isPopular
+                ? Store.ListPopularWorks(limit, offset, playableOnly: true, genre: genre)
+                : Store.ListLatestWorks(limit, offset, playableOnly: true, genre: genre);
+
+            _ = Task.Run(() => Covers.EnrichMissingAsync(12));
 
             return AudioFdbStore.DeduplicateWorks(local)
                 .Where(AudioFdbStore.HasPlayableChapters)
@@ -4050,11 +5693,14 @@ namespace Lampac.Controllers
 
         private static async Task CrawlerLoopAsync()
         {
-            await Task.Delay(TimeSpan.FromSeconds(30));
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            try { await Covers.EnrichMissingAsync(12); } catch { }
+            await Task.Delay(TimeSpan.FromSeconds(25));
 
             while (true)
             {
                 await RunCrawlerCycleAsync();
+                try { await Covers.EnrichMissingAsync(12); } catch { }
                 await Task.Delay(CrawlerInterval);
             }
         }
@@ -4079,7 +5725,12 @@ namespace Lampac.Controllers
             try
             {
                 var providers = AudioBookProviderCatalog.Providers.Values
+                    .Where(provider => provider.enabled)
                     .Select(provider => provider.id)
+                    .Where(provider =>
+                        provider.Equals("izibuk_graphql", StringComparison.OrdinalIgnoreCase) ||
+                        RuBook.CanSearch(provider) ||
+                        LegacyFdbSearchProviders.Contains(provider, StringComparer.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(p => p)
                     .ToList();
@@ -4094,7 +5745,7 @@ namespace Lampac.Controllers
                         var works = await CrawlProviderAsync(provider, query, 10, offset);
                         Interlocked.Add(ref total, works.Count);
 
-                        foreach (var work in works.Take(2))
+                        foreach (var work in works.Take(3))
                             await CrawlerHydrateWorkAsync(work);
                     }
                     catch (Exception ex)
@@ -4192,7 +5843,10 @@ namespace Lampac.Controllers
                 SearchProviderSafe(() => Izibuk.SearchAsync(query, perProvider, offset))
             };
 
-            foreach (var provider in RuBookFdbProvider.Specs.Keys.Where(p => RuBook.CanSearch(p)).OrderBy(p => p))
+            foreach (var provider in RuBookFdbProvider.Specs.Keys
+                .Where(p => RuBook.CanSearch(p))
+                .Where(p => AudioBookProviderCatalog.Providers.TryGetValue(p, out var contract) && contract.enabled)
+                .OrderBy(p => p))
                 tasks.Add(SearchProviderSafe(() => RuBook.SearchAsync(provider, query, perProvider, offset)));
 
             foreach (var provider in LegacyFdbSearchProviders.OrderBy(p => p))
@@ -4325,9 +5979,20 @@ namespace Lampac.Controllers
         private async Task<AudioFdbWork?> EnsureWorkDetailsAsync(AudioFdbWork? work)
         {
             if (work == null) return null;
+            var invalidPoster =
+                string.IsNullOrWhiteSpace(work.poster_url) ||
+                work.poster_url.Contains("data:image", StringComparison.OrdinalIgnoreCase) ||
+                work.poster_url.EndsWith("/images/poster.png", StringComparison.OrdinalIgnoreCase);
             var missing = work.editions
                 .SelectMany(e => e.sources.Select(s => new { Edition = e, Source = s }))
-                .Where(x => x.Source.chapters.Count == 0 && CanHydrateSource(x.Edition, x.Source))
+                .Where(x =>
+                    (
+                        invalidPoster ||
+                        !x.Source.chapters.Any(c => IsPlausibleAudioUrl(c.audio_url)) ||
+                        NeedsSourceRefresh(x.Source)
+                    ) &&
+                    CanHydrateSource(x.Edition, x.Source)
+                )
                 .GroupBy(x => x.Source.id)
                 .Select(g => g.First())
                 .Take(24)
@@ -4358,7 +6023,13 @@ namespace Lampac.Controllers
         {
             if (edition == null) return null;
             var missing = edition.sources
-                .Where(s => s.chapters.Count == 0 && CanHydrateSource(edition, s))
+                .Where(s =>
+                    (
+                        !s.chapters.Any(c => IsPlausibleAudioUrl(c.audio_url)) ||
+                        NeedsSourceRefresh(s)
+                    ) &&
+                    CanHydrateSource(edition, s)
+                )
                 .GroupBy(s => s.id)
                 .Select(g => g.First())
                 .Take(12)
@@ -4382,7 +6053,34 @@ namespace Lampac.Controllers
                 edition.id.StartsWith("edition:izibuk:", StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            return !string.IsNullOrWhiteSpace(source.page_url) && RuBook.CanResolve(source.provider);
+            return !string.IsNullOrWhiteSpace(source.page_url) &&
+                   (RuBook.CanResolve(source.provider) || CreateLegacyModule(source.provider) != null);
+        }
+
+        private static bool IsPlausibleAudioUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return false;
+
+            if (
+                url.Contains("lis10book.com/audio/", StringComparison.OrdinalIgnoreCase) &&
+                !url.Contains(".mp3", StringComparison.OrdinalIgnoreCase) &&
+                !url.Contains(".m4a", StringComparison.OrdinalIgnoreCase)
+            )
+                return false;
+
+            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                   url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool NeedsSourceRefresh(AudioFdbSource source)
+        {
+            if (source == null)
+                return false;
+
+            return source.provider.Equals("akniga", StringComparison.OrdinalIgnoreCase) &&
+                   !source.chapters.Any(chapter =>
+                       chapter.audio_url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase));
         }
 
         private async Task HydrateSourceAsync(AudioFdbEdition edition, AudioFdbSource source)
@@ -4397,7 +6095,21 @@ namespace Lampac.Controllers
                 }
 
                 if (!string.IsNullOrWhiteSpace(source.page_url) && RuBook.CanResolve(source.provider))
+                {
                     await RuBook.ResolveAsync(source.provider, source.page_url);
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(source.page_url))
+                {
+                    using var legacy = CreateLegacyModule(source.provider);
+                    if (legacy == null)
+                        return;
+
+                    var book = await legacy.GetBookAsync(source.page_url);
+                    if (book != null)
+                        Store.UpsertWork(MapLegacyBook(book));
+                }
             }
             catch
             {
@@ -4434,7 +6146,7 @@ namespace Lampac.Controllers
             if (!string.IsNullOrWhiteSpace(book.author))
                 work.authors.Add(new AudioFdbPerson { id = "person:" + provider + ":author:" + AudioFdbStore.StableHash(book.author), display_name = book.author, kind = "author", source_provider = provider });
 
-            if (!string.IsNullOrWhiteSpace(book.seriesName))
+            if (AudioFdbStore.IsUsableSeriesTitle(book.seriesName))
                 work.series = new AudioFdbSeries { id = "series:" + provider + ":" + AudioFdbStore.StableHash(book.seriesName), title = book.seriesName, source_provider = provider };
 
             var edition = new AudioFdbEdition

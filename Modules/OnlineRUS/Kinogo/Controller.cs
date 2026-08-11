@@ -123,14 +123,19 @@ public class KinogoController : BaseOnlineController
         #region iframe
     reset_iframe:
 
-        var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"kinogo:{embed.Value}"), 20, async e =>
+        var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"kinogo:v2:{embed.Value}"), 20, async e =>
         {
             string fileEncode = null;
             string directFile = null;
+            List<PlaylistItem> venomPlaylist = null;
             var embedHeaders = httpHeaders(init, HeadersModel.Init("referer", $"{init.host}/{href}"));
 
             void parsePlayer(ReadOnlySpan<char> html)
             {
+                venomPlaylist = ParseVenomPlaylist(html);
+                if (venomPlaylist != null)
+                    return;
+
                 fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
                 if (string.IsNullOrEmpty(fileEncode))
                     fileEncode = Rx.Match(html, "file\\s*:\\s*['\"]([^'\"]+)");
@@ -156,6 +161,9 @@ public class KinogoController : BaseOnlineController
                     parsePlayer(html);
                 }, headers: embedHeaders, proxy_data);
             }
+
+            if (venomPlaylist != null)
+                return e.Success(venomPlaylist);
 
             if (!string.IsNullOrEmpty(directFile))
             {
@@ -236,6 +244,7 @@ public class KinogoController : BaseOnlineController
                     Regex.Replace(voice, "<[^>]+>", ""),
                     HostStreamProxy(file),
                     subtitles: subtitles,
+                    voice_name: Regex.Replace(voice, "<[^>]+>", ""),
                     vast: init.vast
                 );
             }
@@ -253,13 +262,13 @@ public class KinogoController : BaseOnlineController
                 var tpl = new SeasonTpl(playlist.Count);
                 foreach (var season in playlist)
                 {
-                    string _s = Regex.Match(season.title ?? string.Empty, " ([0-9]+)$").Groups[1].Value;
-                    if (!string.IsNullOrEmpty(_s))
+                    int seasonNumber = ExtractNumber(season.title);
+                    if (seasonNumber > 0)
                     {
                         tpl.Append(
-                            $"{_s} сезон",
-                            $"{host}/lite/kinogo?rjson={rjson}&title={enc_title}&original_title={enc_original_title}&year={year}&href={enc_href}&s={_s}",
-                            _s
+                            $"{seasonNumber} сезон",
+                            $"{host}/lite/kinogo?rjson={rjson}&title={enc_title}&original_title={enc_original_title}&year={year}&href={enc_href}&s={seasonNumber}",
+                            seasonNumber
                         );
                     }
                 }
@@ -268,7 +277,10 @@ public class KinogoController : BaseOnlineController
             }
             else
             {
-                var episodes = playlist.First(i => (i.title ?? string.Empty).EndsWith($" {s}")).folder;
+                var seasonNode = playlist.FirstOrDefault(i => ExtractNumber(i.title) == s);
+                var episodes = seasonNode?.folder;
+                if (episodes == null || episodes.Count == 0)
+                    return default;
 
                 #region Перевод
                 var vtpl = new VoiceTpl();
@@ -310,6 +322,8 @@ public class KinogoController : BaseOnlineController
                     if (file.StartsWith("//"))
                         file = "https:" + file;
 
+                    string voiceName = episode.folder?.FirstOrDefault(i => i.voice_id == t)?.title ?? "По умолчанию";
+
                     #region subtitle
                     var subtitles = new SubtitleTpl();
                     string _subs = episode.subtitle;
@@ -332,10 +346,11 @@ public class KinogoController : BaseOnlineController
                     etpl.Append(
                         name,
                         title ?? original_title,
-                        s,
-                        Regex.Match(name, " ([0-9]+)$").Groups[1].Value,
+                        s.ToString(),
+                        ExtractNumber(name).ToString(),
                         HostStreamProxy(file),
                         subtitles: subtitles,
+                        voice_name: voiceName,
                         vast: init.vast
                     );
                 }
@@ -343,6 +358,121 @@ public class KinogoController : BaseOnlineController
                 return etpl;
             }
         }
+    }
+    #endregion
+
+    #region ParseVenomPlaylist
+    List<PlaylistItem> ParseVenomPlaylist(ReadOnlySpan<char> html)
+    {
+        string content = html.ToString();
+        int seasonsKey = content.IndexOf("seasons:", StringComparison.Ordinal);
+        if (seasonsKey < 0)
+            return null;
+
+        int start = content.IndexOf('[', seasonsKey);
+        if (start < 0)
+            return null;
+
+        int depth = 0;
+        bool inString = false;
+        bool escaped = false;
+
+        for (int i = start; i < content.Length; i++)
+        {
+            char c = content[i];
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (c == '"')
+                    inString = false;
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '[')
+                depth++;
+            else if (c == ']')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    string json = content.Substring(start, i - start + 1);
+                    return ConvertVenomPlaylist(JsonConvert.DeserializeObject<List<VenomSeason>>(json));
+                }
+            }
+        }
+
+        return null;
+    }
+
+    List<PlaylistItem> ConvertVenomPlaylist(List<VenomSeason> seasons)
+    {
+        if (seasons == null || seasons.Count == 0)
+            return null;
+
+        var result = new List<PlaylistItem>(seasons.Count);
+
+        foreach (var season in seasons.OrderBy(i => i.season))
+        {
+            if (season?.episodes == null || season.episodes.Count == 0)
+                continue;
+
+            var seasonItem = new PlaylistItem()
+            {
+                title = $"{season.season} сезон",
+                folder = new List<PlaylistItem>(season.episodes.Count)
+            };
+
+            foreach (var episode in season.episodes.OrderBy(i => ExtractNumber(i.episode)))
+            {
+                string file = episode.hls ?? episode.dasha ?? episode.dash;
+                if (string.IsNullOrWhiteSpace(file))
+                    continue;
+
+                seasonItem.folder.Add(new PlaylistItem()
+                {
+                    title = $"{episode.episode} серия",
+                    folder = new List<PlaylistItem>()
+                    {
+                        new PlaylistItem()
+                        {
+                            title = "По умолчанию",
+                            voice_id = 1,
+                            file = file.Replace("\\/", "/")
+                        }
+                    }
+                });
+            }
+
+            if (seasonItem.folder.Count > 0)
+                result.Add(seasonItem);
+        }
+
+        return result.Count > 0 ? result : null;
+    }
+
+    int ExtractNumber(string value)
+    {
+        string num = Regex.Match(value ?? string.Empty, "([0-9]+)").Groups[1].Value;
+        return int.TryParse(num, out int result) ? result : 0;
     }
     #endregion
 

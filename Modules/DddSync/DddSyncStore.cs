@@ -68,6 +68,13 @@ public static class DddSyncStore
                     if (eventTs < currentTs)
                         continue;
 
+                    if (ShouldIgnoreLampaTimelinePatch(current, record, currentTs, eventTs))
+                    {
+                        Log.Information("[DddSync] ignored stale Lampa timeline after direct player event: deviceId={DeviceId} contentKey={ContentKey}",
+                            Short(deviceId, 80), Short(record.Value<string>("contentKey") ?? record.Value<string>("sourceKey") ?? "", 120));
+                        continue;
+                    }
+
                     MergeRecord(current, record);
                     items[key] = current;
                 }
@@ -127,7 +134,10 @@ public static class DddSyncStore
         var payload = ev["payload"] as JObject ?? new JObject();
 
         var contentKey = CleanString(context.Value<string>("contentKey"), 256);
-        var sourceKey = CleanString(context.Value<string>("sourceKey"), 256);
+        var rawSourceKey = CleanString(context.Value<string>("sourceKey"), 16384);
+        var sourceKey = !string.IsNullOrWhiteSpace(rawSourceKey) && rawSourceKey.Length > 256
+            ? "source:" + Sha256(rawSourceKey)
+            : rawSourceKey;
         if (string.IsNullOrWhiteSpace(contentKey) && string.IsNullOrWhiteSpace(sourceKey))
         {
             var uriForKey = CleanString(context.Value<string>("uri"), 4096);
@@ -142,6 +152,8 @@ public static class DddSyncStore
         {
             ["deviceId"] = deviceId,
             ["sessionId"] = sessionId,
+            ["client"] = CleanString(ev.Value<string>("client"), 64),
+            ["eventType"] = type,
             ["contentKey"] = contentKey,
             ["sourceKey"] = sourceKey,
             ["timelineHash"] = CleanString(context.Value<string>("timelineHash"), 256),
@@ -151,6 +163,10 @@ public static class DddSyncStore
             ["filename"] = CleanString(context.Value<string>("filename"), 512),
             ["updatedAt"] = ts
         };
+
+        var playlist = NormalizePlaylist(context["playlist"] as JArray);
+        if (playlist.Count > 0)
+            record["playlist"] = playlist;
 
         CopyLong(payload, record, "position");
         CopyLong(payload, record, "duration");
@@ -226,6 +242,22 @@ public static class DddSyncStore
         return (deviceId + "\0" + keyMaterial, ts, record);
     }
 
+    static bool ShouldIgnoreLampaTimelinePatch(JObject current, JObject patch, long currentTs, long patchTs)
+    {
+        if (!string.Equals(patch.Value<string>("client"), "lampa-native", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(patch.Value<string>("reason"), "lampa_timeline_update", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (patchTs < currentTs || patchTs - currentTs > 15_000)
+            return false;
+
+        var currentClient = current.Value<string>("client");
+        var currentEventType = current.Value<string>("eventType");
+
+        return !string.IsNullOrWhiteSpace(currentEventType) &&
+               !string.Equals(currentClient, "lampa-native", StringComparison.OrdinalIgnoreCase);
+    }
+
     static void MergeRecord(JObject target, JObject patch)
     {
         foreach (var prop in patch.Properties())
@@ -248,8 +280,9 @@ public static class DddSyncStore
         var clone = new JObject();
         foreach (var name in new[]
         {
-            "deviceId", "sessionId", "contentKey", "sourceKey", "timelineHash", "sourceKind", "uri",
+            "deviceId", "sessionId", "client", "eventType", "contentKey", "sourceKey", "timelineHash", "sourceKind", "uri",
             "title", "filename", "position", "duration", "windowIndex", "playlistSize", "isPlaying",
+            "playlist",
             "finished", "endBy", "reason", "updatedAt", "lastError", "selectedAudioTrack",
             "selectedAudioTrackId", "selectedAudioTrackIndex", "selectedAudioTrackLanguage",
             "selectedAudioTrackMimeType", "selectedAudioTrackChannels", "selectedSubtitleTrack",
@@ -267,6 +300,38 @@ public static class DddSyncStore
             clone["endBy"] = null;
 
         return clone;
+    }
+
+    static JArray NormalizePlaylist(JArray source)
+    {
+        var result = new JArray();
+        if (source == null)
+            return result;
+
+        foreach (var item in source.OfType<JObject>().Take(200))
+        {
+            var normalized = new JObject
+            {
+                ["index"] = Math.Max(0, item.Value<int?>("index") ?? result.Count),
+                ["contentKey"] = CleanString(item.Value<string>("contentKey"), 256),
+                ["sourceKey"] = CleanString(item.Value<string>("sourceKey"), 256),
+                ["timelineHash"] = CleanString(item.Value<string>("timelineHash"), 256),
+                ["sourceKind"] = CleanString(item.Value<string>("sourceKind"), 256),
+                ["uri"] = CleanString(item.Value<string>("uri"), 4096),
+                ["title"] = CleanString(item.Value<string>("title"), 512),
+                ["filename"] = CleanString(item.Value<string>("filename"), 512),
+                ["season"] = Math.Max(0, item.Value<int?>("season") ?? 0),
+                ["episode"] = Math.Max(0, item.Value<int?>("episode") ?? 0),
+                ["position"] = Math.Max(0, item.Value<long?>("position") ?? 0),
+                ["duration"] = Math.Max(0, item.Value<long?>("duration") ?? 0),
+                ["percent"] = Math.Clamp(item.Value<int?>("percent") ?? 0, 0, 100)
+            };
+
+            if (!string.IsNullOrWhiteSpace(normalized.Value<string>("uri")))
+                result.Add(normalized);
+        }
+
+        return result;
     }
 
     static void EnsureLoaded()

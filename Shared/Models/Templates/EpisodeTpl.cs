@@ -195,6 +195,7 @@ public record EpisodeDto
     public short? s { get; }
     public short? e { get; }
     public string details { get; }
+    public string voice_name => details;
     public string name { get; }
     public string title { get; }
     public int? hls_manifest_timeout { get; }

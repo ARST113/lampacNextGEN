@@ -35,7 +35,7 @@ public class FlixCDNController : BaseOnlineController
     [Route("lite/flixcdn")]
     async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, int t = -1, short s = -1, bool similar = false)
     {
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false, rch_check: false))
             return badInitMsg;
 
         if (string.IsNullOrEmpty(init?.token))
@@ -72,6 +72,7 @@ public class FlixCDNController : BaseOnlineController
                         voice.title,
                         $"{host}/lite/flixcdn/stream?iframe={EncryptQuery(result.iframe_url)}&t={voice.id}",
                         "call",
+                        voice_name: voice.title,
                         vast: init.vast
                     );
                 }
@@ -144,6 +145,7 @@ public class FlixCDNController : BaseOnlineController
                             link,
                             "call",
                             streamlink: $"{link}&play=true",
+                            voice_name: targetVoice.title,
                             vast: init.vast
                         );
                     }

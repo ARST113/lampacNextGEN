@@ -194,12 +194,31 @@ public class DddSyncController : BaseController
             if (ev["context"] is JObject context)
             {
                 if (TooLong(context.Value<string>("contentKey"), 256)) return $"events[{i}].context.contentKey is too long";
-                if (TooLong(context.Value<string>("sourceKey"), 256)) return $"events[{i}].context.sourceKey is too long";
+                if (TooLong(context.Value<string>("sourceKey"), 16384)) return $"events[{i}].context.sourceKey is too long";
                 if (TooLong(context.Value<string>("timelineHash"), 256)) return $"events[{i}].context.timelineHash is too long";
                 if (TooLong(context.Value<string>("sourceKind"), 256)) return $"events[{i}].context.sourceKind is too long";
-                if (TooLong(context.Value<string>("uri"), 4096)) return $"events[{i}].context.uri is too long";
-                if (TooLong(context.Value<string>("title"), 512)) return $"events[{i}].context.title is too long";
-                if (TooLong(context.Value<string>("filename"), 512)) return $"events[{i}].context.filename is too long";
+                if (TooLong(context.Value<string>("uri"), 16384)) return $"events[{i}].context.uri is too long";
+                if (TooLong(context.Value<string>("title"), 2048)) return $"events[{i}].context.title is too long";
+                if (TooLong(context.Value<string>("filename"), 4096)) return $"events[{i}].context.filename is too long";
+
+                if (context["playlist"] is JArray playlist)
+                {
+                    if (playlist.Count > 200) return $"events[{i}].context.playlist has too many items";
+
+                    for (var playlistIndex = 0; playlistIndex < playlist.Count; playlistIndex++)
+                    {
+                        if (playlist[playlistIndex] is not JObject playlistItem)
+                            return $"events[{i}].context.playlist[{playlistIndex}] must be object";
+
+                        if (TooLong(playlistItem.Value<string>("contentKey"), 256)) return $"events[{i}].context.playlist[{playlistIndex}].contentKey is too long";
+                        if (TooLong(playlistItem.Value<string>("sourceKey"), 16384)) return $"events[{i}].context.playlist[{playlistIndex}].sourceKey is too long";
+                        if (TooLong(playlistItem.Value<string>("timelineHash"), 256)) return $"events[{i}].context.playlist[{playlistIndex}].timelineHash is too long";
+                        if (TooLong(playlistItem.Value<string>("sourceKind"), 256)) return $"events[{i}].context.playlist[{playlistIndex}].sourceKind is too long";
+                        if (TooLong(playlistItem.Value<string>("uri"), 4096)) return $"events[{i}].context.playlist[{playlistIndex}].uri is too long";
+                        if (TooLong(playlistItem.Value<string>("title"), 512)) return $"events[{i}].context.playlist[{playlistIndex}].title is too long";
+                        if (TooLong(playlistItem.Value<string>("filename"), 512)) return $"events[{i}].context.playlist[{playlistIndex}].filename is too long";
+                    }
+                }
 
                 var hasKey = !string.IsNullOrWhiteSpace(context.Value<string>("contentKey")) ||
                              !string.IsNullOrWhiteSpace(context.Value<string>("sourceKey")) ||

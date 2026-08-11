@@ -16,7 +16,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
-        if (Firefox.Status == PlaywrightStatus.disabled)
+        if (Firefox.Status == PlaywrightStatus.disabled || string.IsNullOrEmpty(conf?.token))
             return null;
 
         var online = new List<ModuleOnlineItem>();
@@ -46,6 +46,8 @@ public class ModInit : IModuleLoaded, IModuleOnline
         {
             enable = false,
             displayindex = 525,
+            rhub = false,
+            rhub_safety = false,
             stream_access = "apk,cors,web",
             headers_stream = HeadersModel.Init(
                 ("accept", "*/*"),
