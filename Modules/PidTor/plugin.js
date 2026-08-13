@@ -616,7 +616,7 @@
       var video = videoElement();
       if (!video || video.ended) return;
       var position = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-      if (video.paused || video.seeking) {
+      if (video.seeking || (video.paused && video.readyState >= 2)) {
         lastPosition = position;
         lastAdvance = Date.now();
         return;
