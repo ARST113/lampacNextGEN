@@ -81,7 +81,14 @@
         var key = taskKey(source, audioIndex);
         var cached = taskCache[key];
         if (cached && cached.expires > Date.now()) {
-            setTimeout(function () { complete(cached.json); }, 0);
+            var heartbeat = new Lampa.Reguest();
+            heartbeat.timeout(3000);
+            heartbeat['native']('{localhost}/gst/' + cached.json.id + '/heartbeat', function () {
+                complete(cached.json);
+            }, function () {
+                delete taskCache[key];
+                task(source, audioIndex, complete, error);
+            }, false, { dataType: 'text' });
             return;
         }
         if (cached) delete taskCache[key];
