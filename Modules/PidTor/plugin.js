@@ -8,6 +8,8 @@
   var TOKEN = '{token}';
   var gstLoading = false;
   var gstWaiters = [];
+  var playbackMonitor = null;
+  var playerControlsGeneration = 0;
 
   function ensureGst(complete) {
     if (window.lampac_pidtor_gst_ready) {
@@ -209,9 +211,13 @@
 
   function defaultQuality(options) {
     if (!options || !options.length) return null;
-    var selected = options[0];
+    var selected = options.slice().sort(function (a, b) {
+      var aPriority = Math.max.apply(Math, (a.variants || [a.variant]).map(playbackPriority));
+      var bPriority = Math.max.apply(Math, (b.variants || [b.variant]).map(playbackPriority));
+      return bPriority - aPriority || qualityRank(b.variant) - qualityRank(a.variant) || seeders(b.variant) - seeders(a.variant);
+    })[0];
     selected.variant = (selected.variants || [selected.variant]).slice().sort(function (a, b) {
-      return seeders(b) - seeders(a);
+      return playbackPriority(b) - playbackPriority(a) || seeders(b) - seeders(a);
     })[0];
     return selected;
   }
@@ -228,6 +234,45 @@
       .replace(/^\s*(?:ru|rus|russian|en|eng|english|ja|jpn|japanese)\s*[\/.|:_-]+\s*/i, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
+    var probe = normalized(title);
+    if (subtitle) {
+      if (/forced|форс/.test(probe)) return 'Forced';
+      if (/sdh|hearing|слабослыш/.test(probe)) return 'SDH';
+      return 'Full';
+    }
+    var studios = [
+      [/bravo records|movie dubbing/, 'Bravo Records'],
+      [/red head sound|\brhs\b/, 'Red Head Sound'],
+      [/hdrezka|rezka studio/, 'HDRezka Studio'],
+      [/jaskier/, 'Jaskier'],
+      [/lost\s*film/, 'LostFilm'],
+      [/tv\s*shows/, 'TVShows'],
+      [/невaфильм|невафильм|nevafilm/, 'Невафильм'],
+      [/newstudio/, 'NewStudio'],
+      [/postmodern/, 'Postmodern'],
+      [/anilibria/, 'AniLibria'],
+      [/anidub/, 'AniDub'],
+      [/studio band|студийная банда|wakanim/, 'Студийная Банда'],
+      [/dream\s*cast/, 'Dream Cast'],
+      [/jam\s*club/, 'JAM CLUB'],
+      [/кубик в кубе|kubik/, 'Кубик в Кубе'],
+      [/serbin|сербин/, 'Юрий Сербин'],
+      [/yarotsky|яроцк/, 'Михаил Яроцкий'],
+      [/soundhandler/, 'SoundHandler'],
+      [/rusatmos/, 'RUSATMOS'],
+      [/\bline\b/, 'Line']
+    ];
+    for (var studioIndex = 0; studioIndex < studios.length; studioIndex++) {
+      if (studios[studioIndex][0].test(probe)) return studios[studioIndex][1];
+    }
+    if (/^(?:en|eng)$/.test(language) || /original|оригинал/.test(probe)) return 'Original';
+    if (/^(?:ru|rus)$/.test(language)) {
+      if (/dub|дубляж|gy6l|gy6л/.test(probe)) return 'Дубляж';
+      if (/mvo|многоголос/.test(probe)) return 'Многоголосая';
+      if (/avo|vo|одноголос/.test(probe)) return 'Авторская';
+      if (!probe || /^(?:ru|rus|russian|und)$/.test(probe)) return 'Русская дорожка';
+    }
+    if (/^(?:uk|ukr)$/.test(language) && (!probe || /^(?:uk|ukr|ukrainian)$/.test(probe))) return 'Українська доріжка';
     if (!title || /^(?:audio|track|sound|subtitle|sub)\s*#?\d*$/i.test(title)) {
       if (/^(?:en|eng)$/.test(language)) title = subtitle ? 'English' : 'Original';
       else if (/^(?:ru|rus)$/.test(language)) title = subtitle ? 'Russian' : 'Russian audio';
@@ -542,20 +587,112 @@
   function installPlayerControls(data) {
     if (!data || !data.pidtor_nextgen) return;
     var qualities = buildQualityItems(data);
-    if (qualities.length) Lampa.PlayerPanel.setLevels(qualities, data.pidtor_quality_key || qualities[0].title);
+    if (qualities.length) {
+      var current = data.pidtor_quality_key || qualities[0].title;
+      Lampa.PlayerPanel.setLevels(qualities, current);
+      $('.player-panel__quality').text(current);
+    }
     var audio = buildAudioItems(data);
     if (audio.length) Lampa.PlayerPanel.setTracks(audio);
     var subtitles = buildSubtitleItems(data);
     if (subtitles.length) Lampa.PlayerPanel.setSubs(subtitles);
   }
 
+  function stopPlaybackMonitor() {
+    if (!playbackMonitor) return;
+    clearInterval(playbackMonitor);
+    playbackMonitor = null;
+  }
+
+  function startPlaybackMonitor(data) {
+    stopPlaybackMonitor();
+    if (!data || !data.pidtor_nextgen || data.pidtor_use_gst !== true) return;
+    var lastPosition = -1;
+    var lastAdvance = Date.now();
+    var fallbackStarted = false;
+    var hasAdvanced = false;
+
+    playbackMonitor = setInterval(function () {
+      var video = videoElement();
+      if (!video || video.ended) return;
+      var position = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      if (video.paused || video.seeking) {
+        lastPosition = position;
+        lastAdvance = Date.now();
+        return;
+      }
+      if (position > lastPosition + 0.2) {
+        lastPosition = position;
+        lastAdvance = Date.now();
+        hasAdvanced = true;
+        return;
+      }
+      var stallTimeout = hasAdvanced ? 14000 : 30000;
+      if (fallbackStarted || Date.now() - lastAdvance < stallTimeout) return;
+
+      var failedSources = data.pidtor_failed_sources || {};
+      var currentSource = String(data.pidtor_source_url || data.url || '');
+      if (currentSource) failedSources[currentSource] = true;
+      data.pidtor_failed_sources = failedSources;
+      var alternateSources = (data.pidtor_source_urls || []).filter(function (source) {
+        return source && !failedSources[String(source)];
+      });
+      var failedCount = Object.keys(failedSources).length;
+      if (alternateSources.length && failedCount < 3) {
+        fallbackStarted = true;
+        var alternate = alternateSources[0];
+        var orderedSources = [alternate].concat((data.pidtor_source_urls || []).filter(function (source) {
+          return source !== alternate;
+        }));
+        Lampa.Noty.show('Поток завис, пробую другую копию ' + data.pidtor_quality_key);
+        replaceSource(data, { url: alternate, sources: orderedSources, episodes: [] }, data.pidtor_variant);
+        stopPlaybackMonitor();
+        setTimeout(function () { startPlaybackMonitor(data); }, 1500);
+        return;
+      }
+
+      var options = data.pidtor_quality_options || [];
+      var current = options.filter(function (option) { return option.key === data.pidtor_quality_key; })[0];
+      var currentPriority = current ? playbackPriority(current.variant) : 0;
+      var candidates = options.filter(function (option) {
+        return option.key !== data.pidtor_quality_key;
+      }).sort(function (a, b) {
+        return playbackPriority(b.variant) - playbackPriority(a.variant)
+          || qualityRank(b.variant) - qualityRank(a.variant)
+          || seeders(b.variant) - seeders(a.variant);
+      });
+      var target = candidates.filter(function (option) {
+        return playbackPriority(option.variant) > currentPriority;
+      })[0] || candidates[0];
+      if (!target) {
+        stopPlaybackMonitor();
+        return;
+      }
+
+      fallbackStarted = true;
+      data.pidtor_failed_sources = {};
+      var quality = buildQualityItems(data).filter(function (item) { return item.title === target.key; })[0];
+      if (!quality) {
+        stopPlaybackMonitor();
+        return;
+      }
+      Lampa.Noty.show('Поток завис, переключаю на ' + target.key);
+      quality.enabled = true;
+      stopPlaybackMonitor();
+      setTimeout(function () { startPlaybackMonitor(data); }, 1500);
+    }, 2000);
+  }
+
   function schedulePlayerControls(data) {
     if (!data || !data.pidtor_nextgen) return;
+    startPlaybackMonitor(data);
+    var generation = ++playerControlsGeneration;
     var attempts = 0;
     function apply() {
+      if (generation !== playerControlsGeneration) return;
       attempts++;
       installPlayerControls(data);
-      if (attempts < 8) setTimeout(apply, 300);
+      if (attempts < 40) setTimeout(apply, 500);
     }
     apply();
   }
@@ -1301,12 +1438,15 @@
             variant: choice.variant,
             order: choice.order,
             resolve: function (complete, error) {
-              var stream = (choice.variant.replicas || []).filter(function (replica) { return replica.stream_url; })
-                .sort(function (a, b) { return parseInt(b.seeders || 0, 10) - parseInt(a.seeders || 0, 10); })[0];
+              var available = (choice.variant.replicas || []).filter(function (replica) { return replica.stream_url; })
+                .sort(function (a, b) { return parseInt(b.seeders || 0, 10) - parseInt(a.seeders || 0, 10); });
+              var stream = available[0];
               if (!stream) return error('Дорожка недоступна');
               complete({
                 url: account(sourceWithAudio(stream.stream_url, choice.track.stream_index)),
-                sources: [account(sourceWithAudio(stream.stream_url, choice.track.stream_index))],
+                sources: available.map(function (replica) {
+                  return account(sourceWithAudio(replica.stream_url, choice.track.stream_index));
+                }),
                 episodes: [],
                 variant: choice.variant
               });
@@ -1321,10 +1461,16 @@
             variant: choice.variant,
             order: choice.order,
             resolve: function (complete, error) {
-              var stream = (choice.variant.replicas || []).filter(function (replica) { return replica.stream_url; })
-                .sort(function (a, b) { return parseInt(b.seeders || 0, 10) - parseInt(a.seeders || 0, 10); })[0];
+              var available = (choice.variant.replicas || []).filter(function (replica) { return replica.stream_url; })
+                .sort(function (a, b) { return parseInt(b.seeders || 0, 10) - parseInt(a.seeders || 0, 10); });
+              var stream = available[0];
               if (!stream) return error('Субтитры недоступны');
-              complete({ url: account(stream.stream_url), sources: [account(stream.stream_url)], episodes: [], variant: choice.variant });
+              complete({
+                url: account(stream.stream_url),
+                sources: available.map(function (replica) { return account(replica.stream_url); }),
+                episodes: [],
+                variant: choice.variant
+              });
             }
           };
         });
@@ -1336,13 +1482,21 @@
           audio_options: audioOptions,
           subtitle_options: subtitleOptions,
           resolve: function (complete, error) {
-            var stream = variants.reduce(function (all, variant) {
+            var available = variants.reduce(function (all, variant) {
               return all.concat((variant.replicas || []).filter(function (replica) { return replica.stream_url; }).map(function (replica) {
                 return { replica: replica, variant: variant };
               }));
-            }, []).sort(function (a, b) { return parseInt(b.replica.seeders || 0, 10) - parseInt(a.replica.seeders || 0, 10); })[0];
+            }, []).sort(function (a, b) { return parseInt(b.replica.seeders || 0, 10) - parseInt(a.replica.seeders || 0, 10); });
+            var stream = available[0];
             if (!stream) return error('Качество недоступно');
-            complete({ url: account(stream.replica.stream_url), sources: [account(stream.replica.stream_url)], episodes: [], variant: stream.variant });
+            complete({
+              url: account(stream.replica.stream_url),
+              sources: available.filter(function (entry) {
+                return entry.variant.id === stream.variant.id;
+              }).map(function (entry) { return account(entry.replica.stream_url); }),
+              episodes: [],
+              variant: stream.variant
+            });
           }
         };
       });
@@ -1350,6 +1504,7 @@
       var initialAudio = preferredChoice(selectedResolver.audio_options, null, true);
       var activeVariant = initialAudio && initialAudio.variant ? initialAudio.variant : selected.variant;
       var active = replicas.filter(function (entry) { return entry.variant.id === activeVariant.id; })[0] || replicas[0];
+      var activeReplicas = replicas.filter(function (entry) { return entry.variant.id === active.variant.id; });
       var gst = useGstreamer(data);
       var source = sourceForPlayback(active.replica.stream_url, gst, initialAudio && initialAudio.track.stream_index);
       var item = {
@@ -1362,7 +1517,7 @@
         pidtor_manifest_url: endpoint,
         pidtor_use_gst: gst,
         pidtor_source_url: account(active.replica.stream_url),
-        pidtor_source_urls: replicas.map(function (entry) { return account(entry.replica.stream_url); }),
+        pidtor_source_urls: activeReplicas.map(function (entry) { return account(entry.replica.stream_url); }),
         pidtor_quality_key: selected.key,
         pidtor_audio_key: initialAudio ? initialAudio.key : '',
         pidtor_audio_stream_index: initialAudio ? parseInt(initialAudio.track.stream_index, 10) : 0,
@@ -1416,6 +1571,10 @@
     Lampa.Component.add('pidtor_nextgen', PidTorComponent);
     registerSettings();
     Lampa.Player.listener.follow('start', schedulePlayerControls);
+    Lampa.Player.listener.follow('destroy', function () {
+      playerControlsGeneration++;
+      stopPlaybackMonitor();
+    });
     Lampa.Listener.follow('full', function (event) {
       if (event.type === 'complite') addButton({ render: event.object.activity.render().find('.view--torrent'), movie: event.data.movie });
     });
