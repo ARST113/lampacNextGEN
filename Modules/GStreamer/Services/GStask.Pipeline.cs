@@ -51,7 +51,11 @@ public partial class GStask
 
     static void AppendDemuxer(StringBuilder sb, ProbeInfo probe)
     {
-        string demuxer = probe.IsAVI ? "avidemux" : "matroskademux";
+        string demuxer = probe.IsAVI
+            ? "avidemux"
+            : probe.IsIsoMp4
+                ? "qtdemux"
+                : "matroskademux";
 
         sb.AppendLine($$"""
         {{demuxer}}
@@ -218,7 +222,10 @@ public partial class GStask
         int aacChannels = AacChannels(selectedAudio);
         int aacSamplerate = AacSamplerate(selectedAudio);
 
-        int bitrate = conf.aac_bitrate * 1000;
+        int configuredBitrate = conf.aac_bitrate > 10_000
+            ? conf.aac_bitrate / 1000
+            : conf.aac_bitrate;
+        int bitrate = configuredBitrate * 1000;
         if (aacChannels > 2)
             bitrate = bitrate * 2;
 

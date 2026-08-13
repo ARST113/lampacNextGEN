@@ -4,11 +4,14 @@ namespace PidTor;
 
 public sealed class PidTorPlayerResponse
 {
+    public int schema { get; set; } = 1;
     public string title { get; set; }
+    public bool serial { get; set; }
     public int season { get; set; }
     public int episode { get; set; }
     public string resolver { get; set; }
     public long resolver_id { get; set; }
+    public bool gst { get; set; }
     public List<PidTorPlayerVariant> variants { get; set; } = new();
 }
 

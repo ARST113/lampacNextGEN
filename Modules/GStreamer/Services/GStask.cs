@@ -389,7 +389,10 @@ public partial class GStask
             ? conf.aac_channels
             : Math.Max(1, audio?.Channels ?? 2);
 
-        long audioBitrate = Math.Max(1, conf.aac_bitrate) * 1000L;
+        int configuredBitrate = conf.aac_bitrate > 10_000
+            ? conf.aac_bitrate / 1000
+            : conf.aac_bitrate;
+        long audioBitrate = Math.Max(1, configuredBitrate) * 1000L;
 
         if (channels > 2)
             audioBitrate *= 2;

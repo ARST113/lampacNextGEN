@@ -498,7 +498,7 @@
         window.plugin_lampac_tracks = true;
 
         Lampa.Player.listener.follow('start', function (data) {
-            if (data.torrent_hash) subscribeTracks(data);
+            if (data.torrent_hash && !data.pidtor_nextgen) subscribeTracks(data);
         });
         Lampa.Listener.follow('torrent_file', function (data) {
             if (data.type == 'list_open') list_opened = true;

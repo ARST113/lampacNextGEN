@@ -135,8 +135,8 @@ public static class GService
 
                 bool transcodeAVI = probe.IsAVI && conf.transcodeAVI;
 
-                if (!probe.IsMatroskaOrWebM && !transcodeAVI)
-                    return new(null, $"not matroska/webm: {probe.ContainerCapsName ?? probe.ContainerName ?? "unknown"}");
+                if (!probe.IsMatroskaOrWebM && !probe.IsIsoMp4 && !transcodeAVI)
+                    return new(null, $"unsupported container: {probe.ContainerCapsName ?? probe.ContainerName ?? "unknown"}");
 
                 bool supportedVideo =
                     probe.IsH264 ||
@@ -185,13 +185,21 @@ public static class GService
 
                 lock (taskAddLock)
                 {
+                    int maxTasksPerUser = Math.Max(1, conf.maxTasksPerUser);
+                    var userTasks = new List<KeyValuePair<ulong, GStask>>();
+
                     foreach (var tk in tasks)
                     {
                         if (tk.Value.user_uid == uid && tk.Key != id)
-                        {
-                            if (tasks.TryRemove(tk.Key, out var removed))
-                                removedTasks.Add(removed);
-                        }
+                            userTasks.Add(tk);
+                    }
+
+                    userTasks.Sort((a, b) => a.Value.lastActive.CompareTo(b.Value.lastActive));
+                    int removeUserTasks = Math.Max(0, userTasks.Count - maxTasksPerUser + 1);
+                    for (int i = 0; i < removeUserTasks; i++)
+                    {
+                        if (tasks.TryRemove(userTasks[i].Key, out var removed))
+                            removedTasks.Add(removed);
                     }
 
                     int maxTasks = ModInit.conf.maxTasks;
@@ -293,7 +301,12 @@ public static class GService
         if (hybridCache.TryGetValue(probeKey, out ProbeInfo cachedProbe))
             return new(cachedProbe, null);
 
-        var probe = await GSProbe.Get(sourceUrl);
+        var probe = await GSProbe.Get(sourceUrl, timeoutSeconds: 20).ConfigureAwait(false);
+        if (probe == null)
+        {
+            await Task.Delay(250).ConfigureAwait(false);
+            probe = await GSProbe.Get(sourceUrl, timeoutSeconds: 20).ConfigureAwait(false);
+        }
         if (probe == null)
             return new(null, "probe");
 

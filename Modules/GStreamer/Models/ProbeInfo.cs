@@ -21,6 +21,13 @@ public sealed class ProbeInfo
         ContainerCapsName == "audio/webm" ||
         ContainerCapsName == "video/webm";
 
+    public bool IsIsoMp4 =>
+        ContainerCapsName == "video/quicktime" ||
+        ContainerCapsName == "video/mp4" ||
+        ContainerName?.IndexOf("fmp4", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+        ContainerName?.IndexOf("iso mp4", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+        ContainerName?.IndexOf("quicktime", System.StringComparison.OrdinalIgnoreCase) >= 0;
+
     public bool IsAVI
         => ContainerCapsName == "video/x-msvideo";
 

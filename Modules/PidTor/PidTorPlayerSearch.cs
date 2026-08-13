@@ -33,10 +33,12 @@ public static class PidTorPlayerSearch
         var response = new PidTorPlayerResponse
         {
             title = request.title,
+            serial = request.serial,
             season = request.season,
             episode = request.episode,
             resolver = resolved?.provider,
-            resolver_id = resolved?.id ?? 0
+            resolver_id = resolved?.id ?? 0,
+            gst = settings.gst
         };
 
         if (root?.Results == null)
@@ -194,7 +196,22 @@ public static class PidTorPlayerSearch
 
     static string Quality(Result result)
     {
-        int height = result.ffprobe?.Where(IsPlayableVideo).Select(i => i.height ?? 0).DefaultIfEmpty().Max() ?? 0;
+        FfStream video = result.ffprobe?.Where(IsPlayableVideo)
+            .OrderByDescending(i => (long)(i.width ?? 0) * (i.height ?? 0))
+            .FirstOrDefault();
+        int width = video?.width ?? 0;
+        int height = video?.height ?? 0;
+
+        // Cinemascope releases are commonly 3840x1606 or 1920x802. Width is the
+        // stable quality signal there; height-only classification turns them
+        // into false 1440p/720p variants.
+        if (width >= 3000) return "2160p";
+        if (width >= 2200) return "1440p";
+        if (width >= 1600) return "1080p";
+        if (width >= 1100) return "720p";
+        if (width >= 850) return "576p";
+        if (width >= 700) return "480p";
+
         if (height <= 0) height = result.info?.quality ?? 0;
         if (height >= 2000) return "2160p";
         if (height >= 1300) return "1440p";

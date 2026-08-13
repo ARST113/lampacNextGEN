@@ -23,7 +23,6 @@ public class GStreamerController : BaseController
 {
     #region gst.js
     [AllowAnonymous]
-    [Staticache(10, always: true, setHeadersNoCache: true)]
     [HttpGet("/gst.js")]
     [HttpGet("/gst/js/{token}")]
     public ActionResult GstJs(string token)
@@ -31,7 +30,7 @@ public class GStreamerController : BaseController
         if (!ModInit.conf.enable)
             return Content(string.Empty, "application/javascript; charset=utf-8");
 
-        var plugin = FileCache.ReadAllText($"{ModInit.modpath}/plugins/gst.js", "gst.js")
+        var plugin = FileCache.ReadAllText($"{ModInit.modpath}/plugins/gst.js", "gst.js", saveCache: false)
             .Replace("{localhost}", CoreInit.Host(HttpContext))
             .Replace("{token}", HttpUtility.UrlEncode(token));
 
@@ -57,7 +56,7 @@ public class GStreamerController : BaseController
 
     #region add
     [HttpGet("/gst/add")]
-    public async Task<ActionResult> Add(string link, string linkencode, string uid, string token)
+    public async Task<ActionResult> Add(string link, string linkencode, string uid, string token, int audio = 0)
     {
         SetHeadersNoCache();
 
@@ -68,7 +67,7 @@ public class GStreamerController : BaseController
         if (ModInit.conf.allowed_uids != null && !ModInit.conf.allowed_uids.Contains(user_id))
             return StatusCode(401);
 
-        var gstask = await GService.GetOrAdd(link ?? CrypTo.DecodeBase64(linkencode), user_id);
+        var gstask = await GService.GetOrAdd(link ?? CrypTo.DecodeBase64(linkencode), user_id, audio);
         if (gstask.task == null)
         {
             HttpContext.Response.StatusCode = StatusCodes.Status502BadGateway;
@@ -226,13 +225,15 @@ public class GStreamerController : BaseController
 
                     hasSubs = true;
 
-                    string lang = string.IsNullOrWhiteSpace(track.Language)
+                    string rawLang = string.IsNullOrWhiteSpace(track.Language)
                         ? "und"
-                        : HlsQuoted(track.Language);
+                        : track.Language;
+                    string lang = HlsQuoted(rawLang);
 
-                    string name = string.IsNullOrWhiteSpace(track.Title)
-                        ? $"Subtitle {track.Index}"
-                        : HlsQuoted(track.Title);
+                    string rawName = string.IsNullOrWhiteSpace(track.Title)
+                        ? rawLang.ToUpperInvariant()
+                        : $"{rawLang.ToUpperInvariant()} / {track.Title}";
+                    string name = HlsQuoted(rawName);
 
                     playlist.AppendLine($"#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"{name}\",LANGUAGE=\"{lang}\",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI=\"/gst/{id}/subs/{track.Index}.m3u8\"");
                 }

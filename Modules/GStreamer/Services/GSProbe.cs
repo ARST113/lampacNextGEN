@@ -793,6 +793,7 @@ public static class GSProbe
         // Ниже не поддерживается текущим pipeline, но полезно для диагностики.
         if (c.Contains("quicktime") ||
             c.Contains("iso mp4") ||
+            c.Contains("fmp4") ||
             c.Contains("mpeg-4") ||
             Regex.IsMatch(c, @"\bmp4\b", RegexOptions.IgnoreCase))
         {

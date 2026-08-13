@@ -27,7 +27,6 @@ namespace PidTor;
 public class PiTor : BaseOnlineController
 {
     [HttpGet, AllowAnonymous]
-    [Staticache(20, always: true, setHeadersNoCache: true)]
     [Route("pidtor.js")]
     [Route("pidtor/js/{token}")]
     public ActionResult Plugin(string token)
@@ -90,7 +89,7 @@ public class PiTor : BaseOnlineController
         AnimeResolveResult resolved = AnimeTitleResolver.IsAnime(request)
             ? await AnimeTitleResolver.ResolveAsync(request).ConfigureAwait(false)
             : null;
-        string cacheKey = $"pidtor:v2:4:{id}:{tmdb_id}:{kinopoisk_id}:{imdb_id}:{title}:{original_title}:{year}:{serial}:{s}:{e}:{resolved?.id}";
+        string cacheKey = $"pidtor:v2:7:{id}:{tmdb_id}:{kinopoisk_id}:{imdb_id}:{title}:{original_title}:{year}:{serial}:{s}:{e}:{resolved?.id}:{init.gst}";
         var cache = await InvokeCacheResult<PidTorPlayerResponse>(cacheKey, 15, textJson: true, onget: async result =>
         {
             var response = await PidTorPlayerSearch.SearchAsync(init, request, resolved, host).ConfigureAwait(false);
@@ -615,7 +614,7 @@ public class PiTor : BaseOnlineController
 
     [HttpGet]
     [Route("lite/pidtor/s{id}")]
-    async public Task<ActionResult> Stream(string id, short tsid = -1, int audio = -1)
+    async public Task<ActionResult> Stream(string id, short tsid = -1, int audio = -1, bool preload = false, bool stat = false, bool raw = false)
     {
         var init = ModInit.conf;
         if (!init.enable)
@@ -628,8 +627,15 @@ public class PiTor : BaseOnlineController
             return Json(new { accsdb = true, msg = "Временно недоступен, попробуйте через несколько часов" });
 
         short index = tsid != -1 ? tsid : (short)1;
-        string magnet = $"magnet:?xt=urn:btih:{id}&" + Regex.Replace(HttpContext.Request.QueryString.Value.Remove(0, 1), "&(account_email|uid|token|nws_id|tsid|audio)=[^&]+", "").Replace("&.m3u8", "");
-        string gstAudio = audio >= 0 ? $"&audio={audio}" : string.Empty;
+        string magnet = $"magnet:?xt=urn:btih:{id}&" + Regex.Replace(HttpContext.Request.QueryString.Value.Remove(0, 1), "&(account_email|uid|token|nws_id|tsid|audio|preload|stat|raw)=[^&]+", "").Replace("&.m3u8", "");
+        int gstAudio = audio >= 0 ? audio : 0;
+        string streamAction = preload ? "preload" : stat ? "stat" : "play";
+
+        ActionResult gst_stream(string rawSource)
+        {
+            string encodedSource = HttpUtility.UrlEncode(CrypTo.Base64(rawSource));
+            return LocalRedirect(accsArgs($"/gst/start.m3u8?linkencode={encodedSource}&audio={gstAudio}"));
+        }
 
         #region auth_stream
         async Task<ActionResult> auth_stream(string host, string login, string passwd, bool aes, string uhost = null, Dictionary<string, string> addheaders = null)
@@ -684,14 +690,20 @@ public class PiTor : BaseOnlineController
 
             if (aes)
             {
-                string payload = aesRequest(login, passwd, $"{uhost ?? host}/stream?link={hash}&index={index}&play");
-                return Redirect($"{uhost ?? host}/{payload}");
+                string payload = aesRequest(login, passwd, $"{uhost ?? host}/stream?link={hash}&index={index}&{streamAction}");
+                string source = $"{uhost ?? host}/{payload}";
+
+                if (ModInit.conf.gst && !preload && !stat && !raw)
+                    return gst_stream(source);
+
+                return Redirect(source);
             }
 
-            if (ModInit.conf.gst)
-                return Redirect($"{uhost ?? host}/gst/{hash}/master.m3u8?index={index}{gstAudio}");
+            string stream = $"{uhost ?? host}/stream?link={hash}&index={index}&{streamAction}";
+            if (ModInit.conf.gst && !preload && !stat && !raw)
+                return gst_stream(stream);
 
-            return Redirect($"{uhost ?? host}/stream?link={hash}&index={index}&play");
+            return Redirect(stream);
         }
         #endregion
 
@@ -705,10 +717,11 @@ public class PiTor : BaseOnlineController
                 return await auth_stream($"http://{CoreInit.conf.listen.localhost}:{ModInit.tsport}", "ts", passwd, false, uhost: $"{host}/ts");
             }
 
-            if (ModInit.conf.gst)
-                return Redirect($"{host}/ts/gst/{id}/master.m3u8?index={index}{gstAudio}");
+            string stream = $"{host}/ts/stream?link={HttpUtility.UrlEncode(magnet)}&index={index}&{streamAction}";
+            if (ModInit.conf.gst && !preload && !stat && !raw)
+                return gst_stream(stream);
 
-            return Redirect($"{host}/ts/stream?link={HttpUtility.UrlEncode(magnet)}&index={index}&play");
+            return Redirect(stream);
         }
 
         if (init.auth_torrs?.FirstOrDefault(i => i.enable) != null)
@@ -749,21 +762,30 @@ public class PiTor : BaseOnlineController
                 memoryCache.Set(key, tshost, DateTime.Now.AddHours(4));
             }
 
-            if (ModInit.conf.gst)
-                return Redirect($"{tshost}/gst/{id}/master.m3u8?index={index}{gstAudio}");
+            string stream = $"{tshost}/stream?link={HttpUtility.UrlEncode(magnet)}&index={index}&{streamAction}";
+            if (ModInit.conf.gst && !preload && !stat && !raw)
+                return gst_stream(stream);
 
-            return Redirect($"{tshost}/stream?link={HttpUtility.UrlEncode(magnet)}&index={index}&play");
+            return Redirect(stream);
         }
     }
 
 
     static string DetectQuality(string title, Result torrent)
     {
-        int height = torrent?.ffprobe?
+        FfStream video = torrent?.ffprobe?
             .Where(i => string.Equals(i.codec_type, "video", StringComparison.OrdinalIgnoreCase))
-            .Select(i => i.height ?? 0)
-            .DefaultIfEmpty(0)
-            .Max() ?? 0;
+            .OrderByDescending(i => (long)(i.width ?? 0) * (i.height ?? 0))
+            .FirstOrDefault();
+        int width = video?.width ?? 0;
+        int height = video?.height ?? 0;
+
+        if (width >= 3000) return "2160p";
+        if (width >= 2200) return "1440p";
+        if (width >= 1600) return "1080p";
+        if (width >= 1100) return "720p";
+        if (width >= 850) return "576p";
+        if (width >= 700) return "480p";
 
         if (height <= 0)
             height = torrent?.info?.quality ?? 0;

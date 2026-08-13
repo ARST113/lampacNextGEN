@@ -16,6 +16,12 @@ public class ModuleConf : ModuleBaseConf
     /// </summary>
     public int maxTasks { get; set; }
 
+    /// <summary>
+    /// Maximum number of cached tasks per user. Tasks are cheap until an HLS
+    /// playlist is requested and keeping a few avoids probing on every switch.
+    /// </summary>
+    public int maxTasksPerUser { get; set; } = 6;
+
 
     public double gst_version { get; set; }
 
