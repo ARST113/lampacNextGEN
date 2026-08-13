@@ -294,6 +294,15 @@
     return options.slice().sort(function (a, b) { return seeders(b.variant) - seeders(a.variant); })[0];
   }
 
+  function availableChoices(options, variantIds) {
+    var allowed = {};
+    (variantIds || []).forEach(function (id) { allowed[String(id)] = true; });
+    if (!Object.keys(allowed).length) return options || [];
+    return (options || []).filter(function (choice) {
+      return choice.variant && allowed[String(choice.variant.id)];
+    });
+  }
+
   function resolvedWithChoice(resolved, choice, field) {
     if (!choice) return resolved;
     resolved.variant = choice.variant || resolved.variant;
@@ -399,6 +408,7 @@
       item.pidtor_audio_key = data.pidtor_audio_key || '';
       item.pidtor_subtitle_key = data.pidtor_subtitle_key || '';
       item.pidtor_audio_stream_index = data.pidtor_audio_stream_index;
+      item.pidtor_available_variant_ids = episode.pidtor_available_variant_ids || [];
     });
   }
 
@@ -495,22 +505,24 @@
           if (!enabled || option.key === data.pidtor_quality_key) return;
           var previousAudio = currentChoice(data, 'audio');
           var previousSubtitle = currentChoice(data, 'subtitle');
-          var targetAudio = preferredChoice(option.audio_options, previousAudio, true);
-          var targetSubtitle = preferredChoice(option.subtitle_options, previousSubtitle, false);
           option.resolve(function (resolved) {
+            var audioOptions = availableChoices(option.audio_options, resolved.available_variant_ids);
+            var subtitleOptions = availableChoices(option.subtitle_options, resolved.available_variant_ids);
+            var targetAudio = preferredChoice(audioOptions, previousAudio, true);
+            var targetSubtitle = preferredChoice(subtitleOptions, previousSubtitle, false);
             if (targetAudio && targetAudio.variant && resolved.variant && targetAudio.variant.id !== resolved.variant.id) {
               targetAudio.resolve(function (audioResolved) {
-                applyResolved(resolvedWithChoice(audioResolved, targetAudio, 'audio'));
+                applyResolved(resolvedWithChoice(audioResolved, targetAudio, 'audio'), audioOptions, subtitleOptions, targetAudio, targetSubtitle);
               }, function (message) { Lampa.Noty.show(message || 'Аудиодорожка недоступна'); });
               return;
             }
-            applyResolved(resolvedWithChoice(resolved, targetAudio, 'audio'));
+            applyResolved(resolvedWithChoice(resolved, targetAudio, 'audio'), audioOptions, subtitleOptions, targetAudio, targetSubtitle);
           }, function (message) { Lampa.Noty.show(message || 'Качество недоступно'); });
 
-          function applyResolved(resolved) {
+          function applyResolved(resolved, audioOptions, subtitleOptions, targetAudio, targetSubtitle) {
             data.pidtor_quality_key = option.key;
-            data.pidtor_audio_options = option.audio_options;
-            data.pidtor_subtitle_options = option.subtitle_options;
+            data.pidtor_audio_options = audioOptions;
+            data.pidtor_subtitle_options = subtitleOptions;
             data.pidtor_audio_key = targetAudio ? targetAudio.key : '';
             data.pidtor_subtitle_key = targetSubtitle ? targetSubtitle.key : '';
             data.pidtor_audio_stream_index = targetAudio ? parseInt(targetAudio.track.stream_index, 10) : 0;
@@ -677,6 +689,7 @@
           sources: selected.pidtor_source_urls || [selected.url],
           episodes: resolved.episodes,
           variant: selected.pidtor_variant || resolved.variant,
+          available_variant_ids: selected.pidtor_available_variant_ids || [],
           requested_episode: parseInt(episodeNumber, 10)
         };
       }
@@ -781,6 +794,9 @@
           copy.url = records[0] ? records[0].url : copy.url;
           copy.pidtor_source_urls = records.map(function (record) { return record.url; });
           copy.pidtor_variant = records[0] ? records[0].variant : null;
+          copy.pidtor_available_variant_ids = records.map(function (record) {
+            return record.variant && record.variant.id;
+          }).filter(function (id, index, all) { return id && all.indexOf(id) === index; });
           return copy;
         });
         var resolved = {
@@ -788,6 +804,9 @@
           sources: requestedSources.map(function (record) { return record.url; }),
           episodes: episodes,
           variant: requestedSources[0].variant,
+          available_variant_ids: requestedSources.map(function (record) {
+            return record.variant && record.variant.id;
+          }).filter(function (id, index, all) { return id && all.indexOf(id) === index; }),
           requested_episode: parseInt(episodeNumber, 10)
         };
         resolutionCache[cacheKey] = resolved;
@@ -842,8 +861,17 @@
       });
     }
 
-    function trackResolvers(option, episodeNumber, field) {
-      return mergedTrackChoices(option, field).map(function (choice, index) {
+    function trackResolvers(option, episodeNumber, field, allowedVariantIds) {
+      var allowed = {};
+      (allowedVariantIds || []).forEach(function (id) { allowed[String(id)] = true; });
+      var source = option;
+      if (Object.keys(allowed).length) {
+        var variants = (option.variants || [option.variant]).filter(function (variant) {
+          return variant && allowed[String(variant.id)];
+        });
+        source = { variant: variants[0] || option.variant, variants: variants };
+      }
+      return mergedTrackChoices(source, field).map(function (choice, index) {
         return {
           key: option.key + '|' + field + '|' + normalized(choice.title) + '|' + normalized(choice.track.language),
           title: choice.title,
@@ -863,7 +891,7 @@
       });
     }
 
-    function optionResolvers(options, episodeNumber, selected) {
+    function optionResolvers(options, episodeNumber, selected, selectedVariantIds) {
       return options.map(function (option) {
         var result = {
           key: option.key,
@@ -876,13 +904,15 @@
                 url: account(resolved.url),
                 sources: (resolved.sources || [resolved.url]).map(account),
                 episodes: resolved.episodes || [],
-                variant: resolved.variant || option.variant
+                variant: resolved.variant || option.variant,
+                available_variant_ids: resolved.available_variant_ids || []
               });
             }, error);
           }
         };
-        result.audio_options = trackResolvers(option, episodeNumber, 'audio');
-        result.subtitle_options = trackResolvers(option, episodeNumber, 'subtitles');
+        var allowed = option === selected ? selectedVariantIds : null;
+        result.audio_options = trackResolvers(option, episodeNumber, 'audio', allowed);
+        result.subtitle_options = trackResolvers(option, episodeNumber, 'subtitles', allowed);
         return result;
       });
     }
@@ -892,7 +922,7 @@
       var seasonNumber = parseInt(meta.s || meta.season_number || season || 0, 10);
       var knownEpisode = episodeMetadata[seasonNumber + '|' + episodeNumber] || {};
       var manifestUrl = account(API + '/lite/pidtor/v2?' + query(object.movie, seasonNumber, episodeNumber));
-      var qualityResolvers = optionResolvers(options, episodeNumber, selected);
+      var qualityResolvers = optionResolvers(options, episodeNumber, selected, meta.pidtor_available_variant_ids);
       var selectedResolver = qualityResolvers.filter(function (item) { return item.key === selected.key; })[0] || qualityResolvers[0];
       var variant = activeVariant || meta.pidtor_variant || selected.variant;
       var initialAudio = preferredChoice(selectedResolver ? selectedResolver.audio_options : [], null, true);
@@ -911,6 +941,7 @@
         pidtor_source_urls: (sources || meta.pidtor_source_urls || [url]).map(function (source) {
           return account(sourceForPlayback(source, useGst === true, initialAudio && initialAudio.track.stream_index));
         }),
+        pidtor_available_variant_ids: meta.pidtor_available_variant_ids || [],
         pidtor_quality_key: selected.key,
         pidtor_audio_key: initialAudio ? initialAudio.key : '',
         pidtor_audio_stream_index: initialAudio ? parseInt(initialAudio.track.stream_index, 10) : 0,
@@ -941,7 +972,7 @@
     }
 
     function transportCopy(source) {
-      var keys = ['title', 'url', 'url_orig', 'season', 'episode', 'timeline', 'pidtor_nextgen', 'pidtor_manifest_schema', 'pidtor_manifest_url', 'pidtor_use_gst', 'pidtor_source_url', 'pidtor_source_urls', 'pidtor_quality_key', 'pidtor_audio_key', 'pidtor_subtitle_key', 'pidtor_audio_stream_index', 'torrent_hash', 'card', 'movie', 'isonline'];
+      var keys = ['title', 'url', 'url_orig', 'season', 'episode', 'timeline', 'pidtor_nextgen', 'pidtor_manifest_schema', 'pidtor_manifest_url', 'pidtor_use_gst', 'pidtor_source_url', 'pidtor_source_urls', 'pidtor_available_variant_ids', 'pidtor_quality_key', 'pidtor_audio_key', 'pidtor_subtitle_key', 'pidtor_audio_stream_index', 'torrent_hash', 'card', 'movie', 'isonline'];
       var copy = {};
       keys.forEach(function (key) {
         if (typeof source[key] !== 'undefined') copy[key] = source[key];
@@ -965,10 +996,12 @@
       var launchResolvers = optionResolvers(options, parseInt(meta.number, 10), selected);
       var selectedResolver = launchResolvers.filter(function (item) { return item.key === selected.key; })[0] || launchResolvers[0];
       var initialAudio = preferredChoice(selectedResolver ? selectedResolver.audio_options : [], null, true);
-      var startResolver = initialAudio || selectedResolver;
-      startResolver.resolve(function (resolved) {
-        resolved = resolvedWithChoice(resolved, initialAudio, 'audio');
+      selectedResolver.resolve(function (resolved) {
+        selectedResolver.audio_options = availableChoices(selectedResolver.audio_options, resolved.available_variant_ids);
+        selectedResolver.subtitle_options = availableChoices(selectedResolver.subtitle_options, resolved.available_variant_ids);
+        initialAudio = preferredChoice(selectedResolver.audio_options, null, true);
         var startResolved = function (prepared) {
+          prepared = resolvedWithChoice(prepared, initialAudio, 'audio');
           Lampa.Loading.stop();
           var playback = [];
           var gst = useGstreamer(data);
@@ -988,11 +1021,12 @@
           if (gst) ensureGst(startPlayer);
           else startPlayer();
         };
-        var prepareFailed = function (message) {
-          Lampa.Loading.stop();
-          Lampa.Noty.show(message || 'Не удалось подготовить торрент');
-        };
-        startResolved(resolved);
+        if (initialAudio && resolved.variant && initialAudio.variant && resolved.variant.id !== initialAudio.variant.id) {
+          initialAudio.resolve(startResolved, function (message) {
+            Lampa.Loading.stop();
+            Lampa.Noty.show(message || 'Не удалось подготовить дорожку');
+          });
+        } else startResolved(resolved);
       }, function (message) {
         Lampa.Loading.stop();
         Lampa.Noty.show(message || 'Не удалось подготовить торрент');
