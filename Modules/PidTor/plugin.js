@@ -994,11 +994,14 @@
       }
 
       Lampa.Loading.start(function () {}, 'Подготовка торрента...');
-      var launchResolvers = optionResolvers(options, parseInt(meta.number, 10), selected);
-      var selectedResolver = launchResolvers.filter(function (item) { return item.key === selected.key; })[0] || launchResolvers[0];
-      var initialAudio = preferredChoice(selectedResolver ? selectedResolver.audio_options : [], null, true);
-      var startResolver = initialAudio || selectedResolver;
-      startResolver.resolve(function (resolved) {
+      var episodeNumber = parseInt(meta.number, 10);
+
+      function startOption(activeOption, fallbackIndex) {
+        var launchResolvers = optionResolvers(options, episodeNumber, activeOption);
+        var selectedResolver = launchResolvers.filter(function (item) { return item.key === activeOption.key; })[0] || launchResolvers[0];
+        var initialAudio = preferredChoice(selectedResolver ? selectedResolver.audio_options : [], null, true);
+        var startResolver = initialAudio || selectedResolver;
+        startResolver.resolve(function (resolved) {
         var activeIds = resolved.variant && resolved.variant.id ? [resolved.variant.id] : resolved.available_variant_ids;
         selectedResolver.audio_options = availableChoices(selectedResolver.audio_options, activeIds);
         selectedResolver.subtitle_options = availableChoices(selectedResolver.subtitle_options, activeIds);
@@ -1010,11 +1013,11 @@
           var gst = useGstreamer(data);
           if (prepared.episodes.length) {
             playback = prepared.episodes.map(function (item) {
-              return playerItem(item, item.url, options, selected, item.pidtor_source_urls, gst, item.pidtor_variant);
+              return playerItem(item, item.url, options, activeOption, item.pidtor_source_urls, gst, item.pidtor_variant);
             });
           }
-          var first = playback.filter(function (item) { return item.episode === parseInt(meta.number, 10); })[0]
-            || playerItem(meta, prepared.url, options, selected, prepared.sources, gst, prepared.variant);
+          var first = playback.filter(function (item) { return item.episode === episodeNumber; })[0]
+            || playerItem(meta, prepared.url, options, activeOption, prepared.sources, gst, prepared.variant);
           var launchItem = runtimeCopy(first);
           if (playback.length > 1) launchItem.playlist = playback.map(transportCopy);
           var startPlayer = function () {
@@ -1026,9 +1029,16 @@
         };
         startResolved(resolved);
       }, function (message) {
-        Lampa.Loading.stop();
-        Lampa.Noty.show(message || 'Не удалось подготовить торрент');
+          var next = fallbackIndex + 1;
+          if (next < options.length) startOption(options[next], next);
+          else {
+            Lampa.Loading.stop();
+            Lampa.Noty.show(message || 'Не удалось подготовить торрент');
+          }
       });
+      }
+
+      startOption(selected, options.indexOf(selected));
     }
 
     function playEpisode(meta) {
