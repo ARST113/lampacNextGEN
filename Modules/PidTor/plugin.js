@@ -506,8 +506,9 @@
           var previousAudio = currentChoice(data, 'audio');
           var previousSubtitle = currentChoice(data, 'subtitle');
           option.resolve(function (resolved) {
-            var audioOptions = availableChoices(option.audio_options, resolved.available_variant_ids);
-            var subtitleOptions = availableChoices(option.subtitle_options, resolved.available_variant_ids);
+            var activeIds = resolved.variant && resolved.variant.id ? [resolved.variant.id] : resolved.available_variant_ids;
+            var audioOptions = availableChoices(option.audio_options, activeIds);
+            var subtitleOptions = availableChoices(option.subtitle_options, activeIds);
             var targetAudio = preferredChoice(audioOptions, previousAudio, true);
             var targetSubtitle = preferredChoice(subtitleOptions, previousSubtitle, false);
             if (targetAudio && targetAudio.variant && resolved.variant && targetAudio.variant.id !== resolved.variant.id) {
@@ -996,10 +997,12 @@
       var launchResolvers = optionResolvers(options, parseInt(meta.number, 10), selected);
       var selectedResolver = launchResolvers.filter(function (item) { return item.key === selected.key; })[0] || launchResolvers[0];
       var initialAudio = preferredChoice(selectedResolver ? selectedResolver.audio_options : [], null, true);
-      selectedResolver.resolve(function (resolved) {
-        selectedResolver.audio_options = availableChoices(selectedResolver.audio_options, resolved.available_variant_ids);
-        selectedResolver.subtitle_options = availableChoices(selectedResolver.subtitle_options, resolved.available_variant_ids);
-        initialAudio = preferredChoice(selectedResolver.audio_options, null, true);
+      var startResolver = initialAudio || selectedResolver;
+      startResolver.resolve(function (resolved) {
+        var activeIds = resolved.variant && resolved.variant.id ? [resolved.variant.id] : resolved.available_variant_ids;
+        selectedResolver.audio_options = availableChoices(selectedResolver.audio_options, activeIds);
+        selectedResolver.subtitle_options = availableChoices(selectedResolver.subtitle_options, activeIds);
+        initialAudio = preferredChoice(selectedResolver.audio_options, initialAudio, true);
         var startResolved = function (prepared) {
           prepared = resolvedWithChoice(prepared, initialAudio, 'audio');
           Lampa.Loading.stop();
@@ -1021,12 +1024,7 @@
           if (gst) ensureGst(startPlayer);
           else startPlayer();
         };
-        if (initialAudio && resolved.variant && initialAudio.variant && resolved.variant.id !== initialAudio.variant.id) {
-          initialAudio.resolve(startResolved, function (message) {
-            Lampa.Loading.stop();
-            Lampa.Noty.show(message || 'Не удалось подготовить дорожку');
-          });
-        } else startResolved(resolved);
+        startResolved(resolved);
       }, function (message) {
         Lampa.Loading.stop();
         Lampa.Noty.show(message || 'Не удалось подготовить торрент');
