@@ -146,7 +146,10 @@ public class AnimevostController : BaseOnlineController
 
             return ContentTpl(cache, () =>
             {
-                var etpl = new EpisodeTpl(cache.Value.Count);
+                var vtpl = new VoiceTpl(1);
+                vtpl.Append("AnimeVost", true, $"{host}/lite/animevost?title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(uri)}&s={s}");
+
+                var etpl = new EpisodeTpl(vtpl, cache.Value.Count);
 
                 foreach (var l in cache.Value)
                 {

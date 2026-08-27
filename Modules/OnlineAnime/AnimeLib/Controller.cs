@@ -56,7 +56,7 @@ public class AnimeLibController : BaseOnlineController
 
                     string req_uri = $"{init.host}/api/anime?fields[]=rate_avg&fields[]=rate&fields[]=releaseDate&q={HttpUtility.UrlEncode(q)}";
 
-                    var result = await httpHydra.Get<ApiResponse<DataSearch[]>>(req_uri, addheaders: bearer, safety: true);
+                    var result = await AnimeLibGet<ApiResponse<DataSearch[]>>(req_uri, bearer);
                     var data = result?.data;
                     if (data == null || data.Length == 0)
                         return null;
@@ -133,7 +133,7 @@ public class AnimeLibController : BaseOnlineController
             {
                 string req_uri = $"{init.host}/api/episodes?anime_id={uri}";
 
-                var root = await httpHydra.Get<ApiResponse<Episode[]>>(req_uri, addheaders: bearer, safety: true);
+                var root = await AnimeLibGet<ApiResponse<Episode[]>>(req_uri, bearer);
                 if (root?.data == null)
                     return e.Fail(string.Empty, refresh_proxy: true);
 
@@ -159,7 +159,7 @@ public class AnimeLibController : BaseOnlineController
             {
                 string req_uri = $"{init.host}/api/episodes/{episodes.First().id}";
 
-                var root = await httpHydra.Get<ApiResponse<EpisodeDetails>>(req_uri, addheaders: bearer, safety: true);
+                var root = await AnimeLibGet<ApiResponse<EpisodeDetails>>(req_uri, bearer);
                 var playersData = root?.data?.players;
                 if (playersData == null)
                     return OnError(refresh_proxy: true);
@@ -174,19 +174,21 @@ public class AnimeLibController : BaseOnlineController
 
             var vtpl = new VoiceTpl(players.Length);
             string activTranslate = t;
+            var voiceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var player in players)
             {
-                if (player.player != "Animelib")
+                string voiceName = player.team?.name;
+                if (string.IsNullOrWhiteSpace(voiceName) || !voiceNames.Add(voiceName))
                     continue;
 
                 if (string.IsNullOrEmpty(activTranslate))
-                    activTranslate = player.team.name;
+                    activTranslate = voiceName;
 
                 vtpl.Append(
-                    player.team.name,
-                    activTranslate == player.team.name,
-                    $"{host}/lite/animelib?rjson={rjson}&title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(uri)}&t={HttpUtility.UrlEncode(player.team.name)}"
+                    voiceName,
+                    string.Equals(activTranslate, voiceName, StringComparison.OrdinalIgnoreCase),
+                    $"{host}/lite/animelib?rjson={rjson}&title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(uri)}&t={HttpUtility.UrlEncode(voiceName)}"
                 );
             }
             #endregion
@@ -247,7 +249,7 @@ public class AnimeLibController : BaseOnlineController
             string req_uri = $"{init.host}/api/episodes/{id}";
             var bearer = HeadersModel.Init("authorization", $"Bearer {init.token}");
 
-            var root = await httpHydra.Get<ApiResponse<EpisodeDetails>>(req_uri, addheaders: bearer, safety: true);
+            var root = await AnimeLibGet<ApiResponse<EpisodeDetails>>(req_uri, bearer);
             if (root?.data?.players == null)
                 return e.Fail("data", refresh_proxy: true);
 
@@ -259,6 +261,22 @@ public class AnimeLibController : BaseOnlineController
 
         if (!cache.IsSuccess)
             return OnError(cache.ErrorMsg);
+
+        var selectedPlayer = cache.Value.FirstOrDefault(i =>
+            !string.IsNullOrWhiteSpace(i?.src) &&
+            (string.IsNullOrWhiteSpace(voice) || string.Equals(i.team?.name, voice, StringComparison.OrdinalIgnoreCase))
+        ) ?? cache.Value.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i?.src));
+
+        if (selectedPlayer != null && string.Equals(selectedPlayer.player, "Kodik", StringComparison.OrdinalIgnoreCase))
+        {
+            string playerLink = selectedPlayer.src.StartsWith("//") ? $"https:{selectedPlayer.src}" : selectedPlayer.src;
+            string route = play ? "/lite/kodik/video.m3u8" : "/lite/kodik/video";
+            string kodik = $"{route}?title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(title)}&link={HttpUtility.UrlEncode(playerLink)}&episode=0";
+            if (play)
+                kodik += "&play=true";
+
+            return LocalRedirect(accsArgs(kodik));
+        }
 
         var headers_stream = httpHeaders(init.host, init.headers_stream);
 
@@ -299,6 +317,22 @@ public class AnimeLibController : BaseOnlineController
     }
     #endregion
 
+
+    async Task<T> AnimeLibGet<T>(string uri, IReadOnlyList<HeadersModel> bearer) where T : class
+    {
+        var result = await httpHydra.Get<T>(uri, addheaders: bearer, safety: true);
+        if (result != null)
+            return result;
+
+        return await Http.Get<T>(
+            uri,
+            timeoutSeconds: init.httptimeout,
+            headers: httpHeaders(init, bearer),
+            proxy: null,
+            httpversion: 1,
+            useDefaultHeaders: false
+        );
+    }
 
     #region goStreams
     IReadOnlyList<StreamQualityDto> goStreams(Player[] players, string _voice, IReadOnlyList<HeadersModel> headers_stream)

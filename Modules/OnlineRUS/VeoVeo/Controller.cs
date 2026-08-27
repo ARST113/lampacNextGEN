@@ -42,7 +42,9 @@ public class VeoVeoController : BaseOnlineController
             if (similar)
                 return await Spider(title);
 
-            var movie = await search(imdb_id, kinopoisk_id, title, original_title);
+            var movie = clarification == 1
+                ? await search(null, 0, title, null)
+                : await search(imdb_id, kinopoisk_id, title, original_title);
             if (movie == null)
                 return await Spider(clarification == 1 ? title : (original_title ?? title));
 
@@ -86,15 +88,23 @@ public class VeoVeoController : BaseOnlineController
 
             if (variants != null)
             {
-                foreach (var group in variants
+                var groups = variants
                     .Where(i => !string.IsNullOrWhiteSpace(i.title) && !string.IsNullOrWhiteSpace(i.filepath))
-                    .GroupBy(i => i.title, StringComparer.OrdinalIgnoreCase))
+                    .GroupBy(i => i.title, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var labels = await Task.WhenAll(groups.Select(async group =>
                 {
                     string sourceVoice = group.Key;
-                    voiceLabels[sourceVoice] = IsGenericVoice(sourceVoice)
+                    string label = IsGenericVoice(sourceVoice)
                         ? await DetectVoiceLabel(movieid, s, sourceVoice, group.First().filepath)
                         : sourceVoice;
-                }
+
+                    return (sourceVoice, label);
+                }));
+
+                foreach (var item in labels)
+                    voiceLabels[item.sourceVoice] = item.label;
             }
         }
 
@@ -315,7 +325,6 @@ public class VeoVeoController : BaseOnlineController
                 if (string.IsNullOrWhiteSpace(label))
                     return fallback;
 
-                Console.WriteLine($"[VeoVeo] voice movie={movieid} season={season} source={sourceVoice} detected={label} tracks={tracks.Count}");
                 return label;
             }
             catch (Exception ex)
@@ -357,6 +366,60 @@ public class VeoVeoController : BaseOnlineController
     #endregion
 
     #region Spider
+    static int SpiderSearchScore(string candidate, string search)
+    {
+        if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(search))
+            return int.MaxValue;
+
+        if (candidate.Equals(search, StringComparison.Ordinal))
+            return 0;
+
+        if (candidate.StartsWith(search, StringComparison.Ordinal))
+            return 1;
+
+        if (candidate.Contains(search, StringComparison.Ordinal))
+            return 2;
+
+        return search.Length >= 6 && IsEditDistanceWithin(candidate, search, 2)
+            ? 3
+            : int.MaxValue;
+    }
+
+    static bool IsEditDistanceWithin(string left, string right, int maxDistance)
+    {
+        if (Math.Abs(left.Length - right.Length) > maxDistance)
+            return false;
+
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+
+        for (int j = 0; j <= right.Length; j++)
+            previous[j] = j;
+
+        for (int i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            int rowMin = current[0];
+
+            for (int j = 1; j <= right.Length; j++)
+            {
+                int cost = left[i - 1] == right[j - 1] ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost
+                );
+                rowMin = Math.Min(rowMin, current[j]);
+            }
+
+            if (rowMin > maxDistance)
+                return false;
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length] <= maxDistance;
+    }
+
     [HttpGet, Staticache(manually: true)]
     [Route("lite/veoveo-spider")]
     async public Task<ActionResult> Spider(string title)
@@ -365,27 +428,67 @@ public class VeoVeoController : BaseOnlineController
         if (stitle == null)
             return OnError();
 
-        var stpl = new SimilarTpl(100);
+        string stage = "start";
+        int scanned = 0;
+        int matches = 0;
 
-        foreach (var m in ModInit.database)
+        try
         {
-            if (stpl.data.Count >= 100)
-                break;
+            stage = "template";
+            var stpl = new SimilarTpl(100);
+            stage = "database";
+            IEnumerable<Movie> database = ModInit.databaseById?.Values.Distinct()
+                ?? ModInit.database
+                ?? Enumerable.Empty<Movie>();
+            var found = new List<(Movie movie, int score, int titleLength)>();
 
-            if (SearchNameTo.Contains(m.title, stitle) ||
-                SearchNameTo.Contains(m.originalTitle, stitle))
+            stage = "enumerate";
+            foreach (var m in database)
             {
+                if (m == null)
+                    continue;
+
+                scanned++;
+                stage = $"normalize:{m.id}";
+                string normalizedTitle = SearchNameTo.Convert(m.title);
+                string normalizedOriginal = SearchNameTo.Convert(m.originalTitle);
+                int titleScore = SpiderSearchScore(normalizedTitle, stitle);
+                int originalScore = SpiderSearchScore(normalizedOriginal, stitle);
+                int score = Math.Min(titleScore, originalScore);
+
+                if (score != int.MaxValue)
+                    found.Add((m, score, normalizedTitle?.Length ?? normalizedOriginal?.Length ?? int.MaxValue));
+            }
+
+            stage = "append";
+            foreach (var candidate in found
+                .OrderBy(i => i.score)
+                .ThenBy(i => i.titleLength)
+                .ThenByDescending(i => i.movie.year)
+                .Take(100))
+            {
+                var m = candidate.movie;
+                stage = $"append:{m.id}";
                 stpl.Append(
                     m.title ?? m.originalTitle,
                     m.year.ToString(),
                     string.Empty,
                     $"{host}/lite/veoveo?movieid={m.id}",
-                    PosterApi.Find(m.kinopoiskId, m.imdbId)
+                    m.kinopoiskId > 0
+                        ? $"https://st.kp.yandex.net/images/film_iphone/iphone360_{m.kinopoiskId}.jpg"
+                        : null
                 );
+                matches++;
             }
-        }
 
-        return ContentTpl(stpl);
+            stage = "response";
+            return ContentTpl(stpl);
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Error(ex, "VeoVeo spider failed Title={Title} Normalized={Normalized} Stage={Stage} Scanned={Scanned}", title, stitle, stage, scanned);
+            return OnError();
+        }
     }
     #endregion
 

@@ -35,7 +35,7 @@ public class VideoDBController : BaseOnlineController
         var oninvk = new VideoDBInvoke(host);
 
     rhubFallback:
-        var cache = await InvokeCacheResult<EmbedModel>(ipkey($"videodb:{href}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<EmbedModel>(ipkey($"videodb:{href}"), TimeSpan.FromHours(4), textJson: true, onget: async e =>
         {
             EmbedModel embed = null;
 
@@ -112,7 +112,7 @@ public class VideoDBController : BaseOnlineController
                 return ShowError(rch_error);
         }
 
-        var cache = await InvokeCacheResult<string>(ipkey($"videodb:video:{link}"), 20, async e =>
+        var cache = await InvokeCacheResult<string>(ipkey($"videodb:video:{link}"), TimeSpan.FromHours(2), async e =>
         {
             string location = null;
 

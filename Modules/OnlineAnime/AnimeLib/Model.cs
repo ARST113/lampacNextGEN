@@ -40,6 +40,8 @@ public class Player
 {
     public string player { get; set; }
 
+    public string src { get; set; }
+
     public PlayerTeam team { get; set; }
 
     public Video video { get; set; }
