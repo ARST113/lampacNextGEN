@@ -1,0 +1,10 @@
+{
+  "name": "pidtor-regression-tests",
+  "private": true,
+  "scripts": {
+    "test": "node client-tracks.test.cjs && node tracks-ownership.test.cjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

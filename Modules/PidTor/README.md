@@ -9,7 +9,19 @@
 - **`UpdateCurrentConf`**: **`tsport`** берётся из секции **`TorrServer`** в **`current.conf`** (иначе **9085**) для обращения к локальному TS.
 - **`OnlineApiQuality`**: для балансера **`pidtor`** подпись **` ~ 2160p`**.
 
-## HTTP
+## NextGen Player
+
+`/pidtor.js` adds the NextGen entry point. `/lite/pidtor/v2` returns distinct release variants and real audio metadata. `/lite/pidtor/probe/{hash}?index=N` probes the exact selected torrent file using `PidTor.probe_torrserver`, or `Tracks.tsuri` as a fallback. Keep server credentials in server configuration, not JavaScript.
+
+The player uses direct streams by default, resolves additional voices progressively, expands playlists when a full-season release arrives, and scopes asynchronous responses and quality controls to the active playback. Each replaced source gets a fresh startup deadline. Existing GST settings are not rewritten.
+
+For a single unnamed `und` audio stream, a single studio credit such as `ПМ (Тайм Медиа Групп)` can supply its display name. Generic `SoundHandler` is not treated as a studio name. Named tracks, original-language tracks, multiple streams, and raw ffprobe metadata are preserved. No extra audio streams are fabricated.
+
+The named 2026 story *Monster: The Lizzie Borden Story* maps anthology-numbered season-four release files to season one on its standalone card. Other stories and ordinary seasons are not remapped.
+
+Regression commands and coverage are documented in [tests/README.md](tests/README.md).
+
+## Legacy HTTP
 
 | Маршрут | Назначение |
 |---------|------------|

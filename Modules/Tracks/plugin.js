@@ -382,6 +382,7 @@
     }
 
     Lampa.Player.listener.follow('start', function (data) {
+      if (data.pidtor_nextgen) return;
       if (data.torrent_hash) subscribeTracks(data);
     });
     Lampa.Listener.follow('torrent_file', function (data) {
