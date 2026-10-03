@@ -1,3 +1,4 @@
+using LampacSync.Shared;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -19,16 +20,17 @@ public class TimeCodeController : BaseController
 {
     #region timecode.js
     [HttpGet, AllowAnonymous]
-    [Staticache(cacheMinutes: 10, always: true, setHeadersNoCache: true)]
+    [Staticache(cacheMinutes: 10)]
     [Route("timecode.js")]
     [Route("timecode/js/{token}")]
     public ActionResult timecode(string token)
     {
-        string plugin = FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "timecode.js")
+        string plugin = (LampacSyncIdentity.ReadScript(ModInit.modpath) + "\n" +
+            FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "timecode.js"))
             .Replace("{localhost}", host)
             .Replace("{token}", HttpUtility.UrlEncode(token));
 
-        return ContentTo(plugin, "application/javascript; charset=utf-8");
+        return Content(plugin, "application/javascript; charset=utf-8");
     }
     #endregion
 
@@ -36,7 +38,7 @@ public class TimeCodeController : BaseController
     [Route("/timecode/all")]
     async public Task<ActionResult> Get(string card_id)
     {
-        if (string.IsNullOrEmpty(card_id) || requestInfo.user_uid == null)
+        if (string.IsNullOrEmpty(card_id) || getUserid(requestInfo) == null)
             return Json(new { });
 
         string userId = getUserid(requestInfo);
@@ -64,7 +66,7 @@ public class TimeCodeController : BaseController
         if (string.IsNullOrEmpty(card_id) ||
             string.IsNullOrEmpty(id) ||
             string.IsNullOrEmpty(data) ||
-            requestInfo.user_uid == null)
+            getUserid(requestInfo) == null)
             return ContentTo("{\"success\": false}");
 
         bool success = false;
@@ -111,7 +113,9 @@ public class TimeCodeController : BaseController
 
     string getUserid(RequestModel requestInfo)
     {
-        string user_id = requestInfo.user_uid;
+        string user_id = LampacSyncIdentity.Resolve(requestInfo, HttpContext);
+        if (string.IsNullOrEmpty(user_id))
+            return null;
 
         if (HttpContext.Request.Query.TryGetValue("profile_id", out var profile_id) && !string.IsNullOrEmpty(profile_id) && profile_id != "0")
             user_id = $"{user_id}_{profile_id}";

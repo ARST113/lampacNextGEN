@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using LampacSync.Shared;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -25,16 +26,17 @@ public class BookmarkController : BaseController
 {
     #region bookmark.js
     [HttpGet, AllowAnonymous]
-    [Staticache(cacheMinutes: 10, always: true, setHeadersNoCache: true)]
+    [Staticache(cacheMinutes: 10)]
     [Route("bookmark.js")]
     [Route("bookmark/js/{token}")]
     public ActionResult BookmarkJS(string token)
     {
-        string plugin = FileCache.ReadAllText($"{ModInit.modpath}/plugins/bookmark.js", "bookmark.js")
+        string plugin = (LampacSyncIdentity.ReadScript(ModInit.modpath) + "\n" +
+            FileCache.ReadAllText($"{ModInit.modpath}/plugins/bookmark.js", "bookmark.js"))
             .Replace("{localhost}", host)
             .Replace("{token}", HttpUtility.UrlEncode(token));
 
-        return ContentTo(plugin, "application/javascript; charset=utf-8");
+        return Content(plugin, "application/javascript; charset=utf-8");
     }
     #endregion
 
@@ -79,10 +81,10 @@ public class BookmarkController : BaseController
     [Route("/bookmark/set")]
     public async Task<ActionResult> Set(string connectionId)
     {
-        if (string.IsNullOrEmpty(requestInfo.user_uid))
+        if (string.IsNullOrEmpty(LampacSyncIdentity.Resolve(requestInfo, HttpContext)))
             return JsonFailure();
 
-        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSizeStreamReader, leaveOpen: true))
+        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSize, leaveOpen: true))
         {
             string body = await reader.ReadToEndAsync();
             if (string.IsNullOrWhiteSpace(body))
@@ -154,7 +156,7 @@ public class BookmarkController : BaseController
 
             if (IsDbInitialization)
             {
-                _ = NwsEvents.SendAsync(connectionId, requestInfo.user_uid, "bookmark", JsonConvertPool.SerializeObject(new
+                _ = NwsEvents.SendAsync(connectionId, LampacSyncIdentity.Resolve(requestInfo, HttpContext), "bookmark", JsonConvertPool.SerializeObject(new
                 {
                     type = "set",
                     data = token,
@@ -174,7 +176,7 @@ public class BookmarkController : BaseController
     [Route("/bookmark/added")]
     public async Task<ActionResult> Add(string connectionId)
     {
-        if (string.IsNullOrEmpty(requestInfo.user_uid))
+        if (string.IsNullOrEmpty(LampacSyncIdentity.Resolve(requestInfo, HttpContext)))
             return JsonFailure();
 
         var readBody = await ReadPayloadAsync();
@@ -224,7 +226,7 @@ public class BookmarkController : BaseController
                             data = readBody.token
                         });
 
-                        _ = NwsEvents.SendAsync(connectionId, requestInfo.user_uid, "bookmark", edata).ConfigureAwait(false);
+                        _ = NwsEvents.SendAsync(connectionId, LampacSyncIdentity.Resolve(requestInfo, HttpContext), "bookmark", edata).ConfigureAwait(false);
                     }
                 }
             }
@@ -247,7 +249,7 @@ public class BookmarkController : BaseController
     [Route("/bookmark/remove")]
     public async Task<ActionResult> Remove(string connectionId)
     {
-        if (string.IsNullOrEmpty(requestInfo.user_uid))
+        if (string.IsNullOrEmpty(LampacSyncIdentity.Resolve(requestInfo, HttpContext)))
             return JsonFailure();
 
         var readBody = await ReadPayloadAsync();
@@ -300,7 +302,7 @@ public class BookmarkController : BaseController
                             data = readBody.token
                         });
 
-                        _ = NwsEvents.SendAsync(connectionId, requestInfo.user_uid, "bookmark", edata).ConfigureAwait(false);
+                        _ = NwsEvents.SendAsync(connectionId, LampacSyncIdentity.Resolve(requestInfo, HttpContext), "bookmark", edata).ConfigureAwait(false);
                     }
                 }
             }
@@ -322,7 +324,9 @@ public class BookmarkController : BaseController
     #region Utilities
     static string getUserid(RequestModel requestInfo, HttpContext httpContext)
     {
-        string user_id = requestInfo.user_uid;
+        string user_id = LampacSyncIdentity.Resolve(requestInfo, httpContext);
+        if (string.IsNullOrEmpty(user_id))
+            return null;
         string profile_id = getProfileid(requestInfo, httpContext);
 
         if (!string.IsNullOrEmpty(profile_id))
@@ -341,7 +345,7 @@ public class BookmarkController : BaseController
 
     JObject GetBookmarksForResponse(SqlContext sqlDb)
     {
-        if (string.IsNullOrEmpty(requestInfo.user_uid))
+        if (string.IsNullOrEmpty(LampacSyncIdentity.Resolve(requestInfo, HttpContext)))
             return CreateDefaultBookmarks();
 
         string user_id = getUserid(requestInfo, HttpContext);
@@ -604,7 +608,7 @@ public class BookmarkController : BaseController
         JToken token = null;
         var payloads = new List<EventPayload>();
 
-        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSizeStreamReader, leaveOpen: true))
+        using (var reader = new StreamReader(Request.Body, Encoding.UTF8, false, PoolInvk.bufferSize, leaveOpen: true))
         {
             try
             {

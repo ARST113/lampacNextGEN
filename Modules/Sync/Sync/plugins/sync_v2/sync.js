@@ -1,168 +1,110 @@
-(function() {
+(function () {
   'use strict';
-  
-  if ('{token}' == '') Lampa.Utils.putScriptAsync(["{localhost}/bookmark.js", "{localhost}/timecode.js"], function() {});
-  else Lampa.Utils.putScriptAsync(["{localhost}/bookmark/js/{token}", "{localhost}/timecode/js/{token}"], function() {});
-  
-  {sync-invc}
-  
-  if (!window.lampac_storage_import_keys)
-    window.lampac_storage_import_keys = [];
+  if (window.sync_init) return;
+  window.sync_init = true;
+  var sync = window.LampacSync;
+  var importing = {};
+  var exporting = {};
+  var queued = {};
+  var revisions = {};
+  var viewFields = ['online_view', 'online_last_balanser', 'online_watched_last',
+    'torrents_view', 'torrents_filter_data', 'lampac_resume_history_v1'];
 
-  function account(url) {
-    url = url + '';
-    if (url.indexOf('account_email=') == -1) {
-      var email = Lampa.Storage.get('account_email');
-      if (email) url = Lampa.Utils.addUrlComponent(url, 'account_email=' + encodeURIComponent(email));
-    }
-    if (url.indexOf('uid=') == -1) {
-      var uid = Lampa.Storage.get('lampac_unic_id', '');
-      if (uid) url = Lampa.Utils.addUrlComponent(url, 'uid=' + encodeURIComponent(uid));
-    }
-    if (url.indexOf('token=') == -1) {
-      var token = '{token}';
-      if (token != '') url = Lampa.Utils.addUrlComponent(url, 'token={token}');
-    }
+  {sync-invc}
+
+  function importKeys() {
+    var keys = [].concat(sync_invc.import_keys || [], window.lampac_storage_import_keys || []);
+    return keys.filter(function (key, index) {
+      return typeof key === 'string' && key && key.indexOf('lampac_sync_') !== 0 && keys.indexOf(key) === index;
+    });
+  }
+
+  // The account runtime also isolates custom synchronized fields on switches.
+  window.lampac_storage_import_keys = importKeys();
+
+  function pathFor(method, path) {
+    var url = '/storage/' + method + '?path=' + encodeURIComponent(path) + '&pathfile=' + encodeURIComponent(sync.profile());
+    if (window.lwsEvent && window.lwsEvent.connectionId)
+      url += '&connectionId=' + encodeURIComponent(window.lwsEvent.connectionId);
     return url;
   }
-  
-  function sync_import_keys() {
-    function toArr(x) {
-      if (Object.prototype.toString.call(x) === '[object Array]') return x.slice();
-      if (typeof x === 'string') return [x];
-      return [];
-    }
-    var base = toArr(sync_invc.import_keys);
-    var ext = toArr(window.lampac_storage_import_keys);
-
-    var seen = {};
-    var merged = base.concat(ext).filter(function(k) {
-      if (typeof k !== 'string' || k === '') return false;
-      if (seen[k]) return false;
-      seen[k] = true;
-      return true;
-    });
-
-    return merged;
-  }
-
 
   function goExport(path) {
-    if (window.sync_disable) 
-        return;
-	
+    if (window.sync_disable || !sync.ready()) return;
+    if (importing[path] || exporting[path]) { queued[path] = true; return; }
     var value = {};
+    if (path === 'sync_view') viewFields.forEach(function (field) { value[field] = Lampa.Storage.get(field, ''); });
+    else value[path] = Lampa.Storage.get(path, '');
     value = sync_invc.goExport(path, value);
-
-    if (path == 'sync_view') {
-      ['online_view', 'online_last_balanser', 'online_watched_last', 'torrents_view', 'torrents_filter_data'].forEach(function(field) {
-        value[field] = Lampa.Storage.get(field, '');
-      });
-    }
-	
-	if (Object.keys(value).length === 0) 
-      return;
-	
-    var uri = account('{localhost}/storage/set?path='+path+'&pathfile='+Lampa.Storage.get('lampac_profile_id', ''));
-	
-	if (window.lwsEvent && window.lwsEvent.connectionId != '') 
-		uri = Lampa.Utils.addUrlComponent(uri, 'connectionId=' + encodeURIComponent(window.lwsEvent.connectionId));
-
-    $.ajax({
-      url: uri,
-      type: 'POST',
-      data: JSON.stringify(value),
-      async: true,
-      cache: false,
-      contentType: false,
-      processData: false,
-      success: function(j) {
-        if (j.success && j.fileInfo)
-          Lampa.Storage.set('lampac_' + path, j.fileInfo.changeTime);
-      },
-      error: function() {
-        console.log('Lampac Storage', 'export', 'error');
-      }
+    if (!value || !Object.keys(value).length) return;
+    exporting[path] = true;
+    queued[path] = false;
+    sync.request('POST', pathFor('set', path), value, function (status, data) {
+      exporting[path] = false;
+      if (data && data.success && data.fileInfo)
+        Lampa.Storage.set('lampac_' + path, data.fileInfo.changeTime, true);
+      if (queued[path]) goExport(path);
     });
   }
 
-
-  function goImport(path, call) {
-    if (window.sync_disable || path == '') 
-        return;
-    var network = new Lampa.Reguest();
-    network.silent(account('{localhost}/storage/get?path='+path+'&pathfile='+Lampa.Storage.get('lampac_profile_id', '')), function(j) {
-      if (j.success && j.fileInfo && j.data) {
-        if (j.fileInfo.changeTime > Lampa.Storage.get('lampac_' + path, '0')) {
+  function goImport(path, callback) {
+    if (window.sync_disable || !sync.ready() || !path || importing[path]) return;
+    importing[path] = true;
+    var revision = revisions[path] || 0;
+    sync.request('GET', pathFor('get', path), null, function (status, data) {
+      importing[path] = false;
+      if (data && !data.accsdb && data.success && data.fileInfo && data.data) {
+        if ((revisions[path] || 0) === revision && data.fileInfo.changeTime > Number(Lampa.Storage.get('lampac_' + path, 0))) {
           try {
-            var data = JSON.parse(j.data);
-            for (var i in data) {
-              Lampa.Storage.set(i, data[i], true);
-              if (i == 'favorite') Lampa.Favorite.init();
-            }
-            Lampa.Storage.set('lampac_' + path, j.fileInfo.changeTime);
-          } catch (error) {
-            console.log('Lampac Storage', 'import', error.message);
-          }
+            var saved = JSON.parse(data.data);
+            Object.keys(saved).forEach(function (field) {
+              if (field.indexOf('lampac_sync_') === 0 || ['account', 'account_email', 'account_use', 'lampac_unic_id', 'lampac_profile_id', 'extensions'].indexOf(field) >= 0) return;
+              Lampa.Storage.set(field, saved[field], true);
+              if (field === 'favorite') Lampa.Favorite.read ? Lampa.Favorite.read(true) : Lampa.Favorite.init();
+            });
+            Lampa.Storage.set('lampac_' + path, data.fileInfo.changeTime, true);
+          } catch (e) { /* Keep local data if a stored document is malformed. */ }
         }
-      } else if (j.msg && j.msg == 'outFile') {
-        goExport(path);
-      }
-      call();
+      } else if (data && !data.accsdb && data.msg === 'outFile') queued[path] = true;
+      if (queued[path]) goExport(path);
+      if (callback) callback();
       sync_invc.importСompleted(path);
       Lampa.Listener.send('lampac', {name: 'storage_importСompleted', value: path});
     });
   }
 
-
-  function sync() {
-    if (!window.sync_init) {
-      window.sync_init = true;
-      goImport('sync_view', function() {
-        sync_import_keys().forEach(function(key) {
-          goImport(key, function() {});
-        });
-
-		/*
-          принудительный экспорт ключа recomends_list из localStorage на сервер
-            Lampa.Storage.listener.send('change', {name: 'recomends_list', value: ''});
-		*/
-        Lampa.Storage.listener.follow('change', function(e) {
-          if (sync_import_keys().indexOf(e.name) >= 0) {
-            goExport(e.name);
-          } else if (e.name.indexOf('online_view') >= 0 || e.name.indexOf('torrents_view') >= 0) {
-            goExport('sync_view');
-          }
-        });
-		
-		/*
-          принудительный импорт ключа recomends_list с сервера в localStorage
-            window.lwsEvent.send('sync_storage', 'recomends_list');
-		*/
-        document.addEventListener('lwsEvent', function(evnt) {
-          if (evnt.detail.name === 'sync_storage') {
-            goImport(evnt.detail.data, function() {});
-          } 
-          else if (evnt.detail.name === 'storage') {
-            var ob = JSON.parse(evnt.detail.data);
-			if (ob.pathfile != '' && ob.pathfile != Lampa.Storage.get('lampac_profile_id', '')) return;
-            goImport(ob.path, function() {});
-          } 
-          else if (evnt.detail.name === 'system' && evnt.detail.data === 'reconnected') {
-            goImport('sync_view', function() {});
-            sync_import_keys().forEach(function(key) {
-              goImport(key, function() {});
-            });
-          }
-        });
-      });
-    }
+  function pull() {
+    goImport('sync_view');
+    importKeys().forEach(function (key) { goImport(key); });
   }
 
-  if (!window.lwsEvent) {
-    Lampa.Utils.putScript([account("{localhost}/invc-ws.js")], function() {}, false, function() {
-      sync();
-    }, true);
-  } else sync();
+  Lampa.Storage.listener.follow('change', function (event) {
+    var path = importKeys().indexOf(event.name) >= 0 ? event.name : '';
+    if (!path && (viewFields.indexOf(event.name) >= 0 || event.name.indexOf('online_view') === 0 || event.name.indexOf('torrents_view') === 0)) path = 'sync_view';
+    if (!path) return;
+    revisions[path] = (revisions[path] || 0) + 1;
+    goExport(path);
+  });
 
+  document.addEventListener('lwsEvent', function (event) {
+    var detail = event.detail || {};
+    if (!sync.ready() || detail.uid !== sync.uid()) return;
+    if (detail.name === 'sync_storage') goImport(detail.data);
+    else if (detail.name === 'storage') {
+      try {
+        var data = JSON.parse(detail.data);
+        if (String(data.pathfile || '') !== sync.profile()) return;
+        goImport(data.path);
+      } catch (e) {}
+    } else if (detail.name === 'system' && detail.data === 'reconnected') pull();
+  });
+
+  sync.onChange(function () {
+    importing = {}; exporting = {}; queued = {}; revisions = {};
+    pull();
+  });
+
+  Lampa.Utils.putScriptAsync(['{localhost}/bookmark.js', '{localhost}/timecode.js'], function () {});
+  if (!window.lampacSyncSocketInitialized)
+    Lampa.Utils.putScriptAsync(['{localhost}/invc-ws.js'], function () {});
 })();
