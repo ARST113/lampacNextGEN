@@ -13,6 +13,7 @@ function mockLampa(codecs, settings = {}) {
   const messages = [];
   const renderedTracks = [];
   const contexts = [];
+  const nodes = [];
   const workers = [];
   const video = {
     tagName: 'VIDEO',
@@ -86,6 +87,7 @@ function mockLampa(codecs, settings = {}) {
   class FakeNode {
     constructor(ctx) {
       this.ctx = ctx;
+      nodes.push(this);
       this.port = {
         onmessage: null,
         commands: [],
@@ -116,7 +118,7 @@ function mockLampa(codecs, settings = {}) {
   async function flush() {
     await new Promise(resolve => setTimeout(resolve, 70));
   }
-  return { video, workers, contexts, renderedTracks, messages, emit, emitNative, flush };
+  return { video, workers, contexts, nodes, renderedTracks, messages, emit, emitNative, flush };
 }
 
 test('keeps the original Lampa video source and timeline (AAC only)', async () => {
@@ -181,5 +183,21 @@ test('no double initialization for ready and loadeddata on same element', async 
   app.emit('Video:loadeddata');
   await app.flush();
   assert.equal(app.workers.length, 1);
+  app.emit('Player:destroy');
+});
+
+test('buffers video without advancing the independent audio clock', async () => {
+  const app = mockLampa(['ac3']);
+  app.video.readyState = 2; // HAVE_CURRENT_DATA: waiting for more video
+  app.emit('Player:ready');
+  await app.flush();
+  await app.flush();
+  const sync = app.nodes[0].port.commands.filter(x => x.type === 'sync').at(-1);
+  assert.equal(sync.paused, true);
+  assert.equal(app.video.currentTime, 14);
+  app.video.readyState = 4;
+  await app.flush();
+  const resumed = app.nodes[0].port.commands.filter(x => x.type === 'sync').at(-1);
+  assert.equal(resumed.paused, false);
   app.emit('Player:destroy');
 });
