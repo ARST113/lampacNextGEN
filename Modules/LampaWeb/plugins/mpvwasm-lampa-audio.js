@@ -265,7 +265,8 @@
     this.node.port.postMessage({
       type: 'sync',
       clockUs: Math.round(Math.max(0, Number(this.video.currentTime || 0)) * 1000000),
-      paused: !!this.video.paused,
+      paused: !!this.video.paused || !!this.video.seeking ||
+        (typeof this.video.readyState === 'number' && this.video.readyState < 3),
       rate: Number(this.video.playbackRate || 1),
       volume: Number(this.video.volume)
     });
