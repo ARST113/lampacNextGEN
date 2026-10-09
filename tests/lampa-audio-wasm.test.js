@@ -201,6 +201,9 @@ test('buffers video without advancing the independent audio clock', async () => 
   assert.equal(sync.paused, true);
   assert.equal(app.video.currentTime, 14);
   app.video.readyState = 4;
+  // Synchronization ticks every 120 ms; observe at least one full tick.
+  await app.flush();
+  await app.flush();
   await app.flush();
   const resumed = app.nodes[0].port.commands.filter(x => x.type === 'sync').at(-1);
   assert.equal(resumed.paused, false);
