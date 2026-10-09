@@ -37,7 +37,7 @@
     var bytes = new TextEncoder().encode(value);
     var text = '';
     for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
-    return btoa(text).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+    return btoa(text).split('+').join('-').split('/').join('_').replace(/=+$/, '');
   }
   function sourceUrl(video) {
     return String(video.currentSrc || video.src || '');
