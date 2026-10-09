@@ -1,0 +1,32 @@
+name: Lampa Audio WASM bridge
+
+on:
+  pull_request:
+    paths:
+      - 'Modules/MpvWasm/**'
+      - 'Modules/LampaWeb/plugins/mpvwasm-lampa-audio*.js'
+      - 'tests/lampa-audio-wasm.test.js'
+      - '.github/workflows/wasm-audio-bridge.yml'
+  push:
+    paths:
+      - 'Modules/MpvWasm/**'
+      - 'Modules/LampaWeb/plugins/mpvwasm-lampa-audio*.js'
+      - 'tests/lampa-audio-wasm.test.js'
+      - '.github/workflows/wasm-audio-bridge.yml'
+
+jobs:
+  audio-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: JavaScript syntax
+        run: |
+          node --check Modules/MpvWasm/assets/mpvwasm-audio-only-worker.js
+          node --check Modules/MpvWasm/assets/mpvwasm-audio-only-worklet.js
+          node --check Modules/LampaWeb/plugins/mpvwasm-lampa-audio.js
+          node --check Modules/LampaWeb/plugins/mpvwasm-lampa-audio-loader.js
+      - name: Lampa integration checks
+        run: node --test tests/lampa-audio-wasm.test.js
