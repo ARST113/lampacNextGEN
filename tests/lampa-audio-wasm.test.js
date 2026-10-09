@@ -92,7 +92,7 @@ function mockLampa(codecs, settings = {}) {
         postMessage: (msg) => {
           this.port.commands.push(msg);
           if (msg.type === 'pcm') queueMicrotask(() => {
-            this.port.onmessage?.({ data: { type: 'status', bufferedUs: 750000 } });
+            this.port.onmessage?.({ data: { type: 'status', bufferedUs: 3200000 } });
           });
         }
       };
