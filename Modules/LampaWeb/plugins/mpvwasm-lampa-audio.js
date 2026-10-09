@@ -72,6 +72,10 @@
     this.lastError = '';
     this.mode = storage('mpvwasm_audio_mode', 'auto');
     this.url = sourceUrl(video);
+    this.originalMuted = !!video.muted;
+    var self = this;
+    this.onNativeSeek = function () { self.seek(); };
+    video.addEventListener('seeking', this.onNativeSeek);
   }
   AudioSession.prototype.request = function (command, payload) {
     var self = this;
@@ -191,7 +195,7 @@
     self.active = false;
     self.bufferedUs = 0;
     self.eof = false;
-    self.video.muted = false;
+    self.video.muted = self.originalMuted;
     if (self.node) self.node.port.postMessage({ type: 'clear', clockUs: Math.round((self.video.currentTime || 0) * 1000000) });
     if (!needsDecoder(self.video, track, self.mode)) {
       try {
@@ -286,8 +290,9 @@
     this.closed = true;
     this.epoch++;
     if (this.timer) clearInterval(this.timer);
+    try { this.video.removeEventListener('seeking', this.onNativeSeek); } catch (_) {}
     if (this.active || this.video.muted) {
-      try { this.video.muted = false; } catch (_) {}
+      try { this.video.muted = this.originalMuted; } catch (_) {}
     }
     this.stopWorker();
     if (this.node) { try { this.node.disconnect(); this.node.port.onmessage = null; } catch (_) {} }
@@ -335,8 +340,6 @@
     Lampa.Player.listener.follow('destroy', cleanup);
     Lampa.PlayerVideo.listener.follow('loadeddata', function () { attach(); });
     Lampa.PlayerVideo.listener.follow('destroy', cleanup);
-    Lampa.PlayerVideo.listener.follow('seeking', function () { if (session) session.seek(); });
-    Lampa.PlayerVideo.listener.follow('seeked', function () { if (session) session.seek(); });
     Lampa.PlayerVideo.listener.follow('tracks', function () {
       if (session && session.opened && !session.closed) setTimeout(function () {
         if (session && !session.closed) session.renderTracks();
