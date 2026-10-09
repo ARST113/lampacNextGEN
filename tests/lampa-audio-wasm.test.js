@@ -1,11 +1,14 @@
 'use strict';
 const test = require('node:test');
+const { afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '../Modules/LampaWeb/plugins/mpvwasm-lampa-audio.js'), 'utf8');
+const activeApps = [];
+afterEach(() => { activeApps.splice(0).forEach(app => app.emit('Player:destroy')); });
 
 function mockLampa(codecs, settings = {}) {
   const listeners = {};
@@ -118,7 +121,9 @@ function mockLampa(codecs, settings = {}) {
   async function flush() {
     await new Promise(resolve => setTimeout(resolve, 70));
   }
-  return { video, workers, contexts, nodes, renderedTracks, messages, emit, emitNative, flush };
+  const app = { video, workers, contexts, nodes, renderedTracks, messages, emit, emitNative, flush };
+  activeApps.push(app);
+  return app;
 }
 
 test('keeps the original Lampa video source and timeline (AAC only)', async () => {
