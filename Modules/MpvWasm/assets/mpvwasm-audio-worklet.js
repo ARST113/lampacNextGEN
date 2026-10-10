@@ -22,6 +22,7 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
     this.underruns = 0;
     this.outputPeak = 0;
     this.outputChannels = 2;
+    this.statusContextFrame = null;
 
     this.port.onmessage = (event) => {
       const data = event.data || {};
@@ -148,6 +149,7 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
     this.port.postMessage({
       type: 'clock',
       clockUs: Math.round(this.clockUs),
+      contextFrame: this.statusContextFrame,
       playedSamples: this.playedSamples,
       queuedSamples: this.queuedSamples,
       bufferSamples: Math.round(remainingUs * sampleRate / 1000000),
@@ -168,6 +170,7 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
     if (!output || !output.length) return true;
     this.processCalls++;
     this.outputChannels = output.length;
+    this.statusContextFrame = typeof currentFrame === 'number' ? currentFrame + output[0].length : null;
     if (this.paused) {
       this.report(false);
       return true;
