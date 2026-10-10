@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260809-51-ddd-sync-final';
+  var VERSION = '20261010-mpv2-nextgen-1';
 
   function append(src, ready) {
     if (ready && ready()) return;
