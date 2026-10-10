@@ -31,7 +31,7 @@ async function main() {
       text:safe(request.url() + ' ' + (request.failure() && request.failure().errorText || '')) }));
     await page.goto('http://localhost:' + port + '/', { waitUntil:'domcontentloaded', timeout:45000 });
     await sleep(3000);
-    await page.screenshot({ path:path.join(out,'initial.png') });
+    console.log('[mpv2-android] Lampa page loaded; screenshots captured separately by adb');
     let previousFrames = 0, samplesWithProgress = 0, maxElapsed = 0, maxRendered = 0, last = null;
     for (let i = 0; i < seconds / 3; i++) {
       await sleep(3000);
@@ -75,7 +75,7 @@ async function main() {
         }));
       } catch (err) { browserLog.push({type:'runner',text:safe(err.message)}); }
     }
-    await page.screenshot({path:path.join(out,'final.png')});
+    console.log('[mpv2-android] Playback observation loop completed');
     const mediaState = await (await fetch('http://127.0.0.1:' + port + '/ci/health')).json();
     report.media = mediaState;
     report.last = last;
@@ -105,7 +105,7 @@ async function main() {
     fs.writeFileSync(path.join(out,'result.json'), JSON.stringify(report,null,2));
     fs.writeFileSync(path.join(out,'samples.json'), JSON.stringify(snapshots,null,2));
     fs.writeFileSync(path.join(out,'console.json'), JSON.stringify(browserLog.slice(-400),null,2));
-    try { if (page) await page.screenshot({path:path.join(out,'last.png')}); } catch (_) {}
+    // Android screencap is saved by drive.sh, avoiding DevTools GPU screenshot stalls.
     try { if (browser) await browser.disconnect(); } catch (_) {}
   }
   if (report.outcome !== 'playback-observed') process.exitCode = 1;
