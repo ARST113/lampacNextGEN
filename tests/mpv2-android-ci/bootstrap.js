@@ -35,7 +35,7 @@
     // controller transition (e.g. controller='loading'). Only open after the
     // UI has been stable for a few seconds and no wizard is visible.
     if (!controller || /loading|welcome|language/i.test(controller) ||
-        document.querySelector('.lang, .welcome:not(.hide)')) {
+        document.querySelector('.lang:not(.hide)')) {
       readySince = 0;
       return;
     }
