@@ -634,10 +634,15 @@
           try { frame.close(); } catch (_) { }
           return;
         }
-        self.frameQueue.push(frame);
-        while (self.frameQueue.length > self.maxFrameQueue()) {
+        // On slower Android/WebCodecs renderers the decoder may run far ahead
+        // of the audio clock. Never evict the *oldest* queued VideoFrames here:
+        // doing so perpetually replaces the next due frame with a future frame,
+        // freezing the picture while the audio clock keeps moving.
+        if (self.frameQueue.length >= self.maxFrameQueue()) {
           self.droppedFrames++;
-          try { self.frameQueue.shift().close(); } catch (_) { }
+          try { frame.close(); } catch (_) { }
+        } else {
+          self.frameQueue.push(frame);
         }
         self.maybeReady();
         self.maybeResumeBuffering();
@@ -1458,6 +1463,8 @@
       packetsRead: this.packetsRead,
       lastSeekReadyMs: this.lastSeekReadyMs,
       videoQueue: this.frameQueue.length,
+      videoQueueFirstUs: this.frameQueue.length ? Number(this.frameQueue[0].timestamp || 0) : null,
+      videoQueueLastUs: this.frameQueue.length ? Number(this.frameQueue[this.frameQueue.length - 1].timestamp || 0) : null,
       pendingVideoPackets: this.pendingVideoPackets.length,
       decodeQueue: this.videoDecoder ? this.videoDecoder.decodeQueueSize : 0,
       audioBufferUs: this.audioBufferUs,
