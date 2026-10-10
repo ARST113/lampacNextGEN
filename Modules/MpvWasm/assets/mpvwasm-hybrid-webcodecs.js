@@ -816,7 +816,10 @@
         hasBasePts: this.audioBasePtsUs !== null
       });
       this.audioNode.port.postMessage({ type: 'volume', volume: this.volume });
-      this.audioNode.port.postMessage({ type: 'state', paused: this.paused || this.buffering || this.seeking });
+      // Do not consume the first PCM buffers before the video and audio clocks
+      // are both primed. Previously resetAudioClock(firstPTS) unpaused the
+      // worklet while ready=false, draining audio and preventing maybeReady().
+      this.audioNode.port.postMessage({ type: 'state', paused: this.paused || !this.ready || this.buffering || this.seeking });
     }
   };
 
@@ -1164,6 +1167,7 @@
     var audioReady = !this.audioTrack || this.audioBufferUs >= this.startupAudioBufferUs();
     if (!videoReady || !audioReady) return;
 
+    this.markTiming('start-buffers-ready', { videoFrames: this.frameQueue.length, audioBufferUs: this.audioBufferUs, audioPaused: this.audioWorkletPaused });
     var firstStart = !this.started;
     this.ready = true;
     this.seekTargetUs = 0;
