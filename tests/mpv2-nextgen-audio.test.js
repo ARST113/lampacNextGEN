@@ -117,3 +117,17 @@ test('4K decode and decoded-frame queues are bounded and surround is device-gate
   assert.match(source, /outputChannelCount: \[wantedChannels\]/);
   assert.match(source, /audioOutputSampleRate/);
 });
+
+test('AudioWorklet exposes context frame to align output device timing', () => {
+  const { post, render, messages } = createProcessor();
+  post({ type: 'pcm', pcm: new Float32Array(2048), channels: 2, sampleRate: 48000, ptsUs: 0 });
+  post({ type: 'state', paused: false });
+  render(2);
+  post({ type: 'state', paused: true });
+  const status = messages.filter(message => message.type === 'clock').at(-1);
+  assert.equal(status.contextFrame, 128);
+  assert.ok(status.clockUs > 0);
+  const hybrid = fs.readFileSync(hybridPath, 'utf8');
+  assert.match(hybrid, /getOutputTimestamp/);
+  assert.match(hybrid, /audioGraphContextTime/);
+});
