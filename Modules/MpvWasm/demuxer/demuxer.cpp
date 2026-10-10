@@ -27,6 +27,9 @@ struct DemuxState {
   AVPacket* packet = nullptr;
   AVCodecContext* audio_ctx = nullptr;
   SwrContext* swr = nullptr;
+  AVSampleFormat swr_in_fmt = AV_SAMPLE_FMT_NONE;
+  int swr_in_rate = 0;
+  int swr_in_ch = 0;
   AVFrame* audio_frame = nullptr;
   int audio_stream = -1;
   int audio_sample_rate = 0;
@@ -36,6 +39,7 @@ struct DemuxState {
 };
 
 static DemuxState g;
+static int build_swr(const AVChannelLayout* src_layout, int src_rate, enum AVSampleFormat src_fmt);
 
 EM_JS(double, js_probe_size, (const char* url_ptr), {
   var url = UTF8ToString(url_ptr);
@@ -378,17 +382,22 @@ int demux_audio_open(int stream_index) {
 
   g.audio_channels = out_layout.nb_channels;
   g.audio_sample_rate = g.audio_ctx->sample_rate;
-  g.swr = swr_alloc();
-  if (!g.swr) return -5;
-  av_opt_set_chlayout(g.swr, "in_chlayout", &in_layout, 0);
-  av_opt_set_int(g.swr, "in_sample_rate", g.audio_ctx->sample_rate, 0);
-  av_opt_set_sample_fmt(g.swr, "in_sample_fmt", g.audio_ctx->sample_fmt, 0);
-  av_opt_set_chlayout(g.swr, "out_chlayout", &out_layout, 0);
-  av_opt_set_int(g.swr, "out_sample_rate", g.audio_sample_rate, 0);
-  av_opt_set_sample_fmt(g.swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
-  ret = swr_init(g.swr);
+  enum AVSampleFormat in_fmt = g.audio_ctx->sample_fmt;
+  if (in_fmt == AV_SAMPLE_FMT_NONE) in_fmt = AV_SAMPLE_FMT_FLTP;
+  ret = build_swr(&out_layout, g.audio_ctx->sample_rate, in_fmt);
   av_channel_layout_uninit(&out_layout);
-  if (ret < 0) return ret;
+  av_channel_layout_uninit(&in_layout);
+  /* DTS/dca отдаёт окончательные формат и раскладку только с первым кадром:
+   * сразу после avcodec_open2 там AV_SAMPLE_FMT_NONE и AV_CHANNEL_ORDER_UNSPEC,
+   * и swr_init честно возвращает EINVAL. Дорожку не закрываем — swr соберётся
+   * в append_audio_frame_pcm() по параметрам первого кадра. */
+  if (ret < 0 || g.audio_ctx->sample_fmt == AV_SAMPLE_FMT_NONE ||
+      g.audio_ctx->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
+    if (g.swr) swr_free(&g.swr);
+    g.swr_in_fmt = AV_SAMPLE_FMT_NONE;
+    g.swr_in_rate = 0;
+    g.swr_in_ch = 0;
+  }
 
   g.audio_frame = av_frame_alloc();
   if (!g.audio_frame) return -6;
@@ -396,7 +405,46 @@ int demux_audio_open(int stream_index) {
   return 0;
 }
 
+/* Формат выхода декодера иногда известен только после первого кадра (DTS/dca
+ * сообщает AV_SAMPLE_FMT_NONE сразу после avcodec_open2). Поэтому swr собираем
+ * из параметров кадра и пересобираем, если фактический формат отличается. */
+static int build_swr(const AVChannelLayout* src_layout, int src_rate, enum AVSampleFormat src_fmt) {
+  if (g.swr) swr_free(&g.swr);
+  AVChannelLayout in_layout;
+  av_channel_layout_copy(&in_layout, src_layout);
+  if (in_layout.nb_channels <= 0) av_channel_layout_default(&in_layout, 2);
+  if (in_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
+    int nb = in_layout.nb_channels;
+    av_channel_layout_uninit(&in_layout);
+    av_channel_layout_default(&in_layout, nb > 0 ? nb : 2);
+  }
+  g.audio_channels = in_layout.nb_channels;
+  if (src_rate > 0) g.audio_sample_rate = src_rate;
+  g.swr = swr_alloc();
+  if (!g.swr) { av_channel_layout_uninit(&in_layout); return -5; }
+  av_opt_set_chlayout(g.swr, "in_chlayout", &in_layout, 0);
+  av_opt_set_int(g.swr, "in_sample_rate", src_rate, 0);
+  av_opt_set_sample_fmt(g.swr, "in_sample_fmt", src_fmt, 0);
+  av_opt_set_chlayout(g.swr, "out_chlayout", &in_layout, 0);
+  av_opt_set_int(g.swr, "out_sample_rate", g.audio_sample_rate, 0);
+  av_opt_set_sample_fmt(g.swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
+  int ret = swr_init(g.swr);
+  av_channel_layout_uninit(&in_layout);
+  if (ret < 0) return ret;
+  g.swr_in_fmt = src_fmt;
+  g.swr_in_rate = src_rate;
+  g.swr_in_ch = g.audio_channels;
+  return 0;
+}
+
 static int append_audio_frame_pcm() {
+  if (!g.swr || g.audio_frame->format != (int)g.swr_in_fmt ||
+      g.audio_frame->sample_rate != g.swr_in_rate ||
+      g.audio_frame->ch_layout.nb_channels != g.swr_in_ch) {
+    int rebuild = build_swr(&g.audio_frame->ch_layout, g.audio_frame->sample_rate,
+                            (enum AVSampleFormat)g.audio_frame->format);
+    if (rebuild < 0) return rebuild;
+  }
   int out_samples = swr_get_out_samples(g.swr, g.audio_frame->nb_samples);
   if (out_samples <= 0) {
     av_frame_unref(g.audio_frame);
@@ -429,7 +477,7 @@ EMSCRIPTEN_KEEPALIVE
 int demux_audio_decode_current_packet() {
   g.audio_samples = 0;
   g.audio_pcm.clear();
-  if (!g.audio_ctx || !g.swr || !g.audio_frame || !g.packet) return -1;
+  if (!g.audio_ctx || !g.audio_frame || !g.packet) return -1;
   if (g.packet->stream_index != g.audio_stream) return 0;
 
   int ret = avcodec_send_packet(g.audio_ctx, g.packet);

@@ -1,77 +1,121 @@
-# Audio-only backend for the original Lampa player
+# Audio-only backend for the original Lampa player (AC3 / EAC3 / DTS)
 
-Experimental, opt-in integration. **Does not change the MPV2 player, the source video,
-the video decoder, subtitle renderer, remote-control handling or timeline.**
+Экспериментальный, включаемый вручную звуковой бэкенд для **штатного** плеера Lampa.
+Видео, контейнер, декодер видео, субтитры, пульт и таймлайн не меняются: мост трогает
+только звук.
 
-## Files
+**Статус: рабочий для 1080p и ниже. Для 4K/high-bitrate есть принципиальное ограничение —
+см. раздел «Ограничения» (главное: мост обязан прочитать контейнер второй раз).**
 
-- `Modules/LampaWeb/plugins/mpvwasm-lampa-audio.js`: independent Lampa plugin.
-- `Modules/LampaWeb/plugins/mpvwasm-lampa-audio-loader.js`: optional local Lampac loader.
-- `Modules/MpvWasm/assets/mpvwasm-audio-only-worker.js`: FFmpeg WASM audio demux and decoding.
-- `Modules/MpvWasm/assets/mpvwasm-audio-only-worklet.js`: audio resampling, mixing and rendering.
-- Reuses the existing `mpvwasm-demuxer.js`, `.wasm` and their pthread worker.
+## Как это работает
 
-## Installation
+```
+Lampa.PlayerVideo (<video> без изменений, звук >)
+   └─ плагин mpvwasm-lampa-audio.js
+        ├─ Worker mpvwasm-audio-only-worker.js      (команды open/select/seek/read/info/close)
+        │    └─ Emscripten-глю FFmpeg (демукс + декод AC3/EAC3/DTS/…)
+        │         ├─ mpvwasm-demuxer.js        — pthread-сборка (нужен SharedArrayBuffer)
+        │         ├─ mpvwasm-demuxer-st.js     — однопоточная (WebView/без isolation)
+        │         └─ mpvwasm-demuxer-st-legacy.js — однопоточная без WASM_BIGINT (Chromium < 85)
+        │    чтение источника идёт байтовыми диапазонами через `/mpvwasm/proxy` модуля MpvWasm
+        └─ рендерер PCM
+             ├─ AudioWorklet mpvwasm-audio-only-worklet.js (HTTPS/secure context)
+             └─ ScriptProcessorNode (резервный, работает по http и в старых WebView)
+```
 
-1. Enable the existing `mpvwasm` module and its proxy, and make sure its
-   demuxer JS/WASM binaries are present in the configured `assetsPath`.
-2. Deploy the updated module; the module initialization will copy the two
-   audio-only JavaScript assets into the configured asset directory.
-3. Put `mpvwasm-lampa-audio.js` under `/lampac-js/uploads/` and install
-   `/lampac-js/uploads/mpvwasm-lampa-audio-loader.js` **or** register the main
-   JS plugin URL directly in Lampa.
-4. Disable the standalone MPV2 override plugin for this test: it replaces
-   the original Lampa player, which this bridge intentionally does not.
-5. Settings > Player > Audio WASM: **Automatic**, **Always** (for the named
-   codecs), or **Off**.
+Ключевые свойства:
 
-Do not simultaneously enable the old `mpvwasm-lampa-loader.js` and this
-audio-only integration when testing the original Lampa UI.
+- `HTMLVideoElement.currentTime` — единственные часы; мост подстраивается под них (ход ±2.5 %),
+  жёсткий перескок только при перемотке/паузе;
+- пре-ролл 1.5 с: нативное звучание глушится только когда звук реально готов;
+- цель буфера 5–6 с, очередь рендерера 600 блоков, `maxPackets: 96` за чтение;
+- **если поток не успевает** (15 с без пре-ролла) мост снимает глушение, прекращает второе
+  чтение и пишет «Поток не успевает за видео — AC3/EAC3/DTS выключен. Выберите AAC-дорожку» —
+  иначе фильм идёт вообще без звука, а второе чтение отнимает канал у видео;
+- в режиме **MPV2** (`mpvwasm_player_mode = mpv2`, плагин `mpvwasm-lampa-player.js`) мост не
+  поднимается вообще: там звук декодирует сам плеер MPV2 из одного чтения контейнера;
+- в Android-режиме «AC3 / EAC3 / DTS во встроенном плеере» мост подменяет нативный плеер
+  приложения только для контейнеров, которые встроенный `<video>` реально умеет открыть, и
+  возвращает поток нативному плееру, если за 20 с видео не началось;
+- телеметрия с устройства: `GET /mpvwasm/assets/tel-<base64>.js` (файла нет → 404, зато URL
+  с состоянием виден в nginx-логе lampac). `env` один раз при старте, `tick` раз в 15 с
+  (`mode, ready, stalled, buf, q, drop, reads, sel, tracks, vrs, vt, vw, np, mut, mpv2, err`).
 
-## Playback contract
+## Файлы
 
-- Video URL and native player are unchanged.
-- Audio-only worker reads the same source through `/mpvwasm/proxy` (requires
-  byte-range support on source, and `mpvwasm.enableProxy=true`).
-- PCM chunks are timestamped and played via `AudioWorklet`.
-- `HTMLVideoElement.currentTime` is the authoritative media clock.
-- The native video is muted only when WASM reports sufficient buffered audio.
-- Native codecs keep native playback. Switching to AC3/EAC3/DTS may use WASM.
-- Pauses and native `seeking` events drive the WASM audio pipeline, never
-  the other way around.
+| Файл в репозитории | Что это |
+|---|---|
+| `Modules/LampaWeb/plugins/mpvwasm-lampa-audio.js` | плагин Lampa (VERSION `20261010-android-10`) |
+| `Modules/LampaWeb/plugins/mpvwasm-lampa-audio-loader.js` | лоадер для lampac (`customPlugins`) |
+| `Modules/MpvWasm/assets/mpvwasm-audio-only-worker.js` | воркер: выбор сборки, откат pthread → ST → legacy, чтение PCM |
+| `Modules/MpvWasm/assets/mpvwasm-audio-only-worklet.js` | AudioWorklet-рендерер (микс 5.1/7.1 → стерео, skew-часы) |
+| `Modules/MpvWasm/assets/mpvwasm-demuxer-st.{js,wasm}` | однотопочная сборка FFmpeg 7.1 (emsdk 3.1.74, `--disable-pthreads`), транспилирована в ES2019 |
+| `Modules/MpvWasm/assets/mpvwasm-demuxer-st-legacy.{js,wasm}` | то же с `-sWASM_BIGINT=0` для Chromium < 85 |
+| `Modules/MpvWasm/assets/mpvwasm-demuxer.js` | исходная pthread-сборка (не пересобиралась) |
+| `Modules/MpvWasm/demuxer/demuxer.cpp` | исходник FFmpeg-демуксера + аудиодекодера (в т.ч. правка DTS-открытия) |
+| `Modules/MpvWasm/demuxer/compile-demuxer-st.sh`, `compile-demuxer-st-legacy.sh`, `build-st.sh`, `patch-dts-open.py` | сборка ST-сборок и патч `demuxer_audio_open` под DTS/dca |
+| `Modules/MpvWasm/check-page/audio-wasm-check2.html` | страница проверки на устройстве (тоны, AC3/EAC3/DTS/AAC, «весь фрагмент») |
+| `Modules/MpvWasm/tools/` | боевые хелперы: `deploy-glue.sh`, `verify-deploy.sh`, `upload-lampac.sh`, `remote-run.sh`, `askpass-lampac.sh` |
+| `Modules/MpvWasm/tools/*.js` | тесты на Playwright: `worker-debug.js`, `stglue-debug.js`, `decode-speed.js`, `playback-health.js`, `real4k-speed.js`, `mpv2-test.js`, `pc-real-stream.js` |
+| `Modules/MpvWasm/docs/` | разборы: устройство плееров Lampa, разбор плагина MPV2, разбор APK, журнал работ с замерами |
 
-## Limitations / validation required
+## Установка
 
-**The existing precompiled demuxer is pthread-enabled.** Browsers generally
-require `SharedArrayBuffer` and a cross-origin-isolated, HTTPS context
-(`COOP: same-origin` and `COEP: require-corp` or compatible policy). An
-ordinary HTTP Lampa page may not be able to load it. A new single-thread
-FFmpeg+Emscripten WASM build is required to deliver broad Android/macOS
-browser compatibility. The existing `demuxer/build-demuxer.sh` currently
-depends on an external, prebuilt FFmpeg sysroot; this PR does not claim to
-rebuild or verify the binary.
+1. Включить модуль `mpvwasm` (`enable`, `enableProxy`) и положить ассеты в `assetsPath`.
+2. Скопировать `mpvwasm-audio-only-worker.js`, `mpvwasm-audio-only-worklet.js` и три сборки
+   демуксера в каталог ассетов модуля.
+3. Положить плагин и лоадер в `/lampac-js/uploads/` и прописать лоадер в
+   `LampaWeb.customPlugins` (`init.conf` + `current.conf`) с версией в query
+   (`...mpvwasm-lampa-audio-loader.js?v=20261010-android-10`) — версия нужна, чтобы обойти кэш браузера.
+4. Настройки → Плеер → **Audio WASM (AC3 / EAC3 / DTS)**: `Автоматически` (рекомендуется),
+   `Для AC3 / EAC3 / DTS всегда`, `AC3 / EAC3 / DTS во встроенном плеере Lampa`, `Выключено`.
+5. После выкладки — `bash Modules/MpvWasm/tools/verify-deploy.sh`: он сверяет md5 девяти боевых
+   файлов на сервере с локальными. Ровно этого шага не хватило 10.10.2026, когда на сервере
+   остался старый воркер без отката на ST-сборку и DTS молчал.
 
-- Browser-level `canPlayType` is a heuristic and cannot completely describe
-  Android AVPlay/WebView and Smart TV codec support.
-- This integration currently requires an actual browser `<video>` and
-  `AudioWorklet`. It does not control native external Android players,
-  Tizen AVPlay, or separate webOS platform video objects.
-- The video decoder is unchanged; this does not repair unsupported video
-  containers/codecs.
-- Native audio track selection requires `video.audioTracks`; some platforms
-  do not expose it. If unavailable, the plugin shows a warning.
-- PCM is downmixed to stereo in the audio worklet. High-quality multichannel
-  mixing should be moved into FFmpeg/libswresample in a future rebuilt binary.
-- Uses two connections (native video and a range-reading audio worker);
-  testing with TorrServer, seeking and slow connections is required.
-- Autoplay policy may prevent `AudioContext.resume()` without a user gesture.
-- Source URLs are encoded in the proxy query. Never share URLs carrying
-  private tokens or cookies, and restrict `mpvwasm.allowedHosts` in public
-  installations.
+## Ограничения (важно)
 
-## Checks
+1. **Главное: мост читает контейнер второй раз.** Звук в MKV/MP4 перемешан с видео, «вырезать
+   только звук» по дороге нельзя, поэтому для AC3/EAC3/DTS нужно скачать и разобрать весь файл —
+   ещё раз, поверх того, что уже качает `<video>`. Значит канал/источник должен отдавать
+   **примерно два битрейта файла**. Практика: файл 1080p (8–12 Мбит/с) — работает; 4K-ремьюкс
+   28 ГБ (≈26 Мбит/с) при источнике 2–5 МБ/с — не работает ни при каких настройках моста.
+   Декодер тут ни при чём: AC3/EAC3/DTS декодируются в 39–55 раз быстрее реального времени.
+   Что делать на 4K: выбрать AAC-дорожку (её декодирует браузер, мост не включается), смотреть
+   1080p, или использовать плеер MPV2/нативный плеер приложения с FFmpeg — они получают звук из
+   того же чтения, что и видео.
+2. **Субтитры внутри контейнера не поддерживаются.** Chrome (в т.ч. 154, который уже играет MKV)
+   не отдаёт встроенные SubRip/ASS-дорожки через `video.textTracks`, поэтому списки субтитров в
+   интерфейсе остаются «пустыми» (`ghost`) и выбор ни к чему не приводит. Лечится только
+   серверным разбором контейнера (`ffmpeg -map 0:s:N -c:s srt`) и отдачей субтитров как
+   настоящей текстовой дорожки — в этом мосте не реализовано.
+3. **Внешний/нативный плеер приложения мост не озвучивает.** Если Lampa отдаёт поток в
+   `Lampa.Android.openPlayer`, мост к нему не подключён: звук AC3/EAC3/DTS там зависит от
+   декодеров приложения (Media3 + FFmpeg). Надёжнее всего — плеер со встроенным FFmpeg.
+4. **Источник обязан поддерживать byte-range** (`Accept-Ranges: bytes`) и либо CORS `*`, либо
+   чтение через `/mpvwasm/proxy`. Без этого чтение не заработает.
+5. **AudioWorklet требует защищённого контекста** (HTTPS/localhost). По `http://` и в старых
+   WebView используется резервный `ScriptProcessorNode`; он работает, но требовательнее к CPU.
+6. **Режим MPV2 несовместим по подходу:** в нём воспроизведением владеет плагин MPV2, и мост
+   сознательно не включается (иначе два демуксера читают один файл и дерутся за звук).
+7. **`canPlayType` — эвристика.** Реальную поддержку кодека на конкретном устройстве она не
+   гарантирует; окончательный выбор делается по первому пакету/ошибке декодера.
+8. **Проверено не на всех устройствах.** Сквозные замеры — Chrome на Android (154),
+   системный WebView 154, десктопный Chrome. XWalk (Chromium 53) и Smart TV (webOS/Tizen)
+   не проверялись.
 
-The `wasm-audio-bridge.yml` workflow checks JavaScript syntax and runs
-lightweight Lampa lifecycle tests. It **does not** prove actual audio decoding
-or cross-platform playback. Verify on real Windows, macOS and Android devices
-before switching the default plugin.
+## Что проверено (10.10.2026)
+
+| Проверка | Результат |
+|---|---|
+| Скорость декодирования (боевые сборки) | AC3 5.1 — 55×, EAC3 7.1 — 41×, DTS 6.1 — 39×, AAC — 118× реального времени |
+| Встроенный плеер Lampa, AC3 5.1 | запись 8 с: peak 0.560, RMS 0.097, провалов > 10 мс — 0 |
+| Встроенный плеер Lampa, DTS 6.1 | запись 12 с: peak 0.265, RMS 0.039, провалов > 10 мс — 0 |
+| 4K-ремьюкс 28 ГБ, AC3/EAC3 | 0.3–1.2× реального времени → звука нет; мост теперь честно сообщает и отключается |
+| Chromium 154 и контейнер MKV | MKV (H.264+AAC) играет (`readyState 4`), встроенные `subrip`-дорожки не отдаются (`textTracks: 0`) |
+| Серверный ffmpeg на том же файле | `-map 0:a:1 -c copy` — 1.2–4.0× реального времени; `-map 0:s:0 -c:s srt` — субтитры вытаскиваются |
+
+## Откат
+
+Вернуть прежние файлы из бэкапа модуля (`/home/lampac_backups/module/...`), убрать запись
+плагина из `LampaWeb.customPlugins` и перезапустить lampac.
