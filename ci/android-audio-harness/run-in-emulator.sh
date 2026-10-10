@@ -4,6 +4,11 @@
 # every piece of evidence into artifacts/.
 set -uo pipefail
 
+# На мёртвом/подвисшем эмуляторе adb умеет висеть вечно — оборачиваем все вызовы таймаутом.
+ADB_BIN="$(command -v adb || echo adb)"
+ADB_TIMEOUT="${ADB_TIMEOUT:-60}"
+adb() { timeout "$ADB_TIMEOUT" "$ADB_BIN" "$@"; }
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
@@ -76,7 +81,7 @@ collect_report() {
 
 # ---------------------------------------------------------------- environment
 log "=== environment ==="
-adb wait-for-device
+timeout 600 "$ADB_BIN" wait-for-device
 for i in $(seq 1 60); do
   [ "$(sh_ getprop sys.boot_completed)" = "1" ] && break
   sleep 2
@@ -160,13 +165,13 @@ if wait_for '"event":"s2-lampa"' 240; then
     dump "dumpsys audio" s2-audioservice-inner
     snap s2-inner-player
   fi
-  if wait_for '"event":"s2-stream-watch"' 300; then
+  if wait_for '"event":"s2-stream-watch"' 120; then
     sleep 20
     dump_head "dumpsys media.audio_flinger" s2-audioflinger-stream
     dump "dumpsys audio" s2-audioservice-stream
     snap s2-real-stream
   fi
-  wait_for '"event":"s2-complete"' 240
+  wait_for '"event":"s2-complete"' 120
 fi
 logcat_save s2
 collect_report s2
