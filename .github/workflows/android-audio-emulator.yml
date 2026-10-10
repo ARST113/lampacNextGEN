@@ -1,0 +1,97 @@
+name: Android audio emulator harness
+
+on:
+  push:
+    branches:
+      - ci/android-audio-emulator-20261010
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    name: S1+S2 WebView harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Show Android SDK
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_SDK_ROOT/build-tools" || true
+          ls -d "$ANDROID_SDK_ROOT"/platforms/* || true
+
+      - name: Build harness APK (aapt2 + d8 + apksigner, no Gradle)
+        run: bash ci/android-audio-harness/build-apk.sh
+
+      - name: Boot emulator and run scenarios
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: bash ci/android-audio-harness/run-in-emulator.sh
+
+      - name: Show status summary
+        if: always()
+        run: cat artifacts/status.txt || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-audio-emulator-artifacts
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  s3-real-lampa-apk:
+    name: S3 real Lampa APK (bounded attempt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect the real Lampa client APK from ARST113/LAMPA releases
+        id: apk
+        run: bash ci/android-audio-harness/s3-fetch-apk.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Boot emulator with the real APK
+        if: steps.apk.outputs.abi != ''
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: ${{ steps.apk.outputs.abi }}
+          profile: pixel_5
+          disable-animations: true
+          emulator-boot-timeout: 1200
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: bash ci/android-audio-harness/s3-run.sh
+
+      - name: Upload S3 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-s3-real-lampa-apk
+          path: artifacts-s3/
+          if-no-files-found: warn
+          retention-days: 7
