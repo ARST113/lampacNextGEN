@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var ci = window.__MPV2_CI__ = { loadedAt: Date.now(), started: false, error: '' };
+  var ci = window.__MPV2_CI__ = { loadedAt: Date.now(), started: false, error: '', languageSelected: false };
   window.addEventListener('error', function (e) {
     ci.error = String(e.message || 'Unknown browser error');
     console.error('[mpv2-ci]', ci.error);
@@ -16,6 +16,16 @@
       ci.error = 'Lampa / MPV2 not ready within 50s';
       return;
     }
+    // Upstream Lampa starts with a language wizard on fresh profiles.
+    // Complete it with its own DOM event before opening the player overlay.
+    var ru = document.querySelector('.lang__selector-item[data-code="ru"]');
+    if (ru && !ci.languageSelected) {
+      ci.languageSelected = true;
+      ru.click();
+      console.info('[mpv2-ci] Selected Russian in Lampa welcome wizard');
+      return;
+    }
+    if (document.querySelector('.lang') && !ci.languageSelected) return;
     if (!window.Lampa || !Lampa.Storage || !window.MpvWasmLampa || !MpvWasmLampa.open) return;
     clearInterval(timer);
     try {
