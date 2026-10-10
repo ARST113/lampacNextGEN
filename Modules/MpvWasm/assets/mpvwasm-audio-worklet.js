@@ -84,44 +84,48 @@ class MpvWasmPcmProcessor extends AudioWorkletProcessor {
     return block.pcm[index * block.channels + Math.min(channel, block.channels - 1)] || 0;
   }
 
+  interpolateSource(block, offset, fraction, sourceChannel) {
+    if (sourceChannel >= block.channels) return 0;
+    const a = this.readSource(block, offset, sourceChannel);
+    let b = a;
+    if (offset + 1 < block.samples) {
+      b = this.readSource(block, offset + 1, sourceChannel);
+    } else if (this.queue.length) {
+      const next = this.queue[0];
+      const expectedPts = block.ptsUs + block.samples * 1000000 / block.rate;
+      if (next.channels === block.channels && next.rate === block.rate &&
+          Math.abs(next.ptsUs - expectedPts) < 20000) {
+        b = this.readSource(next, 0, sourceChannel);
+      }
+    }
+    return a + (b - a) * fraction;
+  }
+
   sampleAt(block, position, channel, outputChannels) {
     const offset = Math.floor(position);
     const fraction = position - offset;
     const channels = block.channels;
-    const raw = (sourceChannel) => {
-      if (sourceChannel >= channels) return 0;
-      const a = this.readSource(block, offset, sourceChannel);
-      let b = a;
-      if (offset + 1 < block.samples) {
-        b = this.readSource(block, offset + 1, sourceChannel);
-      } else if (this.queue.length) {
-        const next = this.queue[0];
-        const expectedPts = block.ptsUs + block.samples * 1000000 / block.rate;
-        if (next.channels === block.channels && next.rate === block.rate &&
-            Math.abs(next.ptsUs - expectedPts) < 20000) {
-          b = this.readSource(next, 0, sourceChannel);
-        }
-      }
-      return a + (b - a) * fraction;
-    };
-
     if (outputChannels > 2) {
-      if (channels === 1) return channel === 2 ? raw(0) : 0;
-      if (channels === 2) return channel < 2 ? raw(channel) : 0;
+      if (channels === 1) return channel === 2 ? this.interpolateSource(block, offset, fraction, 0) : 0;
+      if (channels === 2) return channel < 2 ? this.interpolateSource(block, offset, fraction, channel) : 0;
       if (outputChannels === 6 && channels >= 8 && (channel === 4 || channel === 5)) {
-        return raw(channel) + 0.7071 * raw(channel + 2);
+        return this.interpolateSource(block, offset, fraction, channel) +
+          0.7071 * this.interpolateSource(block, offset, fraction, channel + 2);
       }
-      return raw(channel);
+      return this.interpolateSource(block, offset, fraction, channel);
     }
-
-    if (channels === 1) return raw(0);
-    if (channels === 2) return raw(channel);
+    if (channels === 1) return this.interpolateSource(block, offset, fraction, 0);
+    if (channels === 2) return this.interpolateSource(block, offset, fraction, channel);
     if (channel === 0) {
-      return raw(0) + raw(2) * 0.7071 + raw(4) * 0.5 +
-        (channels >= 8 ? raw(6) * 0.35 : 0);
+      return this.interpolateSource(block, offset, fraction, 0) +
+        this.interpolateSource(block, offset, fraction, 2) * 0.7071 +
+        this.interpolateSource(block, offset, fraction, 4) * 0.5 +
+        (channels >= 8 ? this.interpolateSource(block, offset, fraction, 6) * 0.35 : 0);
     }
-    return raw(1) + raw(2) * 0.7071 + (channels >= 6 ? raw(5) * 0.5 : 0) +
-      (channels >= 8 ? raw(7) * 0.35 : 0);
+    return this.interpolateSource(block, offset, fraction, 1) +
+      this.interpolateSource(block, offset, fraction, 2) * 0.7071 +
+      (channels >= 6 ? this.interpolateSource(block, offset, fraction, 5) * 0.5 : 0) +
+      (channels >= 8 ? this.interpolateSource(block, offset, fraction, 7) * 0.35 : 0);
   }
 
   bufferedUs() {
