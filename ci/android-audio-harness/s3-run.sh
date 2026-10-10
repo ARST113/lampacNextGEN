@@ -2,13 +2,15 @@
 # S3 step 2 (bounded): install the real Lampa client APK on the emulator, launch it
 # and record whatever actually happens. Everything is best-effort and time-boxed.
 set -uo pipefail
+ADB_BIN="$(command -v adb || echo adb)"
+adb() { timeout "${ADB_TIMEOUT:-60}" "$ADB_BIN" "$@"; }
 
 OUT=artifacts-s3
 mkdir -p "$OUT"
 APK="$OUT/lampa.apk"
 log() { echo "[s3] $*"; }
 
-adb wait-for-device
+timeout 600 "$ADB_BIN" wait-for-device
 for i in $(seq 1 120); do
   [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
   sleep 2
@@ -25,7 +27,11 @@ if [ ! -f "$APK" ]; then
 fi
 
 log "installing real Lampa APK"
-adb install -r -g "$APK" > "$OUT/install.txt" 2>&1
+for attempt in 1 2 3; do
+  echo "install attempt $attempt" >> "$OUT/install.txt"
+  timeout 420 adb install --no-streaming -r -g "$APK" >> "$OUT/install.txt" 2>&1 && break
+  sleep 15
+done
 log "install exit=$?"
 tail -5 "$OUT/install.txt"
 
