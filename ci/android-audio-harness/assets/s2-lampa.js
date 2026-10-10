@@ -67,6 +67,16 @@
     }
   };
 
+  H.kick = function (tag) {
+    var v = safe(function () { return Lampa.PlayerVideo.video(); }, null);
+    if (!v) { H.rep({ event: 'kick-no-video', tag: tag }); return; }
+    if (v.paused) {
+      var pr = v.play();
+      if (pr && pr.catch) pr.catch(function (e) { H.rep({ event: 'kick-rejected', tag: tag, error: String(e) }); });
+      H.rep({ event: 'kick-play', tag: tag });
+    }
+  };
+
   window.__H = H;
   H.rep({ event: 's2-bootstrap', href: location.href, readyState: document.readyState });
   H.rep({ event: 'console-table', caps: H.caps() });
@@ -87,11 +97,31 @@
     await H.sleep(5000);
     H.rep({ event: 's2-lampa-ready', player: H.player(), dom: H.dom() });
 
+    // Первый запуск Lampa: экран выбора языка. Без него inner-плеер не инициализирован
+    // (html === undefined -> "Cannot read property 'toggleClass' of undefined").
+    for (var b = 0; b < 14; b++) {
+      var act = document.querySelectorAll('.activity').length;
+      if (act > 0) { H.rep({ event: 's2-main-screen', step: b, activity: act }); break; }
+      var clicked = safe(function () {
+        var wanted = /Русский|Продолжить|Пропустить|Начать|Позже|Понятно|Далее|Next|Continue|Skip|Start/i;
+        var nodes = document.querySelectorAll('.button, .selector, [data-code], .modal__button');
+        for (var i = 0; i < nodes.length; i++) {
+          var text = String(nodes[i].textContent || '').trim();
+          if (wanted.test(text)) { nodes[i].click(); return text.slice(0, 20); }
+        }
+        return null;
+      }, null);
+      H.rep({ event: 's2-boot-step', step: b, clicked: clicked, activity: act });
+      await H.sleep(2000);
+    }
+    H.rep({ event: 's2-boot-done', activity: document.querySelectorAll('.activity').length, dom: H.dom() });
+
     // Phase 1: default player on Android -> Lampa.Android.openPlayer -> AndroidJS.openPlayer
     H.rep({ event: 's2-phase', phase: 'android-default', player: H.player() });
     Lampa.Player.play({ url: TEST_AC3, title: 'AC3 test (default player)' });
     for (var i = 0; i < 6; i++) {
       await H.sleep(3000);
+      if (i === 0) H.kick('android');
       H.rep({ event: 's2-android-watch', i: i, player: H.player(), video: H.video(), dom: H.dom() });
     }
     H.rep({ event: 's2-android-done', video: H.video(), dom: H.dom() });
@@ -105,9 +135,10 @@
     Lampa.Player.play({ url: TEST_AC3, title: 'AC3 test (inner player)', launch_player: 'inner' });
     for (var j = 0; j < 16; j++) {
       await H.sleep(3000);
-      H.rep({ event: 's2-inner-watch', j: j, player: H.player(), video: H.video(), dom: H.dom() });
+      if (j === 0) H.kick('inner');
+      H.rep({ event: 's2-inner-watch', j: j, player: H.player(), video: H.video(), bridge: safe(function () { return window.__mpvwasmState ? window.__mpvwasmState() : null; }, null), dom: H.dom() });
     }
-    H.rep({ event: 's2-inner-done', video: H.video(), dom: H.dom() });
+    H.rep({ event: 's2-inner-done', video: H.video(), bridge: safe(function () { return window.__mpvwasmState ? window.__mpvwasmState() : null; }, null), dom: H.dom() });
     safe(function () { Lampa.Player.close(); });
 
     // Phase 3: real 5.1 AC3 stream from the cinema source
@@ -116,6 +147,7 @@
     Lampa.Player.play({ url: STREAM, title: 'Real AC3 5.1 stream', launch_player: 'inner' });
     for (var m = 0; m < 14; m++) {
       await H.sleep(4000);
+      if (m === 0) H.kick('stream');
       H.rep({ event: 's2-stream-watch', m: m, player: H.player(), video: H.video(), dom: H.dom() });
     }
     H.rep({ event: 's2-complete', video: H.video(), dom: H.dom() });
