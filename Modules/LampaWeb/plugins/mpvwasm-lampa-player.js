@@ -3425,7 +3425,8 @@
         state.timelineContinued = false;
         state.pendingSeek = null;
         window.__mpvwasm_backend_decision = state.backendDecision;
-        if (quality) quality.textContent = 'mpv hw';
+        if (quality) quality.textContent = 'HTML5';
+        setHidden('.player-panel__pip', !document.pictureInPictureEnabled);
         logMpv('backend:fallback', {
           reason: reason,
           error: lastError,
