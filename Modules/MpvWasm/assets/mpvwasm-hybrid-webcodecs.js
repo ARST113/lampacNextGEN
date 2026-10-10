@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260723-42-continuous-av';
+  var VERSION = '20261010-nextgen-audio1';
   var INVALID_TS = -9000000000000000;
 
   function loadScript(src, ready) {
@@ -483,8 +483,12 @@
     this.audioSyncPaused = false;
     this.audioOutputPeak = 0;
     this.audioProcessCalls = 0;
+    this.audioActualOutputChannels = 0;
+    this.audioActualOutputSampleRate = 0;
     this.audioUnderruns = 0;
     this.audioWorkletPaused = true;
+    this.audioOutputChannels = 2;
+    this.audioOutputMaxChannels = 2;
     this.audioProofLogged = false;
     this.buffering = false;
     this.pendingClockUs = 0;
@@ -668,16 +672,40 @@
       this.audioContext.__mpvwasmWorkletPromise = this.audioContext.audioWorklet.addModule('/mpvwasm/assets/mpvwasm-audio-worklet.js?v=' + VERSION);
     }
     await this.audioContext.__mpvwasmWorkletPromise;
+    // Preserve discrete surround where the actual browser audio destination can
+    // accept it; a 5.1 source on a stereo destination still needs downmix.
+    var destination = this.audioContext.destination;
+    var maxChannels = Math.max(2, Number(destination && destination.maxChannelCount || 2));
+    var inputChannels = Math.max(1, Number(this.audioTrack.channels || 2));
+    var audioOutputMode = 'auto';
+    try {
+      audioOutputMode = String(window.Lampa && Lampa.Storage &&
+        Lampa.Storage.get('mpvwasm_audio_output', 'auto') || 'auto');
+    } catch (_) { }
+    var wantedChannels = audioOutputMode === 'stereo' ? 2 :
+      inputChannels >= 8 && maxChannels >= 8 ? 8 :
+      inputChannels >= 6 && maxChannels >= 6 ? 6 : 2;
+    if (wantedChannels > 2) {
+      try {
+        destination.channelCountMode = 'explicit';
+        destination.channelCount = wantedChannels;
+        if (destination.channelCount < wantedChannels) wantedChannels = 2;
+      } catch (_) { wantedChannels = 2; }
+    }
+    this.audioOutputChannels = wantedChannels;
+    this.audioOutputMaxChannels = maxChannels;
     this.audioNode = new AudioWorkletNode(this.audioContext, 'mpvwasm-pcm-processor', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
-      outputChannelCount: [2]
+      outputChannelCount: [wantedChannels]
     });
     var self = this;
     this.audioNode.port.onmessage = function (event) {
       var data = event.data || {};
       if (data.type !== 'clock') return;
       self.audioOutputPeak = Number(data.outputPeak || 0);
+      self.audioActualOutputChannels = Number(data.outputChannels || 0);
+      self.audioActualOutputSampleRate = Number(data.outputSampleRate || 0);
       self.audioProcessCalls = Number(data.processCalls || 0);
       self.audioUnderruns = Number(data.underruns || 0);
       self.audioWorkletPaused = !!data.paused;
@@ -840,16 +868,17 @@
 
   HybridWebCodecsPlayer.prototype.maxFrameQueue = function () {
     var width = Number(this.videoTrack && this.videoTrack.width || 0);
-    return width >= 3000 ? 48 : 24;
+    // 48 decoded 4K frames can retain hundreds of MB of GPU surfaces.
+    return width >= 3000 ? 8 : 16;
   };
 
   HybridWebCodecsPlayer.prototype.maxPendingVideoPackets = function () {
     var width = Number(this.videoTrack && this.videoTrack.width || 0);
-    return width >= 3000 ? 144 : 72;
+    return width >= 3000 ? 36 : 48;
   };
 
   HybridWebCodecsPlayer.prototype.maxRecoveryVideoPackets = function () {
-    return this.maxPendingVideoPackets() * 4;
+    return this.maxPendingVideoPackets() * 2;
   };
 
   HybridWebCodecsPlayer.prototype.startupAudioBufferUs = function () {
@@ -862,9 +891,13 @@
     return width >= 3000 ? 3500000 : 2500000;
   };
 
+  HybridWebCodecsPlayer.prototype.maxDecodeQueue = function () {
+    return Number(this.videoTrack && this.videoTrack.width || 0) >= 3000 ? 12 : 24;
+  };
+
   HybridWebCodecsPlayer.prototype.throttleReason = function () {
     if (this.seekTargetUs && !this.hasFrameNear(this.seekTargetUs, 180000)) return '';
-    var decodeBlocked = !!(this.videoDecoder && this.videoDecoder.decodeQueueSize > 64);
+    var decodeBlocked = !!(this.videoDecoder && this.videoDecoder.decodeQueueSize > this.maxDecodeQueue());
     var frameBlocked = this.frameQueue.length >= this.maxFrameQueue();
     var videoBlocked = decodeBlocked || frameBlocked;
     var audioReady = !this.audioTrack || this.audioBufferUs >= this.playbackAudioBufferUs();
@@ -876,7 +909,7 @@
   };
 
   HybridWebCodecsPlayer.prototype.videoDecodeBlocked = function () {
-    return !!(this.videoDecoder && this.videoDecoder.decodeQueueSize > 64) || this.frameQueue.length >= this.maxFrameQueue();
+    return !!(this.videoDecoder && this.videoDecoder.decodeQueueSize > this.maxDecodeQueue()) || this.frameQueue.length >= this.maxFrameQueue();
   };
 
   HybridWebCodecsPlayer.prototype.drainPendingVideoPackets = function () {
@@ -910,7 +943,7 @@
 
         var handled = 0;
         var is4k = Number(this.videoTrack && this.videoTrack.width || 0) >= 3000;
-        var limit = this.seekTargetUs ? (is4k ? 192 : 48) : (is4k ? 128 : 24);
+        var limit = this.seekTargetUs ? (is4k ? 72 : 48) : (is4k ? 48 : 24);
         while (handled < limit && !this.destroyed && !this.seeking && !this.throttleReason()) {
           var packet = await this.session.readPacket();
           if (generation !== this.pumpGeneration || this.destroyed || this.seeking) break;
@@ -926,11 +959,11 @@
           this.packetsRead++;
           this.pumpLastProgressAt = performance.now();
           await this.handlePacket(packet);
-          if (this.videoDecoder && this.videoDecoder.decodeQueueSize > 64 && handled >= 2) break;
+          if (this.videoDecoder && this.videoDecoder.decodeQueueSize > this.maxDecodeQueue() && handled >= 2) break;
         }
 
         this.maybeReady();
-        await sleep(this.videoDecoder && this.videoDecoder.decodeQueueSize > 56 ? 3 : 0);
+        await sleep(this.videoDecoder && this.videoDecoder.decodeQueueSize > this.maxDecodeQueue() - 4 ? 3 : 0);
       }
     } catch (error) {
       var message = String(error && (error.message || error) || error || '');
@@ -1282,6 +1315,7 @@
     this.renderSubtitles(clockUs);
     this.syncAudioToVideo();
     this.emitElapsed(false);
+    if (performance.now() - this.statsAt > 500) this.updateDebug();
     this.raf = requestAnimationFrame(this._renderLoop);
   };
 
@@ -1378,7 +1412,7 @@
       elapsed: this.elapsed,
       audioClockUs: this.audioClockUs,
       videoFrameUs: this.lastDrawnFrameUs,
-      driftMs: Math.round((this.lastDrawnFrameUs - this.audioClockUs) / 1000),
+      driftMs: Math.round((this.lastDrawnFrameUs - this.currentClockUs()) / 1000),
       submittedFrames: this.submittedFrames,
       decodedFrames: this.decodedFrames,
       renderedFrames: this.renderedFrames,
@@ -1395,6 +1429,10 @@
       audioOutputPeak: this.audioOutputPeak,
       audioProcessCalls: this.audioProcessCalls,
       audioUnderruns: this.audioUnderruns,
+      audioOutputChannels: this.audioActualOutputChannels || this.audioOutputChannels,
+      audioDestinationMaxChannels: this.audioOutputMaxChannels,
+      audioOutputSampleRate: this.audioActualOutputSampleRate,
+      audioSourceChannels: this.audioTrack && this.audioTrack.channels || 0,
       audioWorkletPaused: this.audioWorkletPaused,
       frameIntervalMs: this.lastFrameIntervalMs,
       frameJitterMs: Math.round(this.frameIntervalJitterMs * 10) / 10,
