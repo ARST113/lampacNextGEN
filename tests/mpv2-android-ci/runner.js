@@ -58,6 +58,9 @@ async function main() {
               audioDestinationMaxChannels:Number(d.audioDestinationMaxChannels || 0),
               audioUnderruns:Number(d.audioUnderruns || 0),
               decodeQueue:Number(d.decodeQueue || 0), videoQueue:Number(d.videoQueue || 0),
+              videoQueueFirstUs:d.videoQueueFirstUs == null ? null : Number(d.videoQueueFirstUs),
+              videoQueueLastUs:d.videoQueueLastUs == null ? null : Number(d.videoQueueLastUs),
+              videoFrameUs:Number(d.videoFrameUs || 0), audioClockUs:Number(d.audioClockUs || 0),
               buffering:!!d.buffering
             }
           };
