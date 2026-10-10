@@ -34,14 +34,16 @@ jobs:
       - name: Boot emulator and run scenarios
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 30
+          target: default
           arch: x86_64
           profile: pixel_5
+          ram-size: 3072
+          cores: 4
           disable-animations: true
           emulator-boot-timeout: 900
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
-          script: bash ci/android-audio-harness/run-in-emulator.sh
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -memory 3072
+          script: timeout 2400 bash ci/android-audio-harness/run-in-emulator.sh; echo "script-exit=$?"
 
       - name: Show status summary
         if: always()
@@ -78,14 +80,16 @@ jobs:
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 30
+          target: default
           arch: ${{ steps.apk.outputs.abi }}
           profile: pixel_5
+          ram-size: 3072
+          cores: 4
           disable-animations: true
           emulator-boot-timeout: 1200
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
-          script: bash ci/android-audio-harness/s3-run.sh
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -memory 3072
+          script: timeout 1800 bash ci/android-audio-harness/s3-run.sh; echo "s3-exit=$?"
 
       - name: Upload S3 artifacts
         if: always()
