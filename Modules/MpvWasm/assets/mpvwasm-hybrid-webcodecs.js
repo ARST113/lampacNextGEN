@@ -480,6 +480,7 @@
     this.audioBufferUs = 0;
     this.audioClockUs = 0;
     this.audioClockWallAt = 0;
+    this.audioGraphContextTime = null;
     this.audioSyncPaused = false;
     this.audioOutputPeak = 0;
     this.audioProcessCalls = 0;
@@ -730,6 +731,10 @@
       if (nextClockUs > self.audioClockUs + 1000) self.lastAudioProgressAt = performance.now();
       self.audioClockUs = nextClockUs;
       self.audioClockWallAt = performance.now();
+      var outputFrame = Number(data.contextFrame);
+      if (Number.isFinite(outputFrame) && outputFrame >= 0 && self.audioContext) {
+        self.audioGraphContextTime = outputFrame / self.audioContext.sampleRate;
+      }
       self.audioPlayedSamples = Number(data.playedSamples || 0);
       self.audioBufferUs = Number(data.bufferUs || 0);
       self.emitElapsed(false);
@@ -801,6 +806,7 @@
     this.audioPlayedSamples = 0;
     this.audioBufferUs = 0;
     this.audioClockUs = this.audioBasePtsUs || 0;
+    this.audioGraphContextTime = null;
     this.audioClockWallAt = performance.now();
     if (this.audioNode) {
       this.audioNode.port.postMessage({
@@ -1180,8 +1186,25 @@
   };
 
   HybridWebCodecsPlayer.prototype.currentClockUs = function () {
+    // Prefer the output device timestamp over main-thread message arrival time.
+    // Worklet PTS is measured at its context frame; getOutputTimestamp() reports
+    // the frame currently reaching the system output (including output latency).
     if (this.audioTrack && this.audioClockUs) {
-      if (!this.paused && this.audioClockWallAt) {
+      if (!this.paused && !this.buffering && !this.seeking && this.audioContext &&
+          this.audioGraphContextTime !== null &&
+          typeof this.audioContext.getOutputTimestamp === 'function') {
+        try {
+          var stamp = this.audioContext.getOutputTimestamp();
+          if (stamp && stamp.contextTime > 0 && stamp.performanceTime > 0) {
+            var elapsedWall = (performance.now() - stamp.performanceTime) / 1000;
+            var atOutput = stamp.contextTime + Math.max(-0.05, Math.min(0.25, elapsedWall));
+            var delta = atOutput - this.audioGraphContextTime;
+            if (Number.isFinite(delta) && delta >= -0.35 && delta <= 0.3)
+              return Math.max(0, this.audioClockUs + Math.round(delta * 1000000));
+          }
+        } catch (_) { }
+      }
+      if (!this.paused && !this.buffering && this.audioClockWallAt) {
         var advancedUs = Math.max(0, Math.min(250000, Math.round((performance.now() - this.audioClockWallAt) * 1000)));
         return this.audioClockUs + advancedUs;
       }
