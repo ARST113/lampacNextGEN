@@ -1,16 +1,24 @@
 name: MPV2 Android emulator — real MKV
 
 on:
-  push:
-    branches:
-      - feat/mpv2-nextgen-audio-perf-ui-20261010
-    paths:
-      - 'tests/mpv2-android-ci/**'
-      - '.github/workflows/mpv2-android-emulator.yml'
+  workflow_call:
+    inputs:
+      stream_url:
+        required: false
+        type: string
+        default: ''
+      android_api:
+        required: false
+        type: string
+        default: '35'
+      test_seconds:
+        required: false
+        type: string
+        default: '70'
   workflow_dispatch:
     inputs:
       stream_url:
-        description: 'Full HTTP(S) MKV URL; leave blank to use secret or default test source'
+        description: 'Full HTTP(S) MKV URL; leave blank for the default test source'
         required: false
         type: string
         default: ''
@@ -24,7 +32,7 @@ on:
           - '33'
         default: '35'
       test_seconds:
-        description: 'Playback observation window in seconds (15-180)'
+        description: 'Playback observation window (15-180 seconds)'
         required: false
         type: string
         default: '70'
@@ -43,6 +51,8 @@ jobs:
     steps:
       - name: Checkout MPV2 feature branch
         uses: actions/checkout@v4
+        with:
+          ref: feat/mpv2-nextgen-audio-perf-ui-20261010
       - name: Configure Node 22
         uses: actions/setup-node@v4
         with:
