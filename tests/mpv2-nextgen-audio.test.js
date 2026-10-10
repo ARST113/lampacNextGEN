@@ -137,3 +137,14 @@ test('audio preroll cannot drain queued PCM before both video and audio are read
   assert.match(hybrid, /paused: this\.paused \|\| !this\.ready \|\| this\.buffering \|\| this\.seeking/);
   assert.match(hybrid, /start-buffers-ready/);
 });
+
+test('video queue keeps oldest playable frame when decode outruns presentation', () => {
+  const hybrid = fs.readFileSync(hybridPath, 'utf8');
+  const head = hybrid.slice(hybrid.indexOf('HybridWebCodecsPlayer.prototype.configureVideoDecoder = function'),
+    hybrid.indexOf('HybridWebCodecsPlayer.prototype.configureAudio = async function'));
+  assert.match(head, /if \(self\.frameQueue\.length >= self\.maxFrameQueue\(\)\)/);
+  assert.match(head, /frame\.close\(\)/);
+  assert.doesNotMatch(head, /frameQueue\.shift\(\)\.close\(\)/);
+  assert.match(hybrid, /videoQueueFirstUs/);
+  assert.match(hybrid, /videoQueueLastUs/);
+});
