@@ -499,6 +499,7 @@
     this.lastRenderAt = 0;
     this.lastFrameIntervalMs = 0;
     this.frameIntervalJitterMs = 0;
+    this.expectedFrameIntervalMs = 0;
     this.maxFrameIntervalMs = 0;
     this.renderedFrames = 0;
     this.droppedFrames = 0;
@@ -1256,11 +1257,18 @@
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.ctx.drawImage(frame, rect.x, rect.y, rect.width, rect.height);
       }
-      this.lastDrawnFrameUs = Number(frame.timestamp || clockUs);
+      var nextFrameUs = Number(frame.timestamp || clockUs);
+      var mediaIntervalMs = (nextFrameUs - this.lastDrawnFrameUs) / 1000;
+      if (mediaIntervalMs > 8 && mediaIntervalMs < 100 &&
+          (!this.expectedFrameIntervalMs || mediaIntervalMs < this.expectedFrameIntervalMs * 1.6)) {
+        this.expectedFrameIntervalMs = this.expectedFrameIntervalMs ?
+          0.92 * this.expectedFrameIntervalMs + 0.08 * mediaIntervalMs : mediaIntervalMs;
+      }
+      this.lastDrawnFrameUs = nextFrameUs;
       var renderAt = performance.now();
       if (this.lastRenderAt) {
         var intervalMs = renderAt - this.lastRenderAt;
-        var idealMs = 1000 / 24;
+        var idealMs = this.expectedFrameIntervalMs || 1000 / 24;
         this.lastFrameIntervalMs = Math.round(intervalMs * 10) / 10;
         this.maxFrameIntervalMs = Math.max(this.maxFrameIntervalMs * 0.98, intervalMs);
         this.frameIntervalJitterMs = this.frameIntervalJitterMs ? this.frameIntervalJitterMs * 0.85 + Math.abs(intervalMs - idealMs) * 0.15 : Math.abs(intervalMs - idealMs);
