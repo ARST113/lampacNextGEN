@@ -10,10 +10,11 @@
     console.error('[mpv2-ci]', ci.error);
   });
   var tries = 0;
+  var readySince = 0;
   var timer = setInterval(function () {
-    if (++tries > 200) {
+    if (++tries > 360) {
       clearInterval(timer);
-      ci.error = 'Lampa / MPV2 not ready within 50s';
+      ci.error = 'Lampa / MPV2 not ready within 90s';
       return;
     }
     // Upstream Lampa starts with a language wizard on fresh profiles.
@@ -26,7 +27,21 @@
       return;
     }
     if (document.querySelector('.lang') && !ci.languageSelected) return;
-    if (!window.Lampa || !Lampa.Storage || !window.MpvWasmLampa || !MpvWasmLampa.open) return;
+    if (!window.Lampa || !Lampa.Storage || !Lampa.Controller ||
+        !window.MpvWasmLampa || !MpvWasmLampa.open) return;
+    var controller = '';
+    try { controller = String(Lampa.Controller.enabled().name || ''); } catch (_) { }
+    // On a fresh Lampa install, MPV2 can be closed by Lampa's final startup
+    // controller transition (e.g. controller='loading'). Only open after the
+    // UI has been stable for a few seconds and no wizard is visible.
+    if (!controller || /loading|welcome|language/i.test(controller) ||
+        document.querySelector('.lang, .welcome:not(.hide)')) {
+      readySince = 0;
+      return;
+    }
+    if (!readySince) readySince = Date.now();
+    if (Date.now() - readySince < 4500) return;
+    ci.controllerAtStart = controller;
     clearInterval(timer);
     try {
       Lampa.Storage.set('mpvwasm_player_mode', 'mpv2');
