@@ -2179,6 +2179,8 @@
         if (item.selected) playlistState.position = index;
       });
       setHidden('.player-panel__playlist', playlistState.list.length < 2);
+      setHidden('.player-panel__playlist-buttons', playlistState.list.length < 2);
+      setHidden('.player-panel__next', !playlistCan(1));
       setHidden('.player-panel__left > .player-panel__prev', !playlistCan(-1));
       setHidden('.player-panel__left > .player-panel__next', !playlistCan(1));
       setHidden('.player-panel__center > .player-panel__prev', !playlistCan(-1));
@@ -3185,7 +3187,7 @@
     bind('.player-panel__pip', togglePiP);
     bind('.player-panel__tracks', chooseAudio);
     bind('.player-panel__subs', chooseSubs);
-    bind('.player-panel__settings,.player-panel__quality', openSettings);
+    bind('.player-panel__settings,.player-panel__quality,.player-panel__mobile-more', openSettings);
     bind('.head-backward', closeActive);
 
     if (ui.volume) {
