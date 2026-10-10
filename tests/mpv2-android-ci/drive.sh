@@ -16,4 +16,11 @@ if ! adb shell pm list packages | grep -q '^package:com.android.chrome'; then
   exit 3
 fi
 adb shell am start -a android.intent.action.VIEW -d http://localhost:8787/ com.android.chrome || true
+sleep 5
+python3 tests/mpv2-android-ci/chrome_first_run.py
+adb shell am start -a android.intent.action.VIEW -d http://localhost:8787/ com.android.chrome || true
+sleep 3
+# The Android Chrome DevTools socket becomes available after first-run setup.
+adb forward --remove tcp:9222 || true
+adb forward tcp:9222 localabstract:chrome_devtools_remote
 node tests/mpv2-android-ci/runner.js
