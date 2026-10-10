@@ -131,3 +131,9 @@ test('AudioWorklet exposes context frame to align output device timing', () => {
   assert.match(hybrid, /getOutputTimestamp/);
   assert.match(hybrid, /audioGraphContextTime/);
 });
+
+test('audio preroll cannot drain queued PCM before both video and audio are ready', () => {
+  const hybrid = fs.readFileSync(hybridPath, 'utf8');
+  assert.match(hybrid, /paused: this\.paused \|\| !this\.ready \|\| this\.buffering \|\| this\.seeking/);
+  assert.match(hybrid, /start-buffers-ready/);
+});
