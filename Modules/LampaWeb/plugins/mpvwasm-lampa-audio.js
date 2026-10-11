@@ -7,7 +7,7 @@
   if (window.__lampa_audio_wasm_bridge_v1) return;
   window.__lampa_audio_wasm_bridge_v1 = true;
 
-  var VERSION = '20261010-android-10';
+  var VERSION = '20261010-android-14';
   var CODECS = { ac3: true, eac3: true, dts: true, dca: true };
   var session = null, sessionNumber = 0;
 
@@ -58,6 +58,13 @@
     if (name.indexOf('dts') === 0 || name === 'dca') return 'dts';
     return name;
   }
+  function nativeSupport(video, track) {
+    try {
+      var label = mp4Label(track);
+      if (!label) return 'no-label';
+      return video.canPlayType('audio/mp4; codecs="' + label + '"') || 'no';
+    } catch (_) { return 'err'; }
+  }
   function needsDecoder(video, track, mode) {
     var codec = codecName(track);
     if (!CODECS[codec] || mode === 'off') return false;
@@ -86,6 +93,24 @@
     if (url.indexOf('/mpvwasm/proxy?u=') >= 0) return url;
     return base + '/mpvwasm/proxy?u=' + base64Url(url);
   }
+  /* Какой файл читать мосту. Видео Lampa иногда играет через HLS-переупаковку
+   * (gst-плагин ловит все .mkv и отдаёт /gst/.../master.m3u8, элемент получает blob:),
+   * в этом случае берём исходный URL из playdata (url_orig) — звук нужен из оригинала. */
+  function bridgeSource(video, data) {
+    var live = sourceUrl(video);
+    var candidates = [live];
+    if (data) {
+      if (data.url_orig) candidates.push(String(data.url_orig));
+      if (data.url) candidates.push(String(data.url));
+    }
+    for (var i = 0; i < candidates.length; i++) {
+      var url = String(candidates[i] || '');
+      if (!/^https?:/i.test(url)) continue;
+      if (/\.m3u8(?:$|[?#])/i.test(url)) continue;
+      return url;
+    }
+    return live;
+  }
   function AudioSession(video, data) {
     this.video = video;
     this.data = data || {};
@@ -112,8 +137,10 @@
     this.stalled = false;
     this.startedAt = 0;
     this.reads = 0;
-    this.mode = storage('mpvwasm_audio_mode', 'auto');
-    this.url = sourceUrl(video);
+    this.mode = storage('mpvwasm_audio_mode', 'force');
+    this.url = bridgeSource(video, this.data);
+    // URL самого <video> (может быть blob:/HLS) — по нему понимаем, что элемент переиспользован.
+    this.elementUrl = sourceUrl(video);
     this.originalMuted = !!video.muted;
     var self = this;
     this.onNativeSeek = function () { self.seek(); };
@@ -180,6 +207,9 @@
         url: String(self.url).slice(-60), pmode: storage('mpvwasm_player_mode', 'default'),
         aw: typeof AudioWorkletNode, sec: !!window.isSecureContext });
       if (!self.tracks.some(function (t) { return needsDecoder(self.video, t, self.mode); })) {
+        // Ни одна дорожка не требует WASM — значит играет нативный декодер.
+        report({ ev: 'native-covers', mode: self.mode, codecs: self.tracks.map(codecName).join(','),
+          can: self.tracks.map(function (t) { return codecName(t) + '=' + String(nativeSupport(self.video, t)); }).join(' ') });
         self.stopWorker();
         return;
       }
@@ -616,7 +646,7 @@
     if (mpv2Active()) return;
     var video = Lampa.PlayerVideo.video();
     if (!video || !video.tagName || video.tagName.toLowerCase() !== 'video') return;
-    if (session && !session.closed && session.video === video && session.url === sourceUrl(video)) return;
+    if (session && !session.closed && session.video === video && session.url === bridgeSource(video, data || (Lampa.Player.playdata && Lampa.Player.playdata()))) return;
     if (session) session.destroy();
     session = new AudioSession(video, data || (Lampa.Player.playdata && Lampa.Player.playdata()) || {});
     window.__mpvwasmSession = session;
@@ -634,7 +664,7 @@
     var target = session;
     target.timer = setInterval(function () {
       if (target.closed) return;
-      if (sourceUrl(video) !== target.url) {
+      if (sourceUrl(video) !== (target.elementUrl || target.url)) {
         target.destroy();
         if (session === target) { session = null; attach(); }
         return;
@@ -662,7 +692,7 @@
     Lampa.SettingsApi.addParam({
       component: 'player',
       param: {
-        name: 'mpvwasm_audio_mode', type: 'select', default: 'auto',
+        name: 'mpvwasm_audio_mode', type: 'select', default: 'force',
         values: {
           auto: 'Автоматически',
           force: 'Для AC3 / EAC3 / DTS всегда',
@@ -742,7 +772,7 @@
     Lampa.Android.openPlayer = function (link, data) {
       var self = this;
       var url = String(link || '');
-      if (storage('mpvwasm_audio_mode', 'auto') !== 'inner' || !/^https?:/i.test(url)) {
+      if (storage('mpvwasm_audio_mode', 'force') !== 'inner' || !/^https?:/i.test(url)) {
         return original.apply(self, arguments);
       }
       // В режиме MPV2 воспроизведением занимается плагин плеера — не вмешиваемся.
@@ -774,7 +804,7 @@
     report({ ev: 'env', ver: VERSION, ua: userAgent().slice(-80),
       sec: !!window.isSecureContext, aw: typeof AudioWorkletNode, sab: typeof SharedArrayBuffer,
       player: storage('player', ''), pmode: storage('mpvwasm_player_mode', 'default'),
-      amode: storage('mpvwasm_audio_mode', 'auto'), mpv2: !!window.__mpvwasm_lampa_plugin,
+      amode: storage('mpvwasm_audio_mode', 'force'), mpv2: !!window.__mpvwasm_lampa_plugin,
       android: !!(window.Lampa && Lampa.Android && Lampa.Android.openPlayer) });
     Lampa.Player.listener.follow('ready', function (event) { attach(event); });
     Lampa.Player.listener.follow('destroy', cleanup);

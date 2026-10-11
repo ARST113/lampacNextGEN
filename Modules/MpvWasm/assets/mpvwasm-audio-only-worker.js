@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var modulePromise, module, selected = -1, nextPtsUs = null, endOfFile = false;
-  var VERSION = '20261010-android-8';
+  var VERSION = '20261010-android-9';
   // Android WebView (и любой обычный http-контекст без COOP/COEP) не даёт SharedArrayBuffer,
   // поэтому старая многопоточная сборка демуксера там просто не грузится. Выбираем сборку:
   //   crossOriginIsolated + SharedArrayBuffer -> mpvwasm-demuxer.js      (pthread, как раньше)
@@ -122,7 +122,9 @@
         endOfFile = false;
         return { selected: selected, sampleRate: module._demux_audio_sample_rate(), channels: module._demux_audio_pcm_channels() };
       case 'seek':
-        lastSeekUs = Math.max(0, Math.round(Number(message.us || 0)));
+        // Демуксер считает 0 «пустой» целью и отдаёт -1: ровно в начало файла
+        // он не встаёт. 1 мкс работает и эквивалентен началу.
+        lastSeekUs = Math.max(1, Math.round(Number(message.us || 0)));
         result = seekCall(lastSeekUs);
         if (result < 0) throw Error('Audio seek failed: ' + result);
         nextPtsUs = LEGACY ? lastSeekUs : null;
