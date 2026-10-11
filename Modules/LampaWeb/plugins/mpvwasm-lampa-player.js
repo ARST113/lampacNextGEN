@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20261010-mpv2-nextgen-1';
+  var VERSION = '20261010-mpv2-nextgen-9';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -24,7 +24,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20261010-mpv2-nextgen-1';
+  var VERSION = '20261010-mpv2-nextgen-9';
   if (window.__mpvwasm_lampa_plugin === VERSION) return;
   window.__mpvwasm_lampa_plugin = VERSION;
   try { console.warn('[mpv2-log] plugin:loaded ' + VERSION); } catch (_) { }
@@ -1037,12 +1037,15 @@
 
   function prewarmMpvPlayer() {
     if (assetWarmReady || !mpvWasmModeEnabled()) return assetWarmReady;
+    // Греем ту сборку демуксера, которая реально загрузится: без cross-origin isolation
+    // (Android WebView) это однопоточная mpvwasm-demuxer-st.js.
+    var singleThread = !(typeof SharedArrayBuffer !== 'undefined' && window.crossOriginIsolated);
     var urls = [
       '/mpvwasm/assets/mpvwasm-hybrid-webcodecs.js?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer-session-worker.js?v=' + VERSION,
-      '/mpvwasm/assets/mpvwasm-demuxer.js?v=' + VERSION,
-      '/mpvwasm/assets/mpvwasm-demuxer.wasm?v=' + VERSION,
+      '/mpvwasm/assets/' + (singleThread ? 'mpvwasm-demuxer-st.js' : 'mpvwasm-demuxer.js') + '?v=' + VERSION,
+      '/mpvwasm/assets/' + (singleThread ? 'mpvwasm-demuxer-st.wasm' : 'mpvwasm-demuxer.wasm') + '?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer.worker.js?v=' + VERSION
     ];
     assetWarmReady = Promise.all(urls.map(function (url) {
@@ -3061,8 +3064,10 @@
       Lampa.Controller.add('mpvwasm_player', {
         invisible: true,
         hover: showPanel,
+        // Было безусловное hidePanel(): тап по экрану/панели показывал панель и тут же
+        // прятал её (Lampa дёргает toggle текущего контроллера на каждый тап).
         toggle: function () {
-          hidePanel();
+          if (state.panelVisible) hidePanel(); else showPanel();
         },
         up: function () {
           showPanel();
@@ -3450,49 +3455,102 @@
             }
             resizeCanvas();
             ui.status.textContent = '';
+            setLoading(false);
+            lastError = '';
+            window.__mpvwasm_last_error = '';
+            try { if (Lampa.PlayerInfo && Lampa.PlayerInfo.set) Lampa.PlayerInfo.set('error', ''); } catch (_) { }
             return player;
           });
         });
       }
 
-      return waitHybridRuntime(12000).then(function (backend) {
-        var hybridUrl = isDirectTorrServerUrl(data && data.url) ? directUrl(data.url) : proxyUrl(data.url);
-        function openAttempt(attempt) {
-          return backend.open(ui.canvas, hybridUrl, callbacks, {
-            data: data,
-            debug: debugOverlayEnabled()
-          }).catch(function (error) {
-            var message = String(error && (error.message || error) || error || '');
-            var transient = /demux_open failed|failed to fetch|networkerror|load failed|http (?:408|425|429|5\d\d)/i.test(message);
-            if (!transient || attempt >= 2 || !active || active.ui !== ui) throw error;
-            var delay = attempt ? 1200 : 500;
-            logMpv('hybrid:open-retry', { attempt: attempt + 2, delay: delay, error: message });
-            return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
-              return openAttempt(attempt + 1);
+      function openHybrid(forceSoftware) {
+        return waitHybridRuntime(12000).then(function (backend) {
+          var hybridUrl = isDirectTorrServerUrl(data && data.url) ? directUrl(data.url) : proxyUrl(data.url);
+          function openAttempt(attempt) {
+            return backend.open(ui.canvas, hybridUrl, callbacks, {
+              data: data,
+              debug: debugOverlayEnabled(),
+              forceSoftware: !!forceSoftware
+            }).catch(function (error) {
+              var message = String(error && (error.message || error) || error || '');
+              var transient = /demux_open failed|failed to fetch|networkerror|load failed|http (?:408|425|429|5\d\d)/i.test(message);
+              if (!transient || attempt >= 2 || !active || active.ui !== ui) throw error;
+              var delay = attempt ? 1200 : 500;
+              logMpv('hybrid:open-retry', { attempt: attempt + 2, delay: delay, error: message });
+              return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
+                return openAttempt(attempt + 1);
+              });
+            });
+          }
+          return openAttempt(0);
+        });
+      }
+
+      var softwareRetried = false;
+
+      function watchFirstFrame(target) {
+        var deadline = Date.now() + 6000;
+        return new Promise(function (resolve) {
+          function tick() {
+            if (!active || active.ui !== ui || !target || target.destroyed) return resolve('stale');
+            if (target.ready) return resolve('ready');
+            if (target.seeking || target.seekStartedAt) deadline = Date.now() + 6000;
+            if (Date.now() < deadline) { setTimeout(tick, 500); return; }
+            resolve('timeout');
+          }
+          setTimeout(tick, 1000);
+        });
+      }
+
+      function nativeFallback(reason, target) {
+        return activateNativeFallback(reason, new Error(reason), target).catch(function (fallbackError) {
+          callbacks.error(fallbackError);
+          return null;
+        });
+      }
+
+      function selectedAcceleration(player) {
+        var probe = window.__mpvwasm_webcodecs_probe || {};
+        var selected = probe.selected || {};
+        return String(selected.hardwareAcceleration || (player && player.videoAcceleration) || '');
+      }
+
+      return openHybrid(storageBool('mpvwasm_force_software', false)).then(function (player) {
+        return watchFirstFrame(player).then(function (outcome) {
+          if (outcome !== 'timeout') return player;
+          var accel = selectedAcceleration(player);
+          logMpv('hybrid:no-first-frame', { accel: accel, stats: hybridStats(player) });
+          if (softwareRetried || !/hardware/i.test(accel) || !active || active.ui !== ui) {
+            return nativeFallback('hybrid-first-frame-timeout', player).then(function (fallbackPlayer) {
+              return fallbackPlayer || null;
+            });
+          }
+          softwareRetried = true;
+          logMpv('hybrid:software-retry', { accel: accel });
+          return Promise.resolve(player.destroy()).catch(function () { }).then(function () {
+            if (!active || active.ui !== ui) return null;
+            return openHybrid(true).then(function (retryPlayer) {
+              if (!active || active.ui !== ui) {
+                try { retryPlayer.destroy(); } catch (_) { }
+                return null;
+              }
+              active.player = retryPlayer;
+              return watchFirstFrame(retryPlayer).then(function (second) {
+                if (second !== 'timeout') return retryPlayer;
+                logMpv('hybrid:software-no-first-frame', { stats: hybridStats(retryPlayer) });
+                return nativeFallback('hybrid-software-first-frame-timeout', retryPlayer).then(function (fallbackPlayer) {
+                  return fallbackPlayer || retryPlayer;
+                });
+              });
             });
           });
-        }
-        return openAttempt(0);
-      }).then(function (player) {
-        var fallbackDeadline = Date.now() + 6000;
-        function checkHybridReady() {
-          if (!active || active.ui !== ui || active.player !== player || player.destroyed || player.ready) return;
-          if (player.seeking || player.seekStartedAt) fallbackDeadline = Date.now() + 6000;
-          if (Date.now() < fallbackDeadline) {
-            setTimeout(checkHybridReady, 500);
-            return;
-          }
-          activateNativeFallback('hybrid-first-frame-timeout', new Error('Hybrid did not produce a playable frame after startup/seek'), player).catch(function (fallbackError) {
-            callbacks.error(fallbackError);
-          });
-        }
-        setTimeout(checkHybridReady, 1000);
-        return player;
+        });
       }).catch(function (error) {
         lastError = String(error && (error.message || error) || error || '');
-        var unsupportedVideo = /WebCodecs unsupported|VideoDecoder is not available/i.test(lastError);
+        var unsupportedVideo = /WebCodecs unsupported|VideoDecoder is not available|av1-native-preferred/i.test(lastError);
         if (unsupportedVideo) {
-          return activateNativeFallback('webcodecs-video-unsupported', error, null);
+          return activateNativeFallback(/av1-native-preferred/i.test(lastError) ? 'av1-native' : 'webcodecs-video-unsupported', error, null);
         }
         state.backendDecision.selected = 'hybrid-webcodecs';
         state.backendDecision.reason = 'hybrid-open-failed';

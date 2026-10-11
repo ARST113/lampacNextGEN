@@ -114,7 +114,7 @@
     return variants.filter(function (item, index) { return item && variants.indexOf(item) === index; });
   }
 
-  function videoConfigs(track) {
+  function videoConfigs(track, preferSoftware) {
     var description = fromBase64(track && track.extradata || '');
     var codec = String(track && track.codecName || '').toLowerCase();
     var base = {
@@ -124,7 +124,13 @@
 
     function candidates(codecName, codecDescription, extra) {
       var list = [];
-      ['prefer-hardware', 'no-preference', ''].forEach(function (hardwareAcceleration) {
+      // preferSoftware = повторный проход после того, как аппаратный декодер не выдал
+      // ни одного кадра (типично для AV1 в Android WebView). Тогда первым идёт
+      // программный декодер, дальше обычный выбор платформы.
+      var order = preferSoftware
+        ? ['prefer-software', 'no-preference', '']
+        : ['prefer-hardware', 'no-preference', ''];
+      order.forEach(function (hardwareAcceleration) {
         var config = Object.assign({}, base, extra || {}, { codec: codecName });
         if (codecDescription && codecDescription.length) config.description = codecDescription;
         if (hardwareAcceleration) config.hardwareAcceleration = hardwareAcceleration;
@@ -148,7 +154,37 @@
       });
       return configs;
     }
-    if (codec === 'av1') return candidates('av01.0.12M.08', description);
+    if (codec === 'av1') {
+      // WebCodecs ждёт av1C, а FFmpeg/Matroska отдаёт в extradata sequence header OBU,
+      // поэтому description для AV1 не передаём — sequence header разбирается из битстрима.
+      // Кодек-строку собираем по треку; критична битность: для 10-битного AV1 (HDR10)
+      // строка с ".08" даёт мгновенный "Decoding error" (проверено на телефоне).
+      var av1Profile = Number(track && track.profile);
+      if (!isFinite(av1Profile) || av1Profile < 0 || av1Profile > 2) av1Profile = 0;
+      var av1Level = Number(track && track.level);
+      if (!isFinite(av1Level) || av1Level < 0) av1Level = 8;
+      var levelText = av1Level < 10 ? '0' + av1Level : String(av1Level);
+      var transfer = Number(track && track.colorTransfer || 0);
+      var primaries = Number(track && track.colorPrimaries || 0);
+      var hdrLike = transfer === 16 || transfer === 18 || primaries === 9;
+      var depth = hdrLike ? '10' : '08';
+      var altDepth = hdrLike ? '08' : '10';
+      var av1Names = [
+        'av01.' + av1Profile + '.' + levelText + 'M.' + depth,
+        'av01.' + av1Profile + '.' + levelText + 'M.' + altDepth,
+        'av01.0.08M.' + depth,
+        'av01.0.12M.08'
+      ];
+      var av1Configs = [];
+      av1Names.forEach(function (name) {
+        if (av1Configs.some(function (config) { return config.codec === name; })) return;
+        candidates(name, null).forEach(function (config) {
+          config._mpvwasmAv1 = true;
+          av1Configs.push(config);
+        });
+      });
+      return av1Configs;
+    }
     if (codec === 'vp9') return candidates('vp09.00.51.08', description);
     if (codec === 'vp8') return candidates('vp8', description);
     return [];
@@ -179,9 +215,9 @@
     return Object.keys(color).length ? color : null;
   }
 
-  async function supportedConfig(track) {
+  async function supportedConfig(track, preferSoftware) {
     if (typeof VideoDecoder !== 'function') return null;
-    var configs = videoConfigs(track);
+    var configs = videoConfigs(track, preferSoftware);
     var report = {
       version: VERSION,
       track: {
@@ -213,6 +249,7 @@
             supported._mpvwasmHevc = true;
             supported._mpvwasmNalLengthSize = config._mpvwasmNalLengthSize;
           }
+          if (config._mpvwasmAv1) supported._mpvwasmAv1 = true;
           report.selected = item;
           window.__mpvwasm_webcodecs_probe = report;
           try { console.warn('[mpvwasm-webcodecs-probe] ' + JSON.stringify(report)); } catch (_) { }
@@ -576,6 +613,13 @@
     if (!this.videoTrack) throw new Error('No video track');
     var sourceUrl = this.options && this.options.data && this.options.data.url || this.url;
     this.videoTrack.preferAnnexB = /\.mkv(?:$|[?#])/i.test(String(sourceUrl || ''));
+    // AV1 в этих релизах лежит в MKV, а демуксер отдаёт его по одному OBU на пакет;
+    // WebCodecs-путь на таком потоке отваливается (dav1d error -22) — нативный плеер
+    // декодирует тот же файл без ошибок и аппаратно. Поэтому AV1 уходит в native,
+    // если явно не разрешено обратное через options.allowAv1.
+    if (String(this.videoTrack.codecName || '').toLowerCase() === 'av1' && !(this.options && this.options.allowAv1)) {
+      throw new Error('av1-native-preferred: AV1 идёт по OBU, стабильнее нативный плеер');
+    }
 
     this.audioTrack = tracks.filter(function (track) { return track.type === 'audio'; })[0] || null;
     var subtitles = tracks.filter(function (track) { return track.type === 'subtitle'; });
@@ -590,14 +634,23 @@
     this.duration = Math.max(0, Number(this.session.info.durationUs || 0) / 1000000);
 
     this.markTiming('webcodecs-probe-start', { codec: this.videoTrack.codecName, width: this.videoTrack.width, height: this.videoTrack.height });
-    this.config = await supportedConfig(this.videoTrack);
+    this.config = await supportedConfig(this.videoTrack, !!(this.options && this.options.forceSoftware));
     if (!this.config) {
       var failedProbe = window.__mpvwasm_webcodecs_probe;
       var failedTrack = failedProbe && failedProbe.track;
       var details = failedTrack ? ' (' + [failedTrack.profile, failedTrack.width + 'x' + failedTrack.height, failedProbe.candidates.length + ' configs'].filter(Boolean).join(', ') + ')' : '';
       throw new Error('WebCodecs unsupported for ' + (this.videoTrack.codecName || 'video') + details);
     }
-    this.markTiming('webcodecs-probe-done', { config: this.config.codec });
+    // AV1 в этом контейнере приходит по одному OBU на пакет, а WebCodecs ждёт кадр
+    // (или temporal unit) целиком: одиночные OBU дают "Decoding error" на ~38-м кадре.
+    this.av1ChunkMode = !!this.config._mpvwasmAv1;
+    this.av1Pending = [];
+    this.av1PendingKey = false;
+    this.av1PendingTs = 0;
+    this.av1PendingDur = 0;
+    this.videoAcceleration = this.config.hardwareAcceleration || 'default';
+    window.__mpvwasm_video_acceleration = this.videoAcceleration;
+    this.markTiming('webcodecs-probe-done', { config: this.config.codec, acceleration: this.videoAcceleration });
 
     this.markTiming('video-config-start');
     this.configureVideoDecoder();
@@ -1027,8 +1080,63 @@
     this.decodeVideoPacket(packet);
   };
 
+  HybridWebCodecsPlayer.prototype.av1ObuType = function (data) {
+    if (!data || !data.length) return -1;
+    return (data[0] >> 3) & 0x0f;
+  };
+
+  // OBU_TEMPORAL_DELIMITER(1), OBU_FRAME_HEADER(3) и OBU_FRAME(6) начинают новый кадр.
+  HybridWebCodecsPlayer.prototype.av1StartsFrame = function (type) {
+    return type === 1 || type === 3 || type === 6;
+  };
+
+  HybridWebCodecsPlayer.prototype.submitAv1Frame = function () {
+    var parts = this.av1Pending;
+    if (!parts || !parts.length) return;
+    this.av1Pending = [];
+    if (!this.videoDecoder || this.videoDecoder.state !== 'configured') return;
+    var total = 0;
+    for (var i = 0; i < parts.length; i++) total += parts[i].length;
+    var merged = new Uint8Array(total);
+    var offset = 0;
+    for (var j = 0; j < parts.length; j++) { merged.set(parts[j], offset); offset += parts[j].length; }
+    try {
+      this.videoDecoder.decode(new EncodedVideoChunk({
+        type: this.av1PendingKey ? 'key' : 'delta',
+        timestamp: this.av1PendingTs,
+        duration: this.av1PendingDur > 0 ? this.av1PendingDur : undefined,
+        data: merged
+      }));
+      this.submittedFrames++;
+      this.seenVideoKeyframe = true;
+    } catch (error) {
+      this.seenVideoKeyframe = false;
+      this.markTiming('video-decode-error', { error: String(error && (error.message || error) || error || ''), obus: parts.length, size: total });
+      try { console.warn('[mpvwasm-hybrid-video-error] ' + JSON.stringify({ error: String(error && (error.message || error) || error || ''), obus: parts.length, size: total })); } catch (_) { }
+      call(this.callbacks, 'status', 'hybrid video decode retry ' + (error && (error.message || error) || error));
+    }
+  };
+
+  // Демуксер отдаёт AV1 по одному OBU, а декодеру нужен поток OBU целиком.
+  // Практика: поштучная подача и разбиение по кадрам дают dav1d error -22,
+  // а укрупнённые пачки (по temporal delimiter, по числу OBU или по объёму) идут нормально.
+  HybridWebCodecsPlayer.prototype.decodeAv1Packet = function (packet) {
+    var type = this.av1ObuType(packet.data);
+    if (type === 2 && this.av1Pending.length) this.submitAv1Frame();
+    if (!this.av1Pending.length) {
+      this.av1PendingKey = !!packet.keyframe;
+      this.av1PendingTs = packetTimeUs(packet);
+      this.av1PendingDur = Number(packet.durationUs || 0);
+      this.av1PendingBytes = 0;
+    }
+    this.av1Pending.push(packet.data);
+    this.av1PendingBytes += packet.data.length;
+    if (this.av1Pending.length >= 32 || this.av1PendingBytes >= 262144) this.submitAv1Frame();
+  };
+
   HybridWebCodecsPlayer.prototype.decodeVideoPacket = function (packet) {
     if (!this.videoDecoder || this.videoDecoder.state !== 'configured') return;
+    if (this.av1ChunkMode) { this.decodeAv1Packet(packet); return; }
     var firstChunk = !this.seenVideoKeyframe;
     var hevcInfo = this.config && this.config._mpvwasmHevc
       ? hevcSampleInfo(packet.data, this.config._mpvwasmNalLengthSize)
@@ -1448,6 +1556,7 @@
     window.__mpvwasm_hybrid_debug = {
       backend: 'hybrid-webcodecs',
       codec: this.config && this.config.codec,
+      hardwareAcceleration: this.videoAcceleration || 'default',
       duration: this.duration,
       elapsed: this.elapsed,
       audioClockUs: this.audioClockUs,

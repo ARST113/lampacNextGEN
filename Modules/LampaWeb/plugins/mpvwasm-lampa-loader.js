@@ -4,7 +4,7 @@
   if (window.__mpvwasm_live_loader) return;
   window.__mpvwasm_live_loader = true;
 
-  var BUILD = '20261010-mpv2-nextgen-1';
+  var BUILD = '20261010-mpv2-nextgen-9';
 
   if (window.isSecureContext && navigator.serviceWorker) {
     navigator.serviceWorker.register('/mpvwasm/assets/mpvwasm-cache-sw.js?v=' + BUILD, {
