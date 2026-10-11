@@ -4,9 +4,9 @@
   var VERSION = '20260723-42-continuous-av';
   var modulePromise = null;
 
-  function loadScript(src) {
+  function loadScript(src, force) {
     return new Promise(function (resolve, reject) {
-      if (window.MpvWasmDemuxerModule) return resolve();
+      if (!force && window.MpvWasmDemuxerModule) return resolve();
       var script = document.createElement('script');
       script.src = src;
       script.async = true;
@@ -21,9 +21,15 @@
     return String(url || '');
   }
 
-  function loadModule() {
-    if (modulePromise) return modulePromise;
-    modulePromise = loadScript('/mpvwasm/assets/mpvwasm-demuxer.js?v=' + VERSION).then(function () {
+  // См. комментарий в mpvwasm-demuxer-session-worker.js: без cross-origin isolation
+  // (Android WebView) SharedArrayBuffer недоступен, pthread-сборка демуксера не грузится.
+  var SINGLE_THREAD = !(typeof SharedArrayBuffer !== 'undefined' && window.crossOriginIsolated);
+  var GLUE_CANDIDATES = SINGLE_THREAD
+    ? ['mpvwasm-demuxer-st.js', 'mpvwasm-demuxer.js']
+    : ['mpvwasm-demuxer.js', 'mpvwasm-demuxer-st.js'];
+
+  function instantiate(glue) {
+    return loadScript('/mpvwasm/assets/' + glue + '?v=' + VERSION, true).then(function () {
       if (typeof window.MpvWasmDemuxerModule !== 'function') throw new Error('MpvWasmDemuxerModule was not found');
       return window.MpvWasmDemuxerModule({
         locateFile: function (file) {
@@ -35,6 +41,15 @@
         }
       });
     });
+  }
+
+  function loadModule() {
+    if (modulePromise) return modulePromise;
+    var chain = Promise.reject(new Error('start'));
+    GLUE_CANDIDATES.forEach(function (glue) {
+      chain = chain.catch(function () { return instantiate(glue); });
+    });
+    modulePromise = chain;
     return modulePromise;
   }
 

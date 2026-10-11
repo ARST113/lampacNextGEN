@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260809-51-ddd-sync-final';
+  var VERSION = '20261010-mpv2-nextgen-9';
 
   function append(src, ready) {
     if (ready && ready()) return;
@@ -24,7 +24,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '20260809-51-ddd-sync-final';
+  var VERSION = '20261010-mpv2-nextgen-9';
   if (window.__mpvwasm_lampa_plugin === VERSION) return;
   window.__mpvwasm_lampa_plugin = VERSION;
   try { console.warn('[mpv2-log] plugin:loaded ' + VERSION); } catch (_) { }
@@ -1037,12 +1037,15 @@
 
   function prewarmMpvPlayer() {
     if (assetWarmReady || !mpvWasmModeEnabled()) return assetWarmReady;
+    // Греем ту сборку демуксера, которая реально загрузится: без cross-origin isolation
+    // (Android WebView) это однопоточная mpvwasm-demuxer-st.js.
+    var singleThread = !(typeof SharedArrayBuffer !== 'undefined' && window.crossOriginIsolated);
     var urls = [
       '/mpvwasm/assets/mpvwasm-hybrid-webcodecs.js?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer-wrapper.js?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer-session-worker.js?v=' + VERSION,
-      '/mpvwasm/assets/mpvwasm-demuxer.js?v=' + VERSION,
-      '/mpvwasm/assets/mpvwasm-demuxer.wasm?v=' + VERSION,
+      '/mpvwasm/assets/' + (singleThread ? 'mpvwasm-demuxer-st.js' : 'mpvwasm-demuxer.js') + '?v=' + VERSION,
+      '/mpvwasm/assets/' + (singleThread ? 'mpvwasm-demuxer-st.wasm' : 'mpvwasm-demuxer.wasm') + '?v=' + VERSION,
       '/mpvwasm/assets/mpvwasm-demuxer.worker.js?v=' + VERSION
     ];
     assetWarmReady = Promise.all(urls.map(function (url) {
@@ -2179,6 +2182,8 @@
         if (item.selected) playlistState.position = index;
       });
       setHidden('.player-panel__playlist', playlistState.list.length < 2);
+      setHidden('.player-panel__playlist-buttons', playlistState.list.length < 2);
+      setHidden('.player-panel__next', !playlistCan(1));
       setHidden('.player-panel__left > .player-panel__prev', !playlistCan(-1));
       setHidden('.player-panel__left > .player-panel__next', !playlistCan(1));
       setHidden('.player-panel__center > .player-panel__prev', !playlistCan(-1));
@@ -2923,6 +2928,88 @@
       });
     }
 
+    function showPerformance() {
+      var metrics = window.__mpvwasm_hybrid_debug || {};
+      var sidecar = window.__mpvwasm_sidecar_sync || {};
+      var keys = [
+        { title: 'Видеодекодер', subtitle: String(metrics.codec || (state.hardwareVideo ? 'HTML5 / аппаратный' : 'нет данных')) },
+        { title: 'Рендерер', subtitle: String(metrics.renderer || (state.hardwareVideo ? 'HTML5' : 'нет данных')) },
+        { title: 'Декодирование / вывод', subtitle: String(metrics.decodeFps || 0) + ' / ' + String(metrics.renderFps || 0) + ' кадров/с' },
+        { title: 'Пропущено кадров', subtitle: String(metrics.droppedFrames || 0) },
+        { title: 'Очередь видео', subtitle: String(metrics.videoQueue || 0) + ' кадров, декодер: ' + String(metrics.decodeQueue || 0) },
+        { title: 'A/V рассинхрон', subtitle: metrics.driftMs !== undefined ? String(metrics.driftMs) + ' мс (приблизительно)' :
+          sidecar.delta !== undefined ? String(Math.round(sidecar.delta * 1000)) + ' мс (HTML5)' : 'нет данных' },
+        { title: 'Аудиодекодер', subtitle: String(metrics.audioDecoder || 'нет данных') },
+        { title: 'Каналы аудио', subtitle: String(metrics.audioSourceChannels || '?') + ' вход / ' +
+          String(metrics.audioOutputChannels || '?') + ' выход (макс. ' +
+          String(metrics.audioDestinationMaxChannels || '?') + ')' },
+        { title: 'Недозаполнения аудио', subtitle: String(metrics.audioUnderruns || 0) },
+        { title: 'Буфер аудио', subtitle: Math.round(Number(metrics.audioBufferUs || 0) / 1000) + ' мс' },
+        { title: 'Перемотка', subtitle: String(metrics.lastSeekReadyMs || 0) + ' мс' }
+      ];
+      state.selectOpen = true;
+      Lampa.Select.show({
+        title: 'MPV2: диагностика 4K и звука',
+        items: keys.map(function (item) { return { title: item.title, subtitle: item.subtitle, noenter: true }; }),
+        onSelect: function () {},
+        onBack: function () { state.selectOpen = false; openSettings(); }
+      });
+    }
+
+    function selectAudioOutput() {
+      var selected = String(storageField('mpvwasm_audio_output', 'auto'));
+      state.selectOpen = true;
+      Lampa.Select.show({
+        title: 'Вывод звука (изменится при следующем запуске)',
+        items: [
+          { title: 'Авто: 5.1/7.1 если доступно', value: 'auto', selected: selected === 'auto' },
+          { title: 'Принудительно стерео 2.0', value: 'stereo', selected: selected === 'stereo' }
+        ],
+        onSelect: function (item) {
+          state.selectOpen = false;
+          setStorageField('mpvwasm_audio_output', item.value);
+          notify('Режим применится при следующем запуске MPV2');
+          openSettings();
+        },
+        onBack: function () { state.selectOpen = false; openSettings(); }
+      });
+    }
+
+    function selectRenderer() {
+      var selected = '2d';
+      try { selected = String(localStorage.getItem('mpvwasm_renderer') || '2d'); } catch (_) { }
+      state.selectOpen = true;
+      Lampa.Select.show({
+        title: 'Рендерер видео (изменится при следующем запуске)',
+        items: [
+          { title: 'Canvas 2D', value: '2d', selected: selected !== 'webgl' },
+          { title: 'WebGL (экспериментальный)', value: 'webgl', selected: selected === 'webgl' }
+        ],
+        onSelect: function (item) {
+          state.selectOpen = false;
+          try { localStorage.setItem('mpvwasm_renderer', item.value); } catch (_) { }
+          notify('Рендерер сменится при следующем запуске MPV2');
+          openSettings();
+        },
+        onBack: function () { state.selectOpen = false; openSettings(); }
+      });
+    }
+
+    function togglePiP() {
+      var element = active && active.player && active.player.video;
+      if (!element || !document.pictureInPictureEnabled || !element.requestPictureInPicture) {
+        notify('PiP доступен только в HTML5-режиме с поддержкой браузера');
+        return;
+      }
+      try {
+        var result = document.pictureInPictureElement ?
+          document.exitPictureInPicture() : element.requestPictureInPicture();
+        if (result && result.catch) result.catch(function (e) {
+          notify('PiP: ' + String(e && e.message || e));
+        });
+      } catch (error) { notify('PiP: ' + String(error && error.message || error)); }
+    }
+
     function selectSize() {
       var selected = String(storageField('player_size', 'default') || 'default');
       state.selectOpen = true;
@@ -2936,7 +3023,9 @@
         onSelect: function (item) {
           state.selectOpen = false;
           try { Lampa.Storage.set('player_size', item.value); } catch (_) { }
-          ui.canvas.style.objectFit = item.value === 'default' ? 'contain' : 'cover';
+          var fit = item.value === 'fill' ? 'fill' : item.value === 'cover' ? 'cover' : 'contain';
+          ui.canvas.style.objectFit = fit;
+          if (active && active.player && active.player.video) active.player.video.style.objectFit = fit;
         },
         onBack: function () {
           state.selectOpen = false;
@@ -2953,7 +3042,11 @@
           { title: lang('player_tracks', 'Audio tracks'), trigger: chooseAudio, ghost: state.audioTracks.length < 2, noenter: state.audioTracks.length < 2 },
           { title: lang('player_subs', 'Subtitles'), trigger: chooseSubs, ghost: state.subtitleTracks.length < 1, noenter: state.subtitleTracks.length < 1 },
           { title: lang('player_video_size', 'Video size'), trigger: selectSize },
-          { title: lang('player_fullscreen', 'Fullscreen'), trigger: toggleFullscreen }
+          { title: 'Вывод звука (2.0 / 5.1 / 7.1)', trigger: selectAudioOutput },
+          { title: 'Рендерер видео (2D / WebGL)', trigger: selectRenderer },
+          { title: 'Диагностика A/V и 4K', trigger: showPerformance },
+          { title: lang('player_fullscreen', 'Fullscreen'), trigger: toggleFullscreen },
+          { title: 'Картинка в картинке (HTML5)', trigger: togglePiP, ghost: !state.hardwareVideo, noenter: !state.hardwareVideo }
         ],
         onSelect: function (item) {
           state.selectOpen = false;
@@ -2971,8 +3064,10 @@
       Lampa.Controller.add('mpvwasm_player', {
         invisible: true,
         hover: showPanel,
+        // Было безусловное hidePanel(): тап по экрану/панели показывал панель и тут же
+        // прятал её (Lampa дёргает toggle текущего контроллера на каждый тап).
         toggle: function () {
-          hidePanel();
+          if (state.panelVisible) hidePanel(); else showPanel();
         },
         up: function () {
           showPanel();
@@ -3075,10 +3170,13 @@
     }
 
     markControllerNodes();
-    setHidden('.player-panel__flow,.player-panel__pip', true);
+    // Native Lampa panel template provides icons, focus navigation and responsive
+    // layout. Hide only controls the active backend cannot implement.
+    setHidden('.player-panel__flow', true);
+    setHidden('.player-panel__pip', !state.hardwareVideo || !document.pictureInPictureEnabled);
     syncPlaylistUi();
     var quality = q('.player-panel__quality');
-    if (quality) quality.textContent = state.hybridWebCodecs ? 'mpv webcodecs' : (state.hardwareVideo ? 'mpv hw' : 'mpv');
+    if (quality) quality.textContent = state.hybridWebCodecs ? 'MPV2' : (state.hardwareVideo ? 'HTML5' : 'MPV');
 
     bind('.player-panel__left > .player-panel__prev', playlistPrev);
     bind('.player-panel__left > .player-panel__next', playlistNext);
@@ -3091,9 +3189,10 @@
     bind('.player-panel__tstart', function () { seekTo(0); });
     bind('.player-panel__tend', function () { seekTo(state.duration ? Math.max(0, state.duration - 3) : 0); });
     bind('.player-panel__fullscreen', toggleFullscreen);
+    bind('.player-panel__pip', togglePiP);
     bind('.player-panel__tracks', chooseAudio);
     bind('.player-panel__subs', chooseSubs);
-    bind('.player-panel__settings,.player-panel__quality', openSettings);
+    bind('.player-panel__settings,.player-panel__quality,.player-panel__mobile-more', openSettings);
     bind('.head-backward', closeActive);
 
     if (ui.volume) {
@@ -3333,7 +3432,8 @@
         state.timelineContinued = false;
         state.pendingSeek = null;
         window.__mpvwasm_backend_decision = state.backendDecision;
-        if (quality) quality.textContent = 'mpv hw';
+        if (quality) quality.textContent = 'HTML5';
+        setHidden('.player-panel__pip', !document.pictureInPictureEnabled);
         logMpv('backend:fallback', {
           reason: reason,
           error: lastError,
@@ -3355,49 +3455,102 @@
             }
             resizeCanvas();
             ui.status.textContent = '';
+            setLoading(false);
+            lastError = '';
+            window.__mpvwasm_last_error = '';
+            try { if (Lampa.PlayerInfo && Lampa.PlayerInfo.set) Lampa.PlayerInfo.set('error', ''); } catch (_) { }
             return player;
           });
         });
       }
 
-      return waitHybridRuntime(12000).then(function (backend) {
-        var hybridUrl = isDirectTorrServerUrl(data && data.url) ? directUrl(data.url) : proxyUrl(data.url);
-        function openAttempt(attempt) {
-          return backend.open(ui.canvas, hybridUrl, callbacks, {
-            data: data,
-            debug: debugOverlayEnabled()
-          }).catch(function (error) {
-            var message = String(error && (error.message || error) || error || '');
-            var transient = /demux_open failed|failed to fetch|networkerror|load failed|http (?:408|425|429|5\d\d)/i.test(message);
-            if (!transient || attempt >= 2 || !active || active.ui !== ui) throw error;
-            var delay = attempt ? 1200 : 500;
-            logMpv('hybrid:open-retry', { attempt: attempt + 2, delay: delay, error: message });
-            return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
-              return openAttempt(attempt + 1);
+      function openHybrid(forceSoftware) {
+        return waitHybridRuntime(12000).then(function (backend) {
+          var hybridUrl = isDirectTorrServerUrl(data && data.url) ? directUrl(data.url) : proxyUrl(data.url);
+          function openAttempt(attempt) {
+            return backend.open(ui.canvas, hybridUrl, callbacks, {
+              data: data,
+              debug: debugOverlayEnabled(),
+              forceSoftware: !!forceSoftware
+            }).catch(function (error) {
+              var message = String(error && (error.message || error) || error || '');
+              var transient = /demux_open failed|failed to fetch|networkerror|load failed|http (?:408|425|429|5\d\d)/i.test(message);
+              if (!transient || attempt >= 2 || !active || active.ui !== ui) throw error;
+              var delay = attempt ? 1200 : 500;
+              logMpv('hybrid:open-retry', { attempt: attempt + 2, delay: delay, error: message });
+              return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
+                return openAttempt(attempt + 1);
+              });
+            });
+          }
+          return openAttempt(0);
+        });
+      }
+
+      var softwareRetried = false;
+
+      function watchFirstFrame(target) {
+        var deadline = Date.now() + 6000;
+        return new Promise(function (resolve) {
+          function tick() {
+            if (!active || active.ui !== ui || !target || target.destroyed) return resolve('stale');
+            if (target.ready) return resolve('ready');
+            if (target.seeking || target.seekStartedAt) deadline = Date.now() + 6000;
+            if (Date.now() < deadline) { setTimeout(tick, 500); return; }
+            resolve('timeout');
+          }
+          setTimeout(tick, 1000);
+        });
+      }
+
+      function nativeFallback(reason, target) {
+        return activateNativeFallback(reason, new Error(reason), target).catch(function (fallbackError) {
+          callbacks.error(fallbackError);
+          return null;
+        });
+      }
+
+      function selectedAcceleration(player) {
+        var probe = window.__mpvwasm_webcodecs_probe || {};
+        var selected = probe.selected || {};
+        return String(selected.hardwareAcceleration || (player && player.videoAcceleration) || '');
+      }
+
+      return openHybrid(storageBool('mpvwasm_force_software', false)).then(function (player) {
+        return watchFirstFrame(player).then(function (outcome) {
+          if (outcome !== 'timeout') return player;
+          var accel = selectedAcceleration(player);
+          logMpv('hybrid:no-first-frame', { accel: accel, stats: hybridStats(player) });
+          if (softwareRetried || !/hardware/i.test(accel) || !active || active.ui !== ui) {
+            return nativeFallback('hybrid-first-frame-timeout', player).then(function (fallbackPlayer) {
+              return fallbackPlayer || null;
+            });
+          }
+          softwareRetried = true;
+          logMpv('hybrid:software-retry', { accel: accel });
+          return Promise.resolve(player.destroy()).catch(function () { }).then(function () {
+            if (!active || active.ui !== ui) return null;
+            return openHybrid(true).then(function (retryPlayer) {
+              if (!active || active.ui !== ui) {
+                try { retryPlayer.destroy(); } catch (_) { }
+                return null;
+              }
+              active.player = retryPlayer;
+              return watchFirstFrame(retryPlayer).then(function (second) {
+                if (second !== 'timeout') return retryPlayer;
+                logMpv('hybrid:software-no-first-frame', { stats: hybridStats(retryPlayer) });
+                return nativeFallback('hybrid-software-first-frame-timeout', retryPlayer).then(function (fallbackPlayer) {
+                  return fallbackPlayer || retryPlayer;
+                });
+              });
             });
           });
-        }
-        return openAttempt(0);
-      }).then(function (player) {
-        var fallbackDeadline = Date.now() + 6000;
-        function checkHybridReady() {
-          if (!active || active.ui !== ui || active.player !== player || player.destroyed || player.ready) return;
-          if (player.seeking || player.seekStartedAt) fallbackDeadline = Date.now() + 6000;
-          if (Date.now() < fallbackDeadline) {
-            setTimeout(checkHybridReady, 500);
-            return;
-          }
-          activateNativeFallback('hybrid-first-frame-timeout', new Error('Hybrid did not produce a playable frame after startup/seek'), player).catch(function (fallbackError) {
-            callbacks.error(fallbackError);
-          });
-        }
-        setTimeout(checkHybridReady, 1000);
-        return player;
+        });
       }).catch(function (error) {
         lastError = String(error && (error.message || error) || error || '');
-        var unsupportedVideo = /WebCodecs unsupported|VideoDecoder is not available/i.test(lastError);
+        var unsupportedVideo = /WebCodecs unsupported|VideoDecoder is not available|av1-native-preferred/i.test(lastError);
         if (unsupportedVideo) {
-          return activateNativeFallback('webcodecs-video-unsupported', error, null);
+          return activateNativeFallback(/av1-native-preferred/i.test(lastError) ? 'av1-native' : 'webcodecs-video-unsupported', error, null);
         }
         state.backendDecision.selected = 'hybrid-webcodecs';
         state.backendDecision.reason = 'hybrid-open-failed';

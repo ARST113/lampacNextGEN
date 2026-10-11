@@ -14,20 +14,42 @@
     return String(url || '');
   }
 
-  function loadModule() {
-    if (modulePromise) return modulePromise;
-    workerTiming.moduleLoadStartAt = Date.now();
-    importScripts('/mpvwasm/assets/mpvwasm-demuxer.js?v=' + VERSION);
-    modulePromise = self.MpvWasmDemuxerModule({
+  // Android WebView (и любой контекст без cross-origin isolation) не даёт SharedArrayBuffer,
+  // поэтому pthread-сборка демуксера там не грузится вообще:
+  //   "ReferenceError: SharedArrayBuffer is not defined" в mpvwasm-demuxer.js.
+  // Выбираем сборку по возможностям движка:
+  //   crossOriginIsolated + SharedArrayBuffer -> mpvwasm-demuxer.js    (pthread, как было)
+  //   иначе                                   -> mpvwasm-demuxer-st.js (single-thread)
+  var SINGLE_THREAD = !(typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated);
+  var GLUE_CANDIDATES = SINGLE_THREAD
+    ? ['mpvwasm-demuxer-st.js', 'mpvwasm-demuxer.js']
+    : ['mpvwasm-demuxer.js', 'mpvwasm-demuxer-st.js'];
+
+  function instantiate(glue) {
+    importScripts('/mpvwasm/assets/' + glue + '?v=' + VERSION);
+    if (typeof self.MpvWasmDemuxerModule !== 'function') {
+      throw new Error('MpvWasmDemuxerModule was not found in ' + glue);
+    }
+    return self.MpvWasmDemuxerModule({
       locateFile: function (file) {
         return '/mpvwasm/assets/' + file + '?v=' + VERSION;
       },
-      mainScriptUrlOrBlob: '/mpvwasm/assets/mpvwasm-demuxer.js?v=' + VERSION,
+      mainScriptUrlOrBlob: '/mpvwasm/assets/' + glue + '?v=' + VERSION,
       print: function () { },
       printErr: function (message) {
         if (self.__MPV_WASM_DEBUG) console.warn('[mpvwasm-demuxer-worker]', message);
       }
-    }).then(function (loaded) {
+    });
+  }
+
+  function loadModule() {
+    if (modulePromise) return modulePromise;
+    workerTiming.moduleLoadStartAt = Date.now();
+    var chain = Promise.reject(new Error('start'));
+    GLUE_CANDIDATES.forEach(function (glue) {
+      chain = chain.catch(function () { return instantiate(glue); });
+    });
+    modulePromise = chain.then(function (loaded) {
       module = loaded;
       workerTiming.moduleReadyAt = Date.now();
       workerTiming.moduleLoadMs = workerTiming.moduleReadyAt - workerTiming.moduleLoadStartAt;

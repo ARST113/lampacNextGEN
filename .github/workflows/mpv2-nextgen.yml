@@ -1,0 +1,36 @@
+name: MPV2 NextGen validation
+
+on:
+  push:
+    branches:
+      - feat/mpv2-nextgen-audio-perf-ui-20261010
+  pull_request:
+    paths:
+      - 'Modules/MpvWasm/assets/mpvwasm-audio-worklet.js'
+      - 'Modules/MpvWasm/assets/mpvwasm-hybrid-webcodecs.js'
+      - 'Modules/LampaWeb/plugins/mpvwasm-lampa-player.js'
+      - 'Modules/LampaWeb/plugins/mpvwasm-lampa-loader.js'
+      - 'tests/mpv2-nextgen-audio.test.js'
+      - '.github/workflows/mpv2-nextgen.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audio-and-syntax:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: |
+          node --check Modules/MpvWasm/assets/mpvwasm-audio-worklet.js
+          node --check Modules/MpvWasm/assets/mpvwasm-hybrid-webcodecs.js
+          node --check Modules/LampaWeb/plugins/mpvwasm-lampa-player.js
+          node --check Modules/LampaWeb/plugins/mpvwasm-lampa-loader.js
+          node --check tests/mpv2-nextgen-audio.test.js
+      - name: Unit tests for audio PTS, resampling and 5.1
+        run: node --test tests/mpv2-nextgen-audio.test.js

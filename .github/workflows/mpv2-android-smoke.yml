@@ -1,0 +1,20 @@
+name: MPV2 Android smoke — CI changes
+
+on:
+  push:
+    branches:
+      - feat/mpv2-nextgen-audio-perf-ui-20261010
+    paths:
+      - 'tests/mpv2-android-ci/**'
+      - '.github/workflows/mpv2-android-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    uses: ./.github/workflows/mpv2-android-emulator.yml
+    with:
+      android_api: '35'
+      test_seconds: '50'
+    secrets: inherit

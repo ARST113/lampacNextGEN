@@ -1,0 +1,105 @@
+name: MPV2 Android emulator — real MKV
+
+on:
+  workflow_call:
+    inputs:
+      stream_url:
+        required: false
+        type: string
+        default: ''
+      android_api:
+        required: false
+        type: string
+        default: '35'
+      test_seconds:
+        required: false
+        type: string
+        default: '70'
+  workflow_dispatch:
+    inputs:
+      stream_url:
+        description: 'Full HTTP(S) MKV URL; leave blank for the default test source'
+        required: false
+        type: string
+        default: ''
+      android_api:
+        description: 'Android API level'
+        required: false
+        type: choice
+        options:
+          - '35'
+          - '34'
+          - '33'
+        default: '35'
+      test_seconds:
+        description: 'Playback observation window (15-180 seconds)'
+        required: false
+        type: string
+        default: '70'
+
+permissions:
+  contents: read
+
+jobs:
+  android-lampa-mpv2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CI_PORT: '8787'
+      MPV2_VIDEO_URL: ${{ inputs.stream_url || secrets.MPV2_TEST_VIDEO_URL || 'http://213.171.26.189:2367/stream/The.Wild.Robot.2024.1080p.BluRay.x264-ZoroSenpai_EniaHD.mkv?link=a374cdc944da7dffb36655f2c97f18cf8c86e957&index=1&play' }}
+      MPV2_TEST_SECONDS: ${{ inputs.test_seconds || '70' }}
+    steps:
+      - name: Checkout MPV2 feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/mpv2-nextgen-audio-perf-ui-20261010
+      - name: Configure Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare real Lampa and Android test harness
+        shell: bash
+        run: |
+          echo "::add-mask::${MPV2_VIDEO_URL}"
+          mkdir -p artifacts/mpv2-android
+          git clone --depth=1 https://github.com/yumata/lampa.git .ci-lampa
+          test -s .ci-lampa/index.html
+          test -s .ci-lampa/app.min.js
+          npm install --prefix tests/mpv2-android-ci --no-save --no-package-lock --ignore-scripts puppeteer-core@24.13.0
+          node --check tests/mpv2-android-ci/server.js
+          node --check tests/mpv2-android-ci/bootstrap.js
+          node --check tests/mpv2-android-ci/runner.js
+          bash -n tests/mpv2-android-ci/drive.sh
+          nohup node tests/mpv2-android-ci/server.js > artifacts/mpv2-android/server.log 2>&1 </dev/null &
+          for i in $(seq 1 30); do
+            if curl -sSf http://127.0.0.1:8787/ci/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8787/ci/health > artifacts/mpv2-android/server-start.json
+      - name: Enable KVM for Android emulator
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: Boot Android with Chrome, run Lampa and MPV2
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.android_api || '35' }}
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 3072M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: bash tests/mpv2-android-ci/drive.sh
+      - name: Archive screenshots, console, metrics, Android logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv2-android-emulator-report-${{ github.run_id }}
+          path: artifacts/mpv2-android/
+          retention-days: 7
+          if-no-files-found: warn
