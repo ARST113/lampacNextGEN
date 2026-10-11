@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Проверка звука Audio WASM (AC3 / EAC3 / DTS)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #101216; color: #e8eaf0;
+         font: 15px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  p.hint { color: #9aa3b2; margin: 0 0 14px; font-size: 13px; }
+  video { width: 100%; max-width: 560px; background: #000; border-radius: 10px; display: block; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+  button { background: #1f2530; color: #e8eaf0; border: 1px solid #333c4a; border-radius: 8px;
+           padding: 10px 14px; font-size: 15px; cursor: pointer; }
+  button:hover { background: #2a3240; }
+  button.on { background: #1d4ed8; border-color: #2563eb; }
+  #spectrum { width: 100%; max-width: 560px; height: 90px; background: #0b0d11;
+              border: 1px solid #262c37; border-radius: 10px; display: block; }
+  .card { background: #161a21; border: 1px solid #262c37; border-radius: 12px;
+          padding: 12px 14px; margin: 12px 0; max-width: 560px; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 13px; }
+  .kv span:nth-child(odd) { color: #9aa3b2; }
+  .ok { color: #4ade80; } .bad { color: #f87171; } .warn { color: #fbbf24; }
+  #log { font: 12px/1.4 ui-monospace, Menlo, monospace; color: #9aa3b2;
+         white-space: pre-wrap; margin-top: 10px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+           background: #22303f; color: #93c5fd; }
+</style>
+</head>
+<body>
+<h1>Проверка звука Audio WASM</h1>
+<p class="hint">Проверка на <b>настоящих дорожках из фильма</b> (AC3 5.1, EAC3 7.1, DTS 6.1, AAC 2.0)<br>Видео играет штатный плеер браузера, звук AC3/EAC3/DTS декодирует FFmpeg WASM
+и отдаёт через AudioWorklet. В дорожках закодировано: <b>слева 440 Гц, справа 1000 Гц</b> —
+если вы слышите ровный тон и в спектре два пика на этих частотах, мост работает.</p>
+
+<div id="iso"></div>
+
+<video id="v" playsinline controls></video>
+<canvas id="spectrum" width="560" height="90"></canvas>
+
+<div class="row">
+  <button id="beep">Бип 440 Гц (проверка выхода звука)</button>
+  <button data-src="/lampac-js/uploads/audio-check-ac3.mp4?v=3">Тест AC3 (2.0), тоны 440/1000</button>
+  <button data-src="/lampac-js/uploads/audio-check-eac3.mp4?v=3">Тест EAC3 (5.1), тоны 440/1000</button>
+  <button data-src="/lampac-js/uploads/ac3-5.1-90s.mp4?v=5">AC3 5.1 — из фильма</button>
+  <button data-src="/lampac-js/uploads/eac3-7.1-90s.mp4?v=5">EAC3 7.1 — из фильма</button>
+  <button data-src="/lampac-js/uploads/dts-6.1-loud.mp4?v=8">DTS 6.1 — из фильма (громкая дорожка)</button>
+  <button data-src="/lampac-js/uploads/dts-6.1-real.mp4?v=7">DTS 6.1 — из фильма (тихая сцена, как есть)</button>
+  <button data-src="/lampac-js/uploads/aac-2.0-90s.mp4?v=5">AAC 2.0 — из фильма</button>
+  <button data-src="/lampac-js/uploads/real-frag.mp4?v=5">Весь фрагмент, 8 дорожек</button>
+  <button id="dtsprobe">DTS (только декодер)</button>
+  <button id="rec">Сохранить то, что слышно</button>
+</div>
+<div class="row" id="trackrow"></div>
+
+<div class="card">
+  <div class="kv">
+    <span>Режим звука</span><span id="s-backend">—</span>
+    <span>Сборка демуксера / рендерер</span><span id="s-build">—</span>
+    <span>Дорожка / формат</span><span id="s-track">—</span>
+    <span>Буфер PCM</span><span id="s-buffer">—</span>
+    <span>Доминирующие частоты</span><span id="s-freq">—</span>
+    <span>Уровень (peak / RMS)</span><span id="s-level">—</span>
+    <span>Недостача данных (underruns)</span><span id="s-underruns">—</span>
+    <span>Буфер рендерера (занято / предел / выброшено)</span><span id="s-queue">—</span>
+    <span>Аудиодорожки в файле</span><span id="s-tracks">—</span>
+  </div>
+  <div id="log"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var VERSION = '20261010-android-8';
+  var CODECS = { ac3: true, eac3: true, dts: true, dca: true };
+  var video = document.getElementById('v');
+  var spectrum = document.getElementById('spectrum');
+  var sctx = spectrum.getContext('2d');
+  var logEl = document.getElementById('log');
+  var session = null, number = 0, probing = false;
+
+  document.getElementById('iso').innerHTML = [
+    ['isSecureContext', self.isSecureContext],
+    ['crossOriginIsolated', self.crossOriginIsolated],
+    ['SharedArrayBuffer', typeof SharedArrayBuffer !== 'undefined'],
+    ['AudioWorkletNode', typeof AudioWorkletNode === 'function'],
+    ['ScriptProcessor (резерв)', typeof (window.AudioContext || window.webkitAudioContext).prototype.createScriptProcessor === 'function']
+  ].map(function (row) {
+    return '<span class="badge ' + (row[1] ? 'ok' : 'warn') + '">' + row[0] + ': ' + (row[1] ? 'да' : 'нет') + '</span>';
+  }).join(' ');
+
+  (function () {
+    var ua = navigator.userAgent || '';
+    var m = ua.match(/Chrome\/([0-9]+)/);
+    var line = document.createElement('div');
+    line.style.cssText = 'margin-top:8px;font-size:12px;color:#9aa3b2;word-break:break-all';
+    line.textContent = ua + (m ? '  •  Chromium ' + m[1] : '') + (self.isSecureContext ? '' : '  •  страница по http: без защищённого контекста');
+    document.getElementById('iso').appendChild(line);
+  })();
+  function log(text, cls) {
+    logEl.innerHTML += (cls ? '<span class="' + cls + '">' : '<span>') + text + '</span>\n';
+  }
+  function set(id, text, cls) {
+    var el = document.getElementById(id);
+    el.textContent = text;
+    el.className = cls || '';
+  }
+  function b64url(value) {
+    var bytes = new TextEncoder().encode(value), text = '';
+    for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+    return btoa(text).split('+').join('-').split('/').join('_').replace(/=+$/, '');
+  }
+  function codecName(track) {
+    var name = String(track.codecName || '').toLowerCase();
+    if (name === 'eac3' || name === 'e-ac-3') return 'eac3';
+    if (name === 'ac3' || name === 'ac-3') return 'ac3';
+    if (name.indexOf('dts') === 0 || name === 'dca') return 'dts';
+    return name;
+  }
+  function label(codec) { return codec === 'ac3' ? 'ac-3' : codec === 'eac3' ? 'ec-3' : 'dtsc'; }
+  function nativeSupport(codec) {
+    try { return !!video.canPlayType('audio/mp4; codecs="' + label(codec) + '"'); } catch (e) { return false; }
+  }
+
+  function request(command, payload) {
+    var s = session, id = ++s.id;
+    return new Promise(function (resolve, reject) {
+      s.pending[id] = { resolve: resolve, reject: reject };
+      s.worker.postMessage(Object.assign({ id: id, command: command }, payload || {}));
+    });
+  }
+
+  function destroy() {
+    var s = session;
+    if (!s || s.closed) return;
+    s.closed = true;
+    clearInterval(s.timer);
+    if (s.node) { try { s.node.disconnect(); } catch (e) {} }
+    if (s.ctx) { try { s.ctx.close(); } catch (e) {} }
+    if (s.worker) s.worker.terminate();
+    if (s.mutedByBridge) video.muted = false;
+    session = null;
+  }
+
+  function pump() {
+    var s = session;
+    if (!s || s.closed || s.reading || s.eof || !s.node || s.sel < 0 || s.bufferedUs > 5000000) return;
+    if (s.sinkQueue > Math.floor((s.sinkCapacity || 4000) * 0.6)) return;
+    s.reading = true;
+    request('read', { maxPackets: 96 }).then(function (result) {
+      if (!session || session !== s || s.closed || !s.node) return;
+      (result.chunks || []).forEach(function (chunk) {
+        s.node.port.postMessage({ type: 'pcm', pcm: chunk.pcm, ptsUs: chunk.ptsUs,
+          channels: chunk.channels, sampleRate: chunk.sampleRate }, [chunk.pcm.buffer]);
+      });
+      s.chunks += (result.chunks || []).length;
+      s.eof = !!result.eof;
+    }).catch(function (error) {
+      if (session === s) fail('Ошибка чтения: ' + (error.message || error));
+    }).then(function () { if (session === s) s.reading = false; });
+  }
+
+  function sync(force) {
+    var s = session;
+    if (!s || s.closed || !s.node || s.sel < 0) return;
+    s.node.port.postMessage({
+      type: 'sync',
+      clockUs: Math.round(Math.max(0, video.currentTime || 0) * 1000000),
+      paused: !!video.paused || !!video.seeking,
+      rate: Number(video.playbackRate || 1),
+      volume: Number(video.volume)
+    });
+    if (force || s.bufferedUs < 3500000) pump();
+  }
+
+  function fail(message) {
+    log('ОШИБКА: ' + message, 'bad');
+    set('s-backend', 'мост не активен', 'bad');
+    destroy();
+  }
+
+  // Резервный рендерер: нужен там, где нет AudioWorklet (http://, старый WebView).
+  // Логика микса/синхронизации повторяет mpvwasm-audio-only-worklet.js.
+  function FallbackSink(ctx) {
+    var self = this;
+    this.blocks = [];
+    this.clockUs = 0;
+    this.rate = 1;
+    this.paused = true;
+    this.volume = 1;
+    this.reportFrames = 0;
+    this.underruns = 0;
+    this.capacity = 600;
+    this.dropped = 0;
+    this.skew = 1;
+    this.gaps = 0;
+    this.slips = 0;
+    this.inGap = false;
+    var create = ctx.createScriptProcessor || ctx.createJavaScriptNode;
+    if (!create) throw Error('ScriptProcessorNode недоступен');
+    this.processor = create.call(ctx, 4096, 1, 2);
+    this.port = {
+      onmessage: null,
+      postMessage: function (data) {
+        var type = data && data.type;
+        if (type === 'clear') {
+          self.blocks.length = 0;
+          self.clockUs = Math.max(0, Number(data.clockUs || 0));
+          self.underruns = 0;
+          self.dropped = 0;
+          self.gaps = 0;
+          self.skew = 1;
+          self.inGap = false;
+        } else if (type === 'sync') {
+          var target = Math.max(0, Number(data.clockUs || 0));
+          var delta = target - self.clockUs;
+          if (self.paused || Math.abs(delta) > 400000) {
+            self.clockUs = target;
+            self.skew = 1;
+            if (!self.paused) self.slips++;
+          } else {
+            self.skew = Math.max(0.975, Math.min(1.025, 1 + delta / 1000000));
+          }
+          self.paused = !!data.paused;
+          self.rate = Math.max(0.25, Math.min(4, Number(data.rate || 1)));
+          self.volume = Math.max(0, Math.min(1, Number(data.volume)));
+          if (!isFinite(self.volume)) self.volume = 1;
+        } else if (type === 'pcm') {
+          var pcm = data.pcm;
+          var channels = Math.max(1, Math.min(16, Number(data.channels || 2)));
+          var rate = Math.max(8000, Number(data.sampleRate || 48000));
+          var samples = Math.floor(pcm.length / channels);
+          var start = Number(data.ptsUs);
+          if (!samples || !isFinite(start)) return;
+          if (self.blocks.length >= self.capacity) { self.dropped++; return; }
+          self.blocks.push({ pcm: pcm, channels: channels, rate: rate, samples: samples,
+                             start: start, end: start + samples * 1000000 / rate });
+          self.blocks.sort(function (a, b) { return a.start - b.start; });
+        }
+      }
+    };
+    this.mix = function (block, frame, channel) {
+      var channels = block.channels;
+      var index = Math.max(0, Math.min(block.samples - 1, frame)) * channels;
+      var pcm = block.pcm;
+      if (channels === 1) return pcm[index] || 0;
+      if (channels === 2) return pcm[index + channel] || 0;
+      var value = pcm[index + channel] || 0;
+      if (channels >= 3) value += (pcm[index + 2] || 0) * 0.7071;
+      if (channels >= 5) value += (pcm[index + (channel === 0 ? 4 : (channels >= 6 ? 5 : 4))] || 0) * 0.5;
+      if (channels >= 7) value += (pcm[index + (channel === 0 ? 6 : (channels >= 8 ? 7 : 6))] || 0) * 0.3;
+      return value * 0.65;
+    };
+    this.report = function () {
+      var last = self.blocks.length ? self.blocks[self.blocks.length - 1] : null;
+      if (self.port.onmessage) self.port.onmessage({ data: {
+        type: 'status',
+        clockUs: Math.round(self.clockUs),
+        bufferedUs: Math.max(0, Math.round((last ? last.end : self.clockUs) - self.clockUs)),
+        queueLength: self.blocks.length,
+        capacity: self.capacity,
+        dropped: self.dropped,
+        paused: self.paused,
+        underruns: self.underruns,
+        gaps: self.gaps,
+        slips: self.slips,
+        skew: self.skew
+      } });
+    };
+    this.processor.onaudioprocess = function (event) {
+      var output = event.outputBuffer;
+      var frames = output.length;
+      for (var i = 0; i < frames; i++) {
+        if (self.paused) break;
+        var now = self.clockUs;
+        while (self.blocks.length && self.blocks[0].end <= now) self.blocks.shift();
+        var block = self.blocks.length ? self.blocks[0] : null;
+        if (block && now >= block.start && now < block.end) {
+          self.inGap = false;
+          var position = (now - block.start) * block.rate / 1000000;
+          var frame = Math.floor(position);
+          var alpha = position - frame;
+          for (var channel = 0; channel < output.numberOfChannels; channel++) {
+            var a = self.mix(block, frame, channel);
+            var b = self.mix(block, Math.min(block.samples - 1, frame + 1), channel);
+            var value = (a + (b - a) * alpha) * self.volume;
+            output.getChannelData(channel)[i] = Math.max(-1, Math.min(1, value));
+          }
+        } else {
+          self.underruns++;
+          if (!self.inGap) { self.inGap = true; self.gaps++; }
+        }
+        self.clockUs += self.rate * self.skew * 1000000 / ctx.sampleRate;
+      }
+      self.reportFrames += frames;
+      if (self.reportFrames >= ctx.sampleRate / 5) { self.reportFrames = 0; self.report(); }
+    };
+    this.connect = function (dest) { self.processor.connect(dest); };
+    this.disconnect = function () { try { self.processor.disconnect(); } catch (e) {} };
+  }
+
+  function ensureAudio() {
+    var s = session;
+    if (s.ctx && s.node) return Promise.resolve();
+    var Context = window.AudioContext || window.webkitAudioContext;
+    var ctx = new Context({ latencyHint: 'playback' });
+    var wantWorklet = !window.__mpvwasmForceFallback &&
+      typeof AudioWorkletNode === 'function' && !!ctx.audioWorklet;
+    function attach(node, renderer) {
+      node.port.onmessage = function (event) {
+        var data = event.data || {};
+        if (data.type !== 'status' || s.closed) return;
+        s.bufferedUs = Math.max(0, Number(data.bufferedUs || 0));
+        s.underruns = Number(data.underruns || 0);
+        s.gaps = Number(data.gaps || 0);
+        s.slips = Number(data.slips || 0);
+        s.skew = Number(data.skew || 1);
+        s.sinkQueue = Number(data.queueLength || 0);
+        s.sinkCapacity = Number(data.capacity || 0) || 4000;
+        s.dropped = Number(data.dropped || 0);
+        set('s-buffer', Math.round(s.bufferedUs / 1000) + ' мс');
+        set('s-queue', s.sinkQueue + ' / ' + s.sinkCapacity + ' / ' + s.dropped, s.dropped > 0 ? 'bad' : 'ok');
+        set('s-underruns', s.underruns + ' / провалов ' + s.gaps + ' / перескоков ' + s.slips,
+            s.gaps > 0 ? 'warn' : 'ok');
+        if (!s.ready && s.bufferedUs > 1500000 && ctx.state === 'running') {
+          s.ready = true;
+          s.mutedByBridge = true;
+          video.muted = true;
+          set('s-backend', 'Audio WASM (звук из FFmpeg WASM)', 'ok');
+          log('Мост отдаёт звук: видео заглушено, PCM идёт в ' + renderer);
+        }
+        pump();
+      };
+      s.analyser = ctx.createAnalyser();
+      s.analyser.fftSize = 2048;
+      node.connect(s.analyser);
+      s.analyser.connect(ctx.destination);
+      s.ctx = ctx; s.node = node;
+      return ctx.resume().then(function () {
+        if (ctx.state !== 'running') { fail('AudioContext не запустился (нужен клик по странице)'); return; }
+        log('Рендерер: ' + renderer + ', частота контекста ' + ctx.sampleRate + ' Гц');
+      });
+    }
+    var chain;
+    if (wantWorklet) {
+      chain = ctx.audioWorklet.addModule('/mpvwasm/assets/mpvwasm-audio-only-worklet.js?v=' + VERSION)
+        .then(function () {
+          if (s.closed) throw Error('закрыто');
+          var node = new AudioWorkletNode(ctx, 'lampa-audio-wasm-bridge', { outputChannelCount: [2] });
+          node.onprocessorerror = function () { fail('ошибка звукового процессора'); };
+          return attach(node, 'AudioWorklet');
+        });
+    } else {
+      chain = Promise.resolve().then(function () { return attach(new FallbackSink(ctx), 'ScriptProcessor (резервный)'); });
+    }
+    return chain.catch(function (error) {
+      // AudioWorklet не поднялся — пробуем резервный рендерер, а не теряем звук
+      if (!wantWorklet) { fail('Аудио: ' + (error.message || error)); return; }
+      return Promise.resolve().then(function () { return attach(new FallbackSink(ctx), 'ScriptProcessor (fallback)'); })
+        .catch(function () { fail('AudioWorklet: ' + (error.message || error)); });
+    });
+  }
+
+  function open(url, onlyIndex) {
+    destroy();
+    var absolute = new URL(url, location.href).href;
+    var s = {
+      id: ++number, closed: false, pending: {}, worker: null, ctx: null, node: null,
+      tracks: [], sel: -1, ready: false, reading: false, eof: false, bufferedUs: 0,
+      chunks: 0, underruns: 0, mutedByBridge: false, url: absolute, timer: null
+    };
+    session = s;
+    logEl.textContent = '';
+    set('s-track', '—'); set('s-buffer', '—'); set('s-freq', '—'); set('s-level', '—');
+    set('s-underruns', '—'); set('s-backend', 'запуск WASM…', 'warn');
+
+    video.muted = false;
+    video.src = absolute;
+    video.load();
+
+    s.worker = new Worker('/mpvwasm/assets/mpvwasm-audio-only-worker.js?v=' + VERSION);
+    s.worker.onmessage = function (event) {
+      var message = event.data || {}, pending = s.pending[message.id];
+      if (!pending) return;
+      delete s.pending[message.id];
+      if (message.ok) pending.resolve(message.result);
+      else pending.reject(Error(message.error || 'ошибка воркера'));
+    };
+    s.worker.onerror = function (event) { fail('воркер: ' + (event.message || 'не запустился')); };
+
+    request('open', { url: '/mpvwasm/proxy?u=' + b64url(absolute) }).then(function (info) {
+      if (s.closed) return;
+      s.tracks = (info.tracks || []).filter(function (t) { return t.type === 'audio'; });
+      var list = s.tracks.map(function (t) { return codecName(t) + '(' + (t.channels || '?') + 'ch)'; }).join(', ');
+      log('Демуксер открыл поток, аудиодорожки: ' + (list || 'нет'));
+      request('info').then(function (info) {
+        if (!info || !info.glue) return;
+        set('s-build', info.singleThread ? 'однопоточная (без SharedArrayBuffer)' : 'многопоточная (pthread)');
+      }).catch(function () {});
+      set('s-tracks', s.tracks.map(function (t, i) { return (i + 1) + ') ' + codecName(t) + ' ' + (t.channels || '?') + 'ch'; }).join(', '));
+      renderTrackButtons(s);
+      var index = (typeof onlyIndex === 'number' && onlyIndex >= 0 && onlyIndex < s.tracks.length)
+        ? onlyIndex
+        : s.tracks.findIndex(function (t) { return CODECS[codecName(t)] && !nativeSupport(codecName(t)); });
+      if (index < 0) { log('Поддерживаемых браузером дорожек нет'); set('s-backend', 'нет подходящей дорожки', 'warn'); return; }
+      s.sel = index;
+      var track = s.tracks[index];
+      var codec = codecName(track);
+      set('s-track', codec.toUpperCase() + ', ' + (track.channels || 2) + ' канала(-ов)');
+      log('Выбрана дорожка ' + codec.toUpperCase() + ' (браузер её не умеет: canPlayType пусто)');
+      return ensureAudio().then(function () {
+        if (s.closed || !s.node) return;
+        return request('select', { index: track.index });
+      }).then(function (selection) {
+        if (s.closed || !selection) return;
+        log('Декодер открыт: ' + selection.sampleRate + ' Гц, ' + selection.channels + ' кан.');
+        return request('seek', { us: 0 });
+      }).then(function () {
+        if (s.closed) return;
+        sync(true);
+        s.timer = setInterval(function () { if (session === s && !s.closed) sync(false); }, 120);
+      });
+    }).catch(function (error) {
+      if (!s.closed) fail(String(error.message || error));
+    });
+  }
+
+  function renderTrackButtons(s) {
+    var row = document.getElementById('trackrow');
+    row.innerHTML = '';
+    s.tracks.forEach(function (track, i) {
+      var button = document.createElement('button');
+      button.textContent = (i + 1) + ') ' + codecName(track).toUpperCase() + ' ' + (track.channels || '?') + ' кан.';
+      button.addEventListener('click', function () { open(s.url, i); });
+      row.appendChild(button);
+    });
+  }
+  document.getElementById('beep').addEventListener('click', function () {
+    var Context = window.AudioContext || window.webkitAudioContext;
+    var ctx = new Context();
+    var osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = 'sine'; osc.frequency.value = 440; gain.gain.value = 0.25;
+    osc.connect(gain); gain.connect(ctx.destination);
+    ctx.resume().then(function () {
+      osc.start();
+      setTimeout(function () { try { osc.stop(); ctx.close(); } catch (e) {} }, 1500);
+      log('Бип 440 Гц подан прямо в звук устройства, без WASM. Слышно — выход звука работает.');
+    }).catch(function (error) { log('Не запустился звук: ' + error.message, 'bad'); });
+  });
+  document.querySelectorAll('button[data-src]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      document.querySelectorAll('button[data-src]').forEach(function (other) { other.classList.remove('on'); });
+      button.classList.add('on');
+      open(button.getAttribute('data-src'));
+      // Клик считается жестом пользователя: разрешаем автовоспроизведение и запуск AudioContext.
+      setTimeout(function () {
+        video.play().catch(function (error) { log('Нажмите Play на видео: ' + error.message, 'warn'); });
+      }, 600);
+    });
+  });
+  video.addEventListener('seeking', function () {
+    var s = session;
+    if (!s || s.closed || s.sel < 0 || !s.node) return;
+    s.node.port.postMessage({ type: 'clear', clockUs: Math.round(video.currentTime * 1000000) });
+    request('seek', { us: Math.round(video.currentTime * 1000000) }).then(function () { sync(true); })
+      .catch(function (error) { fail('перемотка: ' + (error.message || error)); });
+  });
+
+  var float = null, freqData = null;
+  setInterval(function () {
+    var s = session;
+    if (probing) return;
+    sctx.clearRect(0, 0, spectrum.width, spectrum.height);
+    if (!s || s.closed || !s.analyser) { set('s-freq', '—'); return; }
+    if (!float || float.length !== s.analyser.fftSize) float = new Float32Array(s.analyser.fftSize);
+    if (!freqData || freqData.length !== s.analyser.frequencyBinCount) freqData = new Float32Array(s.analyser.frequencyBinCount);
+    s.analyser.getFloatTimeDomainData(float);
+    s.analyser.getFloatFrequencyData(freqData);
+    var peak = 0, sum = 0;
+    for (var i = 0; i < float.length; i++) { var a = Math.abs(float[i]); if (a > peak) peak = a; sum += float[i] * float[i]; }
+    var rms = Math.sqrt(sum / float.length);
+    set('s-level', peak.toFixed(3) + ' / ' + rms.toFixed(3), peak > 0.01 ? 'ok' : '');
+    if (peak <= 0.01) { set('s-freq', '—'); }
+    var bin = s.analyser.context.sampleRate / s.analyser.fftSize;
+    var top = -Infinity, topBin = 0, second = -Infinity, secondBin = 0;
+    for (var k = 2; k < freqData.length; k++) {
+      if (freqData[k] > top) { second = top; secondBin = topBin; top = freqData[k]; topBin = k; }
+      else if (freqData[k] > second) { second = freqData[k]; secondBin = k; }
+    }
+    if (isFinite(top) && top > -90 && peak > 0.01) {
+      set('s-freq', Math.round(topBin * bin) + ' / ' + Math.round(secondBin * bin) + ' Гц', 'ok');
+    }
+    for (var x = 0; x < spectrum.width; x++) {
+      var from = Math.floor(x / spectrum.width * freqData.length * 0.25);
+      var value = freqData[from];
+      var height = isFinite(value) ? Math.max(0, (value + 100) / 100) * spectrum.height : 0;
+      sctx.fillStyle = height > 4 ? '#4ade80' : '#2b3444';
+      sctx.fillRect(x, spectrum.height - height, 1, height);
+    }
+  }, 100);
+
+  function probeDts(url) {
+    destroy();
+    probing = true;
+    logEl.textContent = '';
+    set('s-backend', 'проверка декодера DTS…', 'warn');
+    var w = new Worker('/mpvwasm/assets/mpvwasm-audio-only-worker.js?v=' + VERSION);
+    var id = 0, pending = {};
+    w.onmessage = function (event) { var m = event.data || {}, p = pending[m.id]; if (!p) return; delete pending[m.id]; p(m); };
+    function req(command, payload) {
+      return new Promise(function (res) { var i = ++id; pending[i] = res; w.postMessage(Object.assign({ id: i, command: command }, payload || {})); });
+    }
+    req('open', { url: '/mpvwasm/proxy?u=' + b64url(new URL(url || '/lampac-js/uploads/dts-6.1-only.mkv', location.href).href) })
+      .then(function (m) {
+        if (!m.ok) throw Error(m.error);
+        var track = (m.result.tracks || []).filter(function (t) { return t.type === 'audio'; })[0];
+        log('Файл открыт, дорожка ' + track.codecName + '(' + track.channels + ' кан.)');
+        return req('select', { index: track.index });
+      })
+      .then(function (sel) {
+        if (!sel.ok) throw Error(sel.error);
+        log('DTS-декодер открыт: ' + sel.result.sampleRate + ' Гц, ' + sel.result.channels + ' кан.');
+        return req('seek', { us: 1500000 });
+      })
+      .then(function () { return req('read', { maxPackets: 256 }); })
+      .then(function (r) {
+        if (!r.ok) throw Error(r.error);
+        var mono = [], channels = 2, rate = 48000, total = 0, peak = 0;
+        (r.result.chunks || []).forEach(function (c) {
+          channels = c.channels; rate = c.sampleRate;
+          for (var i = 0; i < c.pcm.length; i += channels) { var v = c.pcm[i]; mono.push(v); if (Math.abs(v) > peak) peak = Math.abs(v); }
+          total += c.pcm.length / channels;
+        });
+        function goertzel(hz) {
+          var n = Math.min(24000, mono.length), sum = 0;
+          for (var k = 0; k < n; k++) sum += mono[k] * Math.cos(2 * Math.PI * hz * k / rate);
+          return Math.abs(sum / Math.max(1, n));
+        }
+        var g440 = goertzel(440), g1000 = goertzel(1000);
+        set('s-track', 'DTS (MKV, без видео)');
+        set('s-level', peak.toFixed(3), peak > 0.01 ? 'ok' : '');
+        set('s-buffer', Math.round(total / rate * 1000) + ' мс PCM');
+        set('s-freq', (g440 > g1000 ? '440' : '1000') + ' Гц (440=' + g440.toFixed(3) + ', 1000=' + g1000.toFixed(3) + ')', 'ok');
+        set('s-backend', 'DTS-декодер работает (PCM есть)', 'ok');
+        log('Декодировано ' + total + ' сэмплов, пик ' + peak.toFixed(3) + ', тон 440 Гц = ' + g440.toFixed(3) + ', 1000 Гц = ' + g1000.toFixed(3));
+        probing = false;
+        w.terminate();
+      })
+      .catch(function (error) {
+        set('s-backend', 'DTS-декодер: ошибка', 'bad');
+        log('ОШИБКА: ' + (error.message || error), 'bad');
+        probing = false;
+        w.terminate();
+      });
+  }
+  window.__probe = probeDts;
+  document.getElementById('dtsprobe').addEventListener('click', function () { probeDts(); });
+
+  document.getElementById('rec').addEventListener('click', function () {
+    var s = session;
+    if (!s || !s.ctx) { log('Сначала выберите файл'); return; }
+    var stream = s.ctx.createMediaStreamDestination();
+    s.analyser.connect(stream);
+    var chunks = [];
+    var recorder = new MediaRecorder(stream.stream, { mimeType: 'audio/webm' });
+    recorder.ondataavailable = function (event) { if (event.data.size) chunks.push(event.data); };
+    recorder.onstop = function () {
+      var blob = new Blob(chunks, { type: 'audio/webm' });
+      var link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'audio-wasm-check.webm';
+      link.click();
+      log('Запись сохранена: ' + Math.round(blob.size / 1024) + ' КБ — откройте файл и послушайте');
+      setTimeout(function () { try { s.analyser.disconnect(stream); } catch (e) {} }, 500);
+    };
+    recorder.start();
+    log('Пишу 6 секунд того, что реально выходит в звук…');
+    setTimeout(function () { recorder.stop(); }, 6000);
+  });
+})();
+</script>
+</body>
+</html>
