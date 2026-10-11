@@ -2,8 +2,15 @@
   "enable": true,
   "dynamic": true,
   "tree": [
+    "AnimeEpisodeMatcher.cs",
+    "AnimeResolverModels.cs",
+    "AnimeTitleResolver.cs",
     "Controller.cs",
     "Model.cs",
-    "ModInit.cs"
+    "ModInit.cs",
+    "PidTorPlayerSearch.cs",
+    "PlayerModels.cs",
+    "TorrentAvailability.cs",
+    "TorrentFileProbe.cs"
   ]
 }

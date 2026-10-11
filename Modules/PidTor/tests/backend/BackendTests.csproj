@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <Compile Include="../../Model.cs" />
+    <Compile Include="../../PlayerModels.cs" />
+    <Compile Include="../../AnimeResolverModels.cs" />
+    <Compile Include="../../PidTorPlayerSearch.cs" />
+    <Compile Include="../../TorrentFileProbe.cs" />
+  </ItemGroup>
+</Project>

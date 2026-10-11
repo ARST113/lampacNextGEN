@@ -6,6 +6,7 @@ using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
 using Shared.Models.Online.Settings;
 using Shared.Services;
+using System;
 using System.Collections.Generic;
 
 namespace PidTor;
@@ -15,6 +16,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
     public static string modpath;
     public static PidTorSettings conf;
     public static int tsport;
+    public static int anime_min_sid = 2;
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
@@ -70,14 +72,23 @@ public class ModInit : IModuleLoaded, IModuleOnline
             emptyVoice = true,
             redapi = "http://jac.red"
         });
+
+        updateAnimeMinSid();
     }
 
     void updateCurrentConf()
     {
+        updateAnimeMinSid();
+
         if (CoreInit.CurrentConf.TryGetValue("TorrServer", out var torrServerConf))
             tsport = torrServerConf.Value<int>("tsport");
         else
             tsport = 9085;
+    }
+
+    static void updateAnimeMinSid()
+    {
+        anime_min_sid = Math.Max(0, CoreInit.CurrentConf?["PidTor"]?["anime_min_sid"]?.ToObject<int?>() ?? 2);
     }
 
     string onlineApiQuality(EventOnlineApiQuality e)
