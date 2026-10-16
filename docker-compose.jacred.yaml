@@ -1,0 +1,65 @@
+services:
+  jacred:
+    image: ghcr.io/jacred-fdb/jacred:3.7.0
+    container_name: jacred
+    restart: unless-stopped
+    networks:
+      - lampac
+    ports:
+      - "9117:9117"
+    volumes:
+      - ./jacred-docker/config/init.conf:/app/config/init.conf:ro
+      - jacred-data:/app/Data
+    environment:
+      - TZ=${TZ:-Europe/Amsterdam}
+      - UMASK=0027
+    depends_on:
+      - flaresolverr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "--max-time", "10", "http://127.0.0.1:9117/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
+
+  # JacRed's Docker image does not execute Data/crontab itself.  This sidecar
+  # uses the crontab and run-job.sh shipped by the exact same 3.7.0 image,
+  # rewrites localhost to the Compose service name and runs it with flock.
+  jacred-cron:
+    image: ghcr.io/jacred-fdb/jacred:3.7.0
+    container_name: jacred-cron
+    user: root
+    restart: unless-stopped
+    networks:
+      - lampac
+    depends_on:
+      jacred:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      apk add --no-cache bash util-linux >/dev/null
+      sed \
+        -e 's#http://127.0.0.1:9117#http://jacred:9117#g' \
+        -e 's#/opt/jacred/Data/run-job.sh#/app/Data/run-job.sh#g' \
+        /app/Data/crontab > /etc/crontabs/root
+      echo "JacRed 3.7.0 cron loaded: $$(grep -Ec '^[^#[:space:]].*run-job\.sh' /etc/crontabs/root) jobs"
+      exec crond -f -l 2
+
+  # Required for Cloudflare-protected trackers such as Rutracker.
+  # WARP is intentionally not enabled here: add it only when the deployment
+  # actually needs a different egress IP / SOCKS route.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    networks:
+      - lampac
+    ports:
+      - "127.0.0.1:8191:8191"
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TZ:-Europe/Amsterdam}
+      - DISABLE_MEDIA=true
+
+volumes:
+  jacred-data:
