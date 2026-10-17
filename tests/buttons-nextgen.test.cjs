@@ -47,7 +47,7 @@ const Lampa={
   Controller:{enabled(){return {name:'full_start'}},toggle(){}}
 };
 const context={window:{Lampa,$:jquery},Lampa,$:jquery,console,setTimeout(fn){fn();return 1},clearTimeout(){}};
-vm.runInNewContext(src,context,{filename:'buttons-nextgen.js'});
+vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds}; init();'),context,{filename:'buttons-nextgen.js'});
 assert.ok(settingsParameter,'settings integration loaded');
 assert.deepEqual(JSON.parse(JSON.stringify(storage.get('button_hidden'))),['legacy'],'existing setting retained');
 storage.set('button_hidden',['profile-111'],true);
@@ -66,6 +66,28 @@ newer.settings.button_hidden = ['remote-111'];
 store.buttons_ng_cloud_v1.profile_111 = newer;
 (events.worker_storage||[]).forEach(fn=>fn({name:'buttons_ng_cloud_v1',type:'insert'}));
 assert.deepEqual(JSON.parse(JSON.stringify(store.button_hidden)),['remote-111'],'server state wins when newer');
+
+function fakeButton(initialClasses,initialText) {
+  let classes=initialClasses,text=initialText;
+  const values={};
+  return {
+    length:1,
+    attr(k){return k==='class'?classes:''},
+    find(k){return {text(){return text}}},
+    data(k,v){if(arguments.length===2){values[k]=v;return this}return values[k]},
+    change(c,t){classes=c;text=t}
+  };
+}
+const online=fakeButton('full-start__button selector view--online','Онлайн');
+const id=context.window.__bmTest.getBtnIdentifier(online);
+assert.ok(id.startsWith('bm2_'),'semantic stable identifier generated');
+online.change('full-start__button selector view--online focus button-mode-3','Смотреть');
+assert.equal(context.window.__bmTest.getBtnIdentifier(online),id,'label and focus changes do not affect identity');
+const another=fakeButton('full-start__button selector view--online provider--extra','Онлайн');
+assert.notEqual(context.window.__bmTest.getBtnIdentifier(another),id,'different provider ID is distinct');
+storage.set('button_hidden',['view--online_Онлайн'],true);
+context.window.__bmTest.bmMigrateIds();
+assert.deepEqual(JSON.parse(JSON.stringify(store.button_hidden)),[id],'legacy settings IDs migrated');
 assert.ok(src.includes('top:calc(100% + .2em)'), 'hover text must be an overlay');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
 console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout');
