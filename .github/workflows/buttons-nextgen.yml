@@ -7,6 +7,11 @@ on:
       - "Plugins/buttons-nextgen.js"
       - "tests/buttons-nextgen.test.cjs"
       - ".github/workflows/buttons-nextgen.yml"
+  pull_request:
+    paths:
+      - "Plugins/buttons-nextgen.js"
+      - "tests/buttons-nextgen.test.cjs"
+      - ".github/workflows/buttons-nextgen.yml"
   workflow_dispatch:
 jobs:
   node-smoke:
