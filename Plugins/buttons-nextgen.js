@@ -673,12 +673,8 @@
     }
 
     function animateBtnFadeIn(buttons) {
-        buttons.forEach(function (btn, index) {
-            btn.css({
-                'opacity': '0',
-                'animation': 'button-fade-in 0.4s ease forwards',
-                'animation-delay': (index * 0.08) + 's'
-            });
+        buttons.forEach(function (btn,index) {
+            btn.css({opacity:'',animation:'button-fade-in 0.26s ease-out both','animation-delay':Math.min(index*0.035,0.22)+'s'});
         });
     }
 
@@ -949,7 +945,8 @@
             });
         }
 
-        animateBtnFadeIn(visibleButtons);
+        // Re-applying edited layout must not trigger another entrance animation.
+        visibleButtons.forEach(function(btn){btn.css({opacity:'',animation:'','animation-delay':''})});
 
         var editBtn = targetContainer.find('.button--edit-order');
         if (editBtn.length) {
@@ -2035,9 +2032,9 @@
     }
 
     function setupButtonNavigation(container) {
-        // Lampa автоматически обрабатывает навигацию для flex-wrap: wrap
-        // Просто убедимся что контроллер обновлен
-        if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+        // Don't reset focus on every button animation or editor change.
+        if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function' &&
+            (!Lampa.Controller.enabled || !Lampa.Controller.enabled() || Lampa.Controller.enabled().name !== 'full_start')) {
             try {
                 Lampa.Controller.toggle('full_start');
             } catch (e) { }
@@ -2045,19 +2042,7 @@
     }
 
     function refreshController() {
-        if (!Lampa.Controller || typeof Lampa.Controller.toggle !== 'function') return;
-
-        setTimeout(function () {
-            try {
-                Lampa.Controller.toggle('full_start');
-
-                if (currentContainer) {
-                    setTimeout(function () {
-                        setupButtonNavigation(currentContainer);
-                    }, 100);
-                }
-            } catch (e) { }
-        }, 50);
+        if(currentContainer)setupButtonNavigation(currentContainer);
     }
 
     function init() {
@@ -2068,7 +2053,7 @@
         Lampa.Listener.follow('worker_storage',function(e){if(e&&e.name===bmCloudKey)bmCloudPull()});
         var style = $('<style>' +
             '@keyframes button-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }' +
-            '.full-start-new__buttons .full-start__button { opacity: 0; }' +
+            '.full-start-new__buttons .full-start__button { box-sizing:border-box; position:relative; flex-shrink:0; }' +
             '.full-start__button.hidden { display: none !important; }' +
             '.button--folder { cursor: pointer; }' +
             '.full-start-new__buttons { ' +
@@ -2115,18 +2100,17 @@
             '.menu-edit-list__item.item-hidden .menu-edit-list__icon { opacity: 0.5; }' +
             '' +
             '/* Режим 1: Стандартный (иконка, текст при наведении) */' +
-            '.full-start__button.button-mode-1 .text-wrapper { display: none !important; }' +
-            '.full-start__button.button-mode-1:hover .text-wrapper, .full-start__button.button-mode-1.focus .text-wrapper { display: inline !important; }' +
-            '.full-start__button.button-mode-1 > span:not(.text-wrapper) { opacity: 0 !important; transition: opacity 0.3s; }' +
-            '.full-start__button.button-mode-1:hover > span:not(.text-wrapper), .full-start__button.button-mode-1.focus > span:not(.text-wrapper) { opacity: 1 !important; }' +
+            '/* Tooltip is positioned outside the flex geometry: no hover feedback loop. */' +
+            '.full-start__button.button-mode-1 > span { position:absolute !important; top:calc(100% + .2em); left:0; width:max-content; max-width:70vw; box-sizing:border-box; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:.3em; padding:.2em .55em; background:rgba(20,20,24,.95); color:#fff; opacity:0 !important; visibility:hidden !important; pointer-events:none; z-index:40; transition:opacity .14s ease !important; }' +
+            '.full-start__button.button-mode-1:hover > span, .full-start__button.button-mode-1.focus > span { opacity:1 !important; visibility:visible !important; }' +
+            '.full-start__button.button-mode-1:nth-last-child(-n+3) > span { left:auto; right:0; }' +
+            '.full-start__button.button-mode-1 > svg { flex-shrink:0; }' +
             '' +
             '/* Режим 2: Только иконка (текст всегда скрыт) */' +
-            '.full-start__button.button-mode-2 .text-wrapper { display: none !important; }' +
-            '.full-start__button.button-mode-2 > span:not(.text-wrapper) { display: none !important; }' +
+            '.full-start__button.button-mode-2 > span { display: none !important; }' +
             '' +
             '/* Режим 3: Иконка + текст всегда */' +
-            '.full-start__button.button-mode-3 .text-wrapper { display: inline !important; }' +
-            '.full-start__button.button-mode-3 > span:not(.text-wrapper) { opacity: 1 !important; display: inline !important; }' +
+            '.full-start__button.button-mode-3 > span { position:static !important; display:inline !important; visibility:visible !important; opacity:1 !important; }' +
             '</style>');
         $('body').append(style);
 
@@ -2183,6 +2167,7 @@
                         Lampa.Noty.show(getTranslation('buttons_plugin_button_editor_disabled'));
                     }
                 }, 100);
+                setTimeout(bmSave, 120);
             },
             onRender: function (element) {
                 setTimeout(function () {
