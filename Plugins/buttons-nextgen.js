@@ -331,8 +331,11 @@
         var local=Lampa.Storage.get(bmLocalKey(id),null);
         if(!local||!local.settings){
             var first=Lampa.Storage.get('buttons_ng_first_profile','');
-            local={updated: first?0:Date.now(),settings:first?bmClone(bmEmpty):bmSnapshot()};
-            if(!first)Lampa.Storage.set('buttons_ng_first_profile',id,true);
+            // The first signed-in profile inherits an existing guest layout once.
+            var guest=Lampa.Storage.get(bmLocalKey('guest'),null);
+            var inheritGuest=first==='guest'&&id!=='guest'&&guest&&guest.settings;
+            local={updated:0,settings:inheritGuest?bmClone(guest.settings):(first?bmClone(bmEmpty):bmSnapshot())};
+            if(!first||inheritGuest)Lampa.Storage.set('buttons_ng_first_profile',id,true);
             Lampa.Storage.set(bmLocalKey(id),local,true);
         }
         var remote=bmRemote(id);
@@ -1004,8 +1007,18 @@
             if (viewClass) {
                 var identifier = viewClass.replace('view--', '').replace(/_/g, ' ');
                 identifier = capitalizeText(identifier);
-                return text + ' <span style="opacity:0.5">(' + identifier + ')</span>';
+                if (identifier.toLowerCase() !== text.toLowerCase()) {
+                    return text + ' <span style="opacity:0.5">(' + identifier + ')</span>';
+                }
             }
+            var number=0, total=0, myId=getBtnIdentifier(btn);
+            allButtons.forEach(function(b) {
+                if(b.find('span').text().trim()===text) {
+                    total++;
+                    if(getBtnIdentifier(b)===myId) number=total;
+                }
+            });
+            return text + ' <span style="opacity:0.5">(' + (number||1) + '/' + total + ')</span>';
         }
 
         return text;
@@ -2022,7 +2035,8 @@
         targetContainer.append(editButton);
         visibleButtons.push(editButton);
 
-        animateBtnFadeIn(visibleButtons);
+        if(isFreshRender)animateBtnFadeIn(visibleButtons);
+        else visibleButtons.forEach(function(b){b.css({opacity:'',animation:'','animation-delay':''})});
 
         setTimeout(function () {
             setupButtonNavigation(container);
