@@ -334,7 +334,9 @@
             // The first signed-in profile inherits an existing guest layout once.
             var guest=Lampa.Storage.get(bmLocalKey('guest'),null);
             var inheritGuest=first==='guest'&&id!=='guest'&&guest&&guest.settings;
-            local={updated:0,settings:inheritGuest?bmClone(guest.settings):(first?bmClone(bmEmpty):bmSnapshot())};
+            var inherited=inheritGuest?bmClone(guest.settings):(first?bmClone(bmEmpty):bmSnapshot());
+            var nonempty=JSON.stringify(inherited)!==JSON.stringify(bmEmpty);
+            local={updated:nonempty?1:0,settings:inherited};
             if(!first||inheritGuest)Lampa.Storage.set('buttons_ng_first_profile',id,true);
             Lampa.Storage.set(bmLocalKey(id),local,true);
         }
@@ -365,6 +367,15 @@
         Lampa.Storage.set(bmLocalKey(bmProfile),bmClone(remote),true);
         bmRestore(remote.settings);
         if(currentContainer)reorderButtons(currentContainer,false);
+    }
+    function bmOfferLocalCloud(){
+        if(bmProfile==='guest')return;
+        var local=Lampa.Storage.get(bmLocalKey(bmProfile),null),remote=bmRemote(bmProfile);
+        if(!local||!local.settings||(remote&&remote.updated>=local.updated))return;
+        var cloud=Lampa.Storage.get(bmCloudKey,{});
+        if(!cloud||typeof cloud!=='object'||Array.isArray(cloud))cloud={};
+        cloud['profile_'+bmProfile]=bmClone(local);
+        Lampa.Storage.set(bmCloudKey,cloud);
     }
     function bmMigrateIds(){
         var mapping=bmLegacyIds, changed=false;
@@ -2064,7 +2075,7 @@
         bmActivate();
         if(Lampa.Storage.listener&&Lampa.Storage.listener.follow)Lampa.Storage.listener.follow('change',function(e){if(e.name==='account'&&bmActivate()&&currentContainer)reorderButtons(currentContainer,false)});
         Lampa.Listener.follow('profile_select',function(){if(bmActivate()&&currentContainer)reorderButtons(currentContainer,false)});
-        Lampa.Listener.follow('worker_storage',function(e){if(e&&e.name===bmCloudKey)bmCloudPull()});
+        Lampa.Listener.follow('worker_storage',function(e){if(e&&e.name===bmCloudKey){bmCloudPull();setTimeout(bmOfferLocalCloud,150)}});
         var style = $('<style>' +
             '@keyframes button-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }' +
             '.full-start-new__buttons .full-start__button { box-sizing:border-box; position:relative; flex-shrink:0; }' +
