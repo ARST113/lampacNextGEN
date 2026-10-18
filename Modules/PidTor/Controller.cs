@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Caching.Memory;
 using Shared;
 using Shared.Attributes;
@@ -14,6 +15,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -25,9 +27,281 @@ namespace PidTor;
 
 public class PiTor : BaseOnlineController
 {
-    [HttpGet, Staticache(manually: true)]
+    static bool CacheFailure(Exception error) => error is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException;
+    static readonly HttpClient fileProbeClient = new();
+    static readonly ConcurrentDictionary<string, TorrentFileProbe> fileProbes = new();
+
+    [HttpGet]
+    [Route("lite/pidtor/probe/{id}")]
+    async public Task<ActionResult> Probe(string id, int index = 1)
+    {
+        var init = ModInit.conf;
+        if (!init.enable) return StatusCode(403);
+        if (NoAccessGroup(init, out string error_msg))
+            return Json(new { accsdb = true, msg = error_msg });
+        if (init.workinghours != null && !init.workinghours.Contains(DateTime.UtcNow.Hour)) return StatusCode(403);
+        if (!TorrentFileKey.TryCreate(id, index, out var fileKey)) return Json(new FileProbeResponse { error = "invalid_request" });
+        try
+        {
+            var saved = await ModInit.Cache.ReadFilesAsync(new[] { fileKey }, HttpContext.RequestAborted);
+            if (saved.TryGetValue(fileKey, out var file)) return Json(TorrentFileProbe.FromStored(file));
+        }
+        catch (Exception error) when (CacheFailure(error)) { }
+        string target = Shared.CoreInit.CurrentConf?["PidTor"]?["probe_torrserver"]?.ToObject<string>()
+            ?? Shared.CoreInit.CurrentConf?["Tracks"]?["tsuri"]?.ToObject<string>();
+        if (string.IsNullOrWhiteSpace(target)) return Json(new FileProbeResponse { error = "probe_not_configured" });
+        var trackers = HttpContext.Request.Query["tr"].Select(tracker => "tr=" + HttpUtility.UrlEncode(tracker));
+        try
+        {
+            var probe = fileProbes.GetOrAdd(target, key => new TorrentFileProbe(key, fileProbeClient));
+            return Json(await probe.ProbeAsync(id, index, string.Join('&', trackers)).ConfigureAwait(false));
+        }
+        catch (ArgumentException) { return Json(new FileProbeResponse { error = "probe_not_configured" }); }
+    }
+
+    // Состояние наполнения буфера TorrServer для клиентского окна наполнения:
+    // preloaded/preload_size, скорость и пиры. Отдаём то же, что показывает сам TorrServer.
+    [HttpGet]
+    [Route("lite/pidtor/preload/{id}")]
+    async public Task<ActionResult> PreloadState(string id, short index = 1)
+    {
+        var init = ModInit.conf;
+        if (!init.enable) return StatusCode(403);
+        if (NoAccessGroup(init, out string error_msg))
+            return Json(new { accsdb = true, msg = error_msg });
+        if (ModInit.preload <= 0)
+            return Json(new { ready = false, disabled = true });
+        if (!TorrentFileKey.TryCreate(id, index, out var fileKey))
+            return Json(new { ready = false, error = "invalid_request" });
+
+        var target = TorrentTarget();
+        if (string.IsNullOrWhiteSpace(target.host))
+            return Json(new { ready = false, error = "no_torrserver" });
+
+        string stat = await Http.Post($"{target.host.TrimEnd('/')}/cache", "{\"action\":\"get\",\"hash\":\"" + fileKey.InfoHash + "\"}", timeoutSeconds: 5, headers: target.header);
+        if (string.IsNullOrWhiteSpace(stat))
+            return Json(new { ready = false });
+
+        try
+        {
+            using var doc = JsonDocument.Parse(stat);
+            var root = doc.RootElement;
+
+            // /stream?...&stat в этой сборке TorrServer не отдаёт preloaded, а /cache отдаёт
+            // preloaded_bytes - это и есть реальный прогресс наполнения.
+            if (!root.TryGetProperty("Torrent", out var torrent) || torrent.ValueKind != JsonValueKind.Object)
+                return Json(new { ready = false, error = "not_loaded" });
+
+            long Num(JsonElement node, string name) => node.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number ? value.GetInt64() : 0;
+
+            long preload = Num(torrent, "preload_size");
+            long loaded = Num(torrent, "preloaded_bytes");
+
+            return Json(new
+            {
+                ready = loaded > 0,
+                preload_size = preload,
+                preloaded = loaded,
+                percent = preload > 0 ? (int)Math.Min(100, loaded * 100 / preload) : 0,
+                stat = Num(torrent, "stat"),
+                size = Num(torrent, "torrent_size"),
+                loaded_size = Num(torrent, "loaded_size"),
+                active_peers = Num(torrent, "active_peers"),
+                total_peers = Num(torrent, "total_peers"),
+                seeders = Num(torrent, "connected_seeders")
+            });
+        }
+        catch (JsonException)
+        {
+            return Json(new { ready = false });
+        }
+    }
+
+    // TorrServer, к которому идут потоки и предзагрузка: та же логика, что в Serial/Stream.
+    (IReadOnlyList<HeadersModel> header, string host) TorrentTarget()
+    {
+        var init = ModInit.conf;
+
+        var auth = init.auth_torrs?.FirstOrDefault(i => i.enable);
+        if (auth != null)
+        {
+            string login = (auth.login ?? string.Empty).Replace("{user_uid}", requestInfo.user_uid ?? string.Empty);
+            var headers = HeadersModel.Init("Authorization", $"Basic {CrypTo.Base64($"{login}:{auth.passwd}")}");
+            return (httpHeaders(auth.host, HeadersModel.Join(headers, auth.headers)), auth.host);
+        }
+
+        if (init.torrs != null && init.torrs.Length > 0)
+        {
+            string tshost = init.torrs.First();
+            if (init.base_auth?.enable == true)
+            {
+                string login = (init.base_auth.login ?? string.Empty).Replace("{user_uid}", requestInfo.user_uid ?? string.Empty);
+                var headers = HeadersModel.Init("Authorization", $"Basic {CrypTo.Base64($"{login}:{init.base_auth.passwd}")}");
+                return (httpHeaders(tshost, HeadersModel.Join(headers, init.base_auth.headers)), tshost);
+            }
+
+            return (null, tshost);
+        }
+
+        if (System.IO.File.Exists("data/ts/accs.db"))
+        {
+            string accs = System.IO.File.ReadAllText("data/ts/accs.db");
+            string passwd = Regex.Match(accs, "\"ts\":\"([^\"]+)\"").Groups[1].Value;
+            return (HeadersModel.Init("Authorization", $"Basic {CrypTo.Base64($"ts:{passwd}")}"), $"http://{CoreInit.conf.listen.localhost}:{ModInit.tsport}");
+        }
+
+        return (null, null);
+    }
+
+    [HttpGet, AllowAnonymous]
+    [Route("pidtor.js")]
+    [Route("pidtor/js/{token}")]
+    public ActionResult Plugin(string token)
+    {
+        HttpContext.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+        HttpContext.Response.Headers["Pragma"] = "no-cache";
+        HttpContext.Response.Headers["Expires"] = "0";
+        string plugin = FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "pidtor.js", saveCache: false)
+            .Replace("{localhost}", host)
+            .Replace("{token}", HttpUtility.UrlEncode(token))
+            .Replace("{pidtor_preload}", ModInit.preload.ToString())
+            .Replace("{pidtor_gst}", ProfileGst.Allowed(requestInfo?.user_uid) ? "true" : "false");
+        return Content(plugin, "application/javascript; charset=utf-8");
+    }
+
+    [HttpGet]
+    [Route("lite/pidtor/v2")]
+    async public Task<ActionResult> Player(
+        string title,
+        string original_title,
+        short year,
+        string original_language,
+        byte serial,
+        short s = -1,
+        short e = -1,
+        long id = 0,
+        long tmdb_id = 0,
+        string imdb_id = null,
+        long kinopoisk_id = 0,
+        string source = null,
+        bool anime = false,
+        string season_title = null,
+        short season_year = 0,
+        short season_episodes = 0,
+        string genres = null)
+    {
+        var init = ModInit.conf;
+        if (!init.enable)
+            return StatusCode(403);
+
+        if (NoAccessGroup(init, out string error_msg))
+            return Json(new { accsdb = true, msg = error_msg });
+
+        try
+        {
+
+        var request = new AnimeResolveRequest
+        {
+            id = id,
+            tmdb_id = tmdb_id,
+            imdb_id = imdb_id,
+            kinopoisk_id = kinopoisk_id,
+            source = source,
+            title = title,
+            original_title = original_title,
+            original_language = original_language,
+            year = year,
+            serial = serial == 1,
+            anime = anime,
+            season = s,
+            episode = e,
+            season_title = season_title,
+            season_year = season_year,
+            season_episodes = season_episodes,
+            genres = genres
+        };
+
+        AnimeResolveResult resolved = AnimeTitleResolver.IsAnime(request)
+            ? await AnimeTitleResolver.ResolveAsync(request).ConfigureAwait(false)
+            : null;
+        var ids = new Dictionary<string, string>();
+        if (tmdb_id > 0) ids["tmdb"] = tmdb_id.ToString();
+        else if (id > 0 && (source == "tmdb" || string.IsNullOrEmpty(source))) ids["tmdb"] = id.ToString();
+        if (kinopoisk_id > 0) ids["kinopoisk"] = kinopoisk_id.ToString();
+        if (!string.IsNullOrWhiteSpace(imdb_id)) ids["imdb"] = imdb_id;
+        if (id > 0 && source == "cub") ids["cub"] = id.ToString();
+        if (ids.Count == 0 && id > 0 && !string.IsNullOrEmpty(source)) ids["card:" + source] = id.ToString();
+        if (resolved?.id > 0 && !string.IsNullOrEmpty(resolved.provider)) ids[resolved.provider] = resolved.id.ToString();
+        string Fingerprint(object value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(value)))).ToLowerInvariant();
+        long mediaId = 0;
+        string identityKind = request.serial ? "tv" : "movie";
+        bool identityAnime = AnimeTitleResolver.IsAnime(request);
+        async Task<long> tryResolveMedia(Dictionary<string, string> set)
+        {
+            if (set == null || set.Count == 0) return 0;
+            try
+            {
+                return await ModInit.Cache.ResolveMediaAsync(new MediaIdentity { Kind = identityKind, Anime = identityAnime, Ids = set }, HttpContext.RequestAborted);
+            }
+            catch (Exception error) when (CacheFailure(error) || error is ArgumentException) { return 0; }
+        }
+        mediaId = await tryResolveMedia(ids);
+        if (mediaId == 0 && resolved?.id > 0 && !string.IsNullOrEmpty(resolved.provider) && ids.ContainsKey(resolved.provider))
+        {
+            // У аниме каждый сезон — отдельная карточка на Shikimori, поэтому id выбранного
+            // сезона конфликтует с базовой привязкой карточки (tmdb/kp/imdb) и
+            // ResolveMediaAsync бросал ArgumentException "Conflicting media alias" — запрос
+            // падал с HTTP 500 ("PidTor временно недоступен") на любом сезоне кроме первого.
+            var fallback = new Dictionary<string, string>(ids);
+            fallback.Remove(resolved.provider);
+            mediaId = await tryResolveMedia(fallback);
+        }
+        var context = new MediaContext(mediaId, 0, request.serial ? Math.Max(1, (int)s) : 0);
+        var key = new CatalogueKey(mediaId, Fingerprint(new { title, original_title, year, serial, s, anime, original_language, season_title, season_year, season_episodes, genres, resolved,
+            parser = init.redapi, init.min_sid, anime_min_sid = ModInit.anime_min_sid, init.max_size, init.max_serial_size }));
+        try
+        {
+            var snapshot = await new PidTorCatalogue(ModInit.Cache).GetAsync(new CatalogueSearchContext { Key = key },
+                () => PidTorPlayerSearch.FetchAsync(init, request, resolved, null), HttpContext.RequestAborted);
+            var response = await new PidTorResponseBuilder(ModInit.Cache) { Title = title, OriginalTitle = original_title, Anime = AnimeTitleResolver.IsAnime(request) }
+                .BuildManifestAsync(snapshot, context, host, url => accsArgs(url), HttpContext.RequestAborted);
+            response.episode = e; response.media_ids = ids; response.resolver = resolved?.provider; response.resolver_id = resolved?.id ?? 0;
+            response.seasons = resolved?.seasons?.Where(i => i.season > 0 && (i.episodes > 0 || i.year > 0)).OrderBy(i => i.season)
+                .Select(i => new PidTorPlayerSeason { season = i.season, year = i.year, episodes = i.episodes }).ToList() ?? new();
+            return Json(response);
+        }
+        catch (HttpRequestException) { return Json(new { error = "parser_unavailable" }); }
+        catch (TimeoutException) { return Json(new { error = "parser_timeout" }); }
+        }
+        catch (Exception diagError)
+        {
+            Console.WriteLine("[PidTor][ERROR] " + diagError);
+            return Json(new { error = "internal_error", type = diagError.GetType().FullName, msg = diagError.Message });
+        }
+    }
+
+
+    [HttpGet]
     [Route("lite/pidtor")]
-    async public Task<ActionResult> Index(string title, string original_title, short year, string original_language, byte serial, short s = -1, bool rjson = false)
+    async public Task<ActionResult> Index(
+        string title,
+        string original_title,
+        short year,
+        string original_language,
+        byte serial,
+        short s = -1,
+        bool rjson = false,
+        long id = 0,
+        long tmdb_id = 0,
+        string imdb_id = null,
+        long kinopoisk_id = 0,
+        string source = null,
+        bool anime = false,
+        short e = -1,
+        string season_title = null,
+        short season_year = 0,
+        short season_episodes = 0,
+        string genres = null)
     {
         var init = ModInit.conf;
         if (!init.enable)
@@ -39,9 +313,42 @@ public class PiTor : BaseOnlineController
         if (init.workinghours != null && !init.workinghours.Contains(DateTime.UtcNow.Hour))
             return Json(new { accsdb = true, msg = "Временно недоступен, попробуйте через несколько часов" });
 
-        var cache = await InvokeCacheResult<List<Torrent>>($"pidtor:{title}:{original_title}:{year}:{original_language}:{serial}", 40, textJson: true, onget: async e =>
+        var animeRequest = new AnimeResolveRequest
         {
-            string uri = $"{init.redapi}/api/v2.0/indexers/all/results?title={HttpUtility.UrlEncode(title)}&title_original={HttpUtility.UrlEncode(original_title)}&year={year}&is_serial={(original_language == "ja" ? 5 : (serial + 1))}&apikey={init.apikey}";
+            id = id,
+            tmdb_id = tmdb_id,
+            imdb_id = imdb_id,
+            kinopoisk_id = kinopoisk_id,
+            source = source,
+            title = title,
+            original_title = original_title,
+            original_language = original_language,
+            year = year,
+            serial = serial == 1,
+            anime = anime,
+            season = s,
+            episode = e,
+            season_title = season_title,
+            season_year = season_year,
+            season_episodes = season_episodes,
+            genres = genres
+        };
+        bool isAnime = AnimeTitleResolver.IsAnime(animeRequest);
+        AnimeResolveResult animeResolved = isAnime
+            ? await AnimeTitleResolver.ResolveAsync(animeRequest).ConfigureAwait(false)
+            : null;
+
+        string resolverId = animeResolved?.id > 0 ? animeResolved.id.ToString() : "fallback";
+        var cache = await InvokeCacheResult<List<Torrent>>($"pidtor:{title}:{original_title}:{year}:{original_language}:{serial}:{s}:{resolverId}", 40, textJson: true, onget: async e =>
+        {
+            int searchYear = animeResolved?.seasons?.FirstOrDefault(i => i.season == animeResolved.selected_season)?.year ?? year;
+            var searchTitles = isAnime ? AnimeTitleResolver.SearchTitles(animeRequest, animeResolved) : (title, original_title);
+            string uri = $"{init.redapi}/api/v2.0/indexers/all/results?title={HttpUtility.UrlEncode(searchTitles.Item1)}&title_original={HttpUtility.UrlEncode(searchTitles.Item2)}&year={searchYear}&is_serial={(isAnime ? 5 : (serial + 1))}&apikey={init.apikey}";
+            if (animeResolved?.aliases != null)
+            {
+                foreach (string alias in animeResolved.aliases.Take(20))
+                    uri += $"&title_alias%5B%5D={HttpUtility.UrlEncode(alias)}";
+            }
 
             var root = await Http.Get<RootObject>(uri, timeoutSeconds: 8, textJson: true);
             if (root?.Results == null || root.Results.Length == 0)
@@ -81,21 +388,22 @@ public class PiTor : BaseOnlineController
                         continue;
                 }
 
-                if (init.forceAll || Regex.IsMatch(name.ToLower(), "(4k|uhd)( |\\]|,|$)") || name.Contains("2160p") || name.Contains("1080p") || name.Contains("720p"))
+                if (init.forceAll || isAnime || Regex.IsMatch(name.ToLower(), "(4k|uhd)( |\\]|,|$)") || name.Contains("2160p") || name.Contains("1080p") || name.Contains("720p"))
                 {
                     int sid = torrent.Seeders;
                     long? size = torrent.Size;
 
-                    if (sid >= init.min_sid)
+                    int minSid = isAnime ? ModInit.anime_min_sid : init.min_sid;
+                    if (sid >= minSid)
                     {
-                        string mediainfo = torrent.info.sizeName ?? string.Empty;
+                        string mediainfo = torrent.info?.sizeName ?? string.Empty;
                         if (!string.IsNullOrEmpty(mediainfo))
                             mediainfo += " / ";
 
                         #region Перевод
                         string voicename = string.Empty;
 
-                        var voices = torrent.info.voices;
+                        var voices = torrent.info?.voices;
                         if (voices != null && voices.Length > 0)
                             voicename = string.Join(", ", voices);
                         #endregion
@@ -262,7 +570,7 @@ public class PiTor : BaseOnlineController
                         if (!string.IsNullOrEmpty(init.filter_ignore) && Regex.IsMatch($"{name}:{voicename}", init.filter_ignore, RegexOptions.IgnoreCase))
                             continue;
 
-                        torrents.Add(new(name, voicename, magnet, sid, tr, (name.Contains("2160p") ? "2160p" : name.Contains("1080p") ? "1080p" : "720p"), (torrent.Size ?? 0), mediainfo, torrent));
+                        torrents.Add(new(name, voicename, magnet, sid, tr, DetectQuality(name, torrent), (torrent.Size ?? 0), mediainfo, torrent));
                     }
                 }
             }
@@ -288,6 +596,7 @@ public class PiTor : BaseOnlineController
 
             string en_title = HttpUtility.UrlEncode(title);
             string en_original_title = HttpUtility.UrlEncode(original_title);
+            string contextArgs = BuildContextArgs(animeRequest, isAnime);
 
             if (serial == 1)
             {
@@ -296,6 +605,12 @@ public class PiTor : BaseOnlineController
                     var seasons = new HashSet<short>();
 
                     var tpl = new SeasonTpl(quality: torrents.FirstOrDefault(i => Regex.IsMatch(i.name, "(4k|uhd)( |\\]|,|$)", RegexOptions.IgnoreCase) || i.name.Contains("2160p"))?.name != null ? "2160p" : torrents.FirstOrDefault(i => i.name.Contains("1080p"))?.name != null ? "1080p" : "720p");
+
+                    if (isAnime && animeResolved?.seasons?.Count > 0)
+                    {
+                        foreach (var item in animeResolved.seasons)
+                            seasons.Add((short)item.season);
+                    }
 
                     foreach (var t in torrents)
                     {
@@ -310,7 +625,7 @@ public class PiTor : BaseOnlineController
                     {
                         tpl.Append(
                             $"{season} сезон",
-                            $"{host}/lite/pidtor?rjson={rjson}&title={en_title}&original_title={en_original_title}&year={year}&original_language={original_language}&serial=1&s={season}",
+                            $"{host}/lite/pidtor?rjson={rjson}&title={en_title}&original_title={en_original_title}&year={year}&original_language={original_language}&serial=1&s={season}{contextArgs}",
                             season
                         );
                     }
@@ -323,10 +638,15 @@ public class PiTor : BaseOnlineController
 
                     foreach (var torrent in torrents)
                     {
-                        if (torrent?.torrent?.info?.seasons == null || torrent.torrent.info.seasons.Length == 0)
+                        if (!isAnime && (torrent?.torrent?.info?.seasons == null || torrent.torrent.info.seasons.Length == 0))
                             continue;
 
-                        if (!torrent.torrent.info.seasons.Contains(s) || torrent.torrent.info.seasons.Length != 1) // многосезонный
+                        if (!isAnime && !torrent.torrent.info.seasons.Contains(s))
+                            continue;
+
+                        if (isAnime && torrent?.torrent?.info?.seasons?.Length > 0
+                            && !torrent.torrent.info.seasons.Contains(s)
+                            && !MatchesAnyAlias(torrent.name, animeResolved?.aliases))
                             continue;
 
                         string hashmagnet = Regex.Match(torrent.magnet, "magnet:\\?xt=urn:btih:([a-zA-Z0-9]+)").Groups[1].Value.ToLower();
@@ -337,7 +657,7 @@ public class PiTor : BaseOnlineController
                             torrent.voice,
                             null,
                             $"{torrent.quality} / {torrent.mediainfo} / {torrent.sid}",
-                            accsArgs($"{host}/lite/pidtor/serial/{hashmagnet}?{torrent.tr}&rjson={rjson}&title={en_title}&original_title={en_original_title}&s={s}")
+                            accsArgs($"{host}/lite/pidtor/serial/{hashmagnet}?{torrent.tr}&rjson={rjson}&title={en_title}&original_title={en_original_title}&s={s}&anime={isAnime}")
                         );
                     }
 
@@ -356,7 +676,7 @@ public class PiTor : BaseOnlineController
 
                     mtpl.Append(
                         torrent.voice,
-                        accsArgs($"{host}/lite/pidtor/s{hashmagnet}?{torrent.tr}") + (ModInit.conf.gst ? "&.m3u8" : ""),
+                        accsArgs($"{host}/lite/pidtor/s{hashmagnet}?{torrent.tr}") + (ProfileGst.Allowed(requestInfo?.user_uid) ? "&.m3u8" : ""),
                         voice_name: $"{torrent.quality} / {torrent.mediainfo} / {torrent.sid}",
                         quality: torrent.quality.Replace("p", ""),
                         hls_manifest_timeout: (int)TimeSpan.FromSeconds(60).TotalMilliseconds
@@ -369,9 +689,9 @@ public class PiTor : BaseOnlineController
     }
 
 
-    [HttpGet, Staticache(manually: true)]
+    [HttpGet]
     [Route("lite/pidtor/serial/{id}")]
-    async public Task<ActionResult> Serial(string id, string title, string original_title, short s)
+    async public Task<ActionResult> Serial(string id, string title, string original_title, short s, bool anime = false, bool nextgen = false, short display_s = 0, long media_id = 0)
     {
         var init = ModInit.conf;
         if (!init.enable)
@@ -383,9 +703,21 @@ public class PiTor : BaseOnlineController
         if (init.workinghours != null && !init.workinghours.Contains(DateTime.UtcNow.Hour))
             return Json(new { accsdb = true, msg = "Временно недоступен, попробуйте через несколько часов" });
 
-        string tr = Regex.Replace(HttpContext.Request.QueryString.Value.Remove(0, 1), "&(account_email|uid|token|nws_id|rjson|title|original_title|s)=[^&]+", "");
+        string tr = TorrentTrackerFallback.EnsureQuery(string.Join('&', HttpContext.Request.Query["tr"].Select(value => "tr=" + HttpUtility.UrlEncode(value))));
+        MediaContext nextgenContext = default;
+        PidTorResponseBuilder builder = null;
+        if (nextgen)
+        {
+            if (!TorrentFileKey.TryCreate(id, 1, out var canonical)) return Json(new { error = "invalid_request" });
+            id = canonical.InfoHash;
+            int displaySeason = !anime ? PidTorPlayerSearch.EpisodeSeason(s, display_s, original_title) : display_s > 0 ? display_s : s;
+            nextgenContext = new(media_id, s, displaySeason);
+            builder = new PidTorResponseBuilder(ModInit.Cache) { Title = title ?? original_title, OriginalTitle = original_title, Anime = anime, Trackers = tr };
+            var known = await builder.TryBuildCachedEpisodesAsync(nextgenContext, id, host, url => accsArgs(url), HttpContext.RequestAborted);
+            if (known != null) return Json(known);
+        }
 
-        var cache = await InvokeCacheResult<FileStat[]>($"pidtor:serial:{id}", 60 * 36, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<FileStat[]>($"pidtor:serial:v3:{id}", 60 * 36, textJson: true, onget: async e =>
         {
             #region gots
             (IReadOnlyList<HeadersModel> header, string host) gots()
@@ -409,7 +741,7 @@ public class PiTor : BaseOnlineController
                     string login = ts.login.Replace("{user_uid}", requestInfo.user_uid);
                     var auth = HeadersModel.Init("Authorization", $"Basic {CrypTo.Base64($"{login}:{ts.passwd}")}");
 
-                    return (httpHeaders(ts.host, HeadersModel.JoinReadOnly(auth, ts.headers)), ts.host);
+                    return (httpHeaders(ts.host, HeadersModel.Join(auth, ts.headers)), ts.host);
                 }
                 else
                 {
@@ -419,7 +751,7 @@ public class PiTor : BaseOnlineController
                         string login = init.base_auth.login.Replace("{user_uid}", requestInfo.user_uid);
                         var auth = HeadersModel.Init("Authorization", $"Basic {CrypTo.Base64($"{login}:{init.base_auth.passwd}")}");
 
-                        return (httpHeaders(tshost, HeadersModel.JoinReadOnly(auth, init.base_auth.headers)), tshost);
+                        return (httpHeaders(tshost, HeadersModel.Join(auth, init.base_auth.headers)), tshost);
                     }
 
                     return (null, init.torrs.First());
@@ -438,32 +770,36 @@ public class PiTor : BaseOnlineController
             if (string.IsNullOrEmpty(hash))
                 return e.Fail("torrents:hash");
 
-            var stat = await Http.Get<Stat>($"{ts.host}/stream?link={hash}&index=1&stat", timeoutSeconds: 20, headers: ts.header);
+            var stat = await TorrentAvailability.WaitForStatAsync(ts.host, hash, ts.header, attempts: 60, budget: TimeSpan.FromSeconds(9));
 
-            if (stat?.file_stats == null)
-            {
-                _ = Http.Post($"{ts.host}/torrents", "{\"action\":\"rem\",\"hash\":\"" + hash + "\"}", headers: ts.header);
+            if (stat?.file_stats == null || stat.file_stats.Length == 0)
                 return e.Fail("file_stats");
-            }
 
             return e.Success(stat.file_stats);
         });
+
+        if (nextgen && cache.Value != null)
+        {
+            try { await ModInit.Cache.SaveTorrentFilesAsync(id, cache.Value.Select(i => new DiscoveredTorrentFile { Index = i.id, Path = i.path, Size = i.size }).ToArray(), HttpContext.RequestAborted); }
+            catch (Exception error) when (CacheFailure(error)) { }
+            return Json(await builder.BuildEpisodesAsync(nextgenContext, id, AnimeEpisodeMatcher.Match(cache.Value, s), host, url => accsArgs(url), HttpContext.RequestAborted));
+        }
 
         return ContentTpl(cache, () =>
         {
             var mtpl = new EpisodeTpl();
 
-            foreach (var torrent in cache.Value)
+            var matchedFiles = AnimeEpisodeMatcher.Match(cache.Value, s);
+            foreach (var matched in matchedFiles)
             {
-                if (Path.GetExtension(torrent.path) is ".srt" or ".txt" or ".jpg" or ".png")
-                    continue;
+                var torrent = matched.file;
 
                 mtpl.Append(
                     Path.GetFileName(torrent.path),
                     title ?? original_title,
-                    s,
-                    torrent.id,
-                    accsArgs($"{host}/lite/pidtor/s{id}?{tr}&tsid={torrent.id}") + (ModInit.conf.gst ? "&.m3u8" : ""),
+                    (nextgen && !anime ? PidTorPlayerSearch.EpisodeSeason(s, display_s, original_title) : s).ToString(),
+                    matched.episode.ToString(),
+                    accsArgs($"{host}/lite/pidtor/s{id}?{tr}&tsid={torrent.id}") + (nextgen ? "&direct=true" : (ProfileGst.Allowed(requestInfo?.user_uid) ? "&.m3u8" : "")),
                     hls_manifest_timeout: (int)TimeSpan.FromSeconds(60).TotalMilliseconds
                 );
             }
@@ -475,7 +811,7 @@ public class PiTor : BaseOnlineController
 
     [HttpGet]
     [Route("lite/pidtor/s{id}")]
-    async public Task<ActionResult> Stream(string id, short tsid = -1)
+    async public Task<ActionResult> Stream(string id, short tsid = -1, int audio = -1, bool direct = false)
     {
         var init = ModInit.conf;
         if (!init.enable)
@@ -488,7 +824,30 @@ public class PiTor : BaseOnlineController
             return Json(new { accsdb = true, msg = "Временно недоступен, попробуйте через несколько часов" });
 
         short index = tsid != -1 ? tsid : (short)1;
-        string magnet = $"magnet:?xt=urn:btih:{id}&" + Regex.Replace(HttpContext.Request.QueryString.Value.Remove(0, 1), "&(account_email|uid|token|nws_id|tsid)=[^&]+", "").Replace("&.m3u8", "");
+        string trackerQuery = TorrentTrackerFallback.EnsureQuery(Regex.Replace(HttpContext.Request.QueryString.Value.Remove(0, 1), "&(account_email|uid|token|nws_id|tsid|audio|direct)=[^&]+", "").Replace("&.m3u8", ""));
+        string magnet = $"magnet:?xt=urn:btih:{id}&{trackerQuery}";
+        string gstAudio = audio >= 0 ? $"&audio={audio}" : string.Empty;
+
+        #region preload
+        // Штатная предзагрузка TorrServer: /stream?...&preload. Наполняет буфер
+        // (начало файла + последние 5 МБ, из которых MKV читает cues) и держит
+        // раздачу живой, пока плеер поднимается. Запрос уходит в фон и не ждётся:
+        // TorrServer продолжает качать после обрыва клиента (проверено 143/146).
+        void preload(string ts, string link, IReadOnlyList<HeadersModel> headers)
+        {
+            int mb = ModInit.preload;
+            if (mb <= 0 || string.IsNullOrEmpty(ts) || string.IsNullOrEmpty(link))
+                return;
+
+            string target = $"{ts.TrimEnd('/')}/stream?link={HttpUtility.UrlEncode(link)}&index={index}&preload={mb}";
+
+            _ = Task.Run(async () =>
+            {
+                try { await Http.Get(target, timeoutSeconds: 2, headers: headers).ConfigureAwait(false); }
+                catch { }
+            });
+        }
+        #endregion
 
         #region auth_stream
         async Task<ActionResult> auth_stream(string host, string login, string passwd, bool aes, string uhost = null, Dictionary<string, string> addheaders = null)
@@ -541,14 +900,16 @@ public class PiTor : BaseOnlineController
                 memoryCache.Set(memKey, hash, DateTime.Now.AddMinutes(1));
             }
 
+            preload(host, hash, HeadersModel.Init(addheaders, ("Authorization", $"Basic {CrypTo.Base64($"{login}:{passwd}")}")));
+
             if (aes)
             {
                 string payload = aesRequest(login, passwd, $"{uhost ?? host}/stream?link={hash}&index={index}&play");
                 return Redirect($"{uhost ?? host}/{payload}");
             }
 
-            if (ModInit.conf.gst)
-                return Redirect($"{uhost ?? host}/gst/{hash}/master.m3u8?index={index}");
+            if (ProfileGst.Allowed(requestInfo?.user_uid) && !direct)
+                return Redirect($"{uhost ?? host}/gst/{hash}/master.m3u8?index={index}{gstAudio}");
 
             return Redirect($"{uhost ?? host}/stream?link={hash}&index={index}&play");
         }
@@ -564,8 +925,10 @@ public class PiTor : BaseOnlineController
                 return await auth_stream($"http://{CoreInit.conf.listen.localhost}:{ModInit.tsport}", "ts", passwd, false, uhost: $"{host}/ts");
             }
 
-            if (ModInit.conf.gst)
-                return Redirect($"{host}/ts/gst/{id}/master.m3u8?index={index}");
+            preload($"http://{CoreInit.conf.listen.localhost}:{ModInit.tsport}", magnet, null);
+
+            if (ProfileGst.Allowed(requestInfo?.user_uid) && !direct)
+                return Redirect($"{host}/ts/gst/{id}/master.m3u8?index={index}{gstAudio}");
 
             return Redirect($"{host}/ts/stream?link={HttpUtility.UrlEncode(magnet)}&index={index}&play");
         }
@@ -608,13 +971,91 @@ public class PiTor : BaseOnlineController
                 memoryCache.Set(key, tshost, DateTime.Now.AddHours(4));
             }
 
-            if (ModInit.conf.gst)
-                return Redirect($"{tshost}/gst/{id}/master.m3u8?index={index}");
+            preload(tshost, magnet, null);
+
+            if (ProfileGst.Allowed(requestInfo?.user_uid) && !direct)
+                return Redirect($"{tshost}/gst/{id}/master.m3u8?index={index}{gstAudio}");
 
             return Redirect($"{tshost}/stream?link={HttpUtility.UrlEncode(magnet)}&index={index}&play");
         }
     }
 
+
+    static string DetectQuality(string title, Result torrent)
+    {
+        int width = torrent?.ffprobe?
+            .Where(i => string.Equals(i.codec_type, "video", StringComparison.OrdinalIgnoreCase))
+            .Select(i => i.width ?? 0)
+            .DefaultIfEmpty(0)
+            .Max() ?? 0;
+
+        int height = torrent?.ffprobe?
+            .Where(i => string.Equals(i.codec_type, "video", StringComparison.OrdinalIgnoreCase))
+            .Select(i => i.height ?? 0)
+            .DefaultIfEmpty(0)
+            .Max() ?? 0;
+
+        if (height <= 0)
+            height = torrent?.info?.quality ?? 0;
+
+        if (width >= 3000 || height >= 1800) return "2160p";
+        if (width >= 2400 || height >= 1300) return "1440p";
+        if (height >= 900) return "1080p";
+        if (height >= 650) return "720p";
+        if (height >= 540) return "576p";
+        if (height >= 440) return "480p";
+
+        Match match = Regex.Match(title ?? string.Empty, @"(?<!\d)(2160|1440|1080|720|576|480)p(?!\d)", RegexOptions.IgnoreCase);
+        if (match.Success)
+            return match.Groups[1].Value + "p";
+
+        return Regex.IsMatch(title ?? string.Empty, @"(?:^|[^\p{L}\p{N}])(4k|uhd)(?:[^\p{L}\p{N}]|$)", RegexOptions.IgnoreCase)
+            ? "2160p"
+            : "SD";
+    }
+
+    static bool MatchesAnyAlias(string title, IEnumerable<string> aliases)
+    {
+        string normalizedTitle = NormalizeTitle(title);
+        if (normalizedTitle.Length == 0 || aliases == null)
+            return false;
+
+        foreach (string alias in aliases)
+        {
+            string normalizedAlias = NormalizeTitle(alias);
+            if (normalizedAlias.Length >= 4
+                && (normalizedTitle.Contains(normalizedAlias, StringComparison.Ordinal)
+                    || normalizedAlias.Contains(normalizedTitle, StringComparison.Ordinal)))
+                return true;
+        }
+
+        return false;
+    }
+
+    static string NormalizeTitle(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        value = value.Normalize(NormalizationForm.FormKC).ToLowerInvariant();
+        return Regex.Replace(value, @"[^\p{L}\p{N}]+", string.Empty);
+    }
+
+    static string BuildContextArgs(AnimeResolveRequest request, bool isAnime)
+    {
+        var args = new StringBuilder();
+        if (request.id > 0) args.Append("&id=").Append(request.id);
+        if (request.tmdb_id > 0) args.Append("&tmdb_id=").Append(request.tmdb_id);
+        if (request.kinopoisk_id > 0) args.Append("&kinopoisk_id=").Append(request.kinopoisk_id);
+        if (!string.IsNullOrWhiteSpace(request.imdb_id)) args.Append("&imdb_id=").Append(HttpUtility.UrlEncode(request.imdb_id));
+        if (!string.IsNullOrWhiteSpace(request.source)) args.Append("&source=").Append(HttpUtility.UrlEncode(request.source));
+        if (!string.IsNullOrWhiteSpace(request.season_title)) args.Append("&season_title=").Append(HttpUtility.UrlEncode(request.season_title));
+        if (request.season_year > 0) args.Append("&season_year=").Append(request.season_year);
+        if (request.season_episodes > 0) args.Append("&season_episodes=").Append(request.season_episodes);
+        if (!string.IsNullOrWhiteSpace(request.genres)) args.Append("&genres=").Append(HttpUtility.UrlEncode(request.genres));
+        if (isAnime) args.Append("&anime=true");
+        return args.ToString();
+    }
 
     #region Matrix.API - onlyAes authorization
     static readonly ConcurrentDictionary<string, (byte[] Key, byte[] IV)> aesKeys = new();
@@ -629,7 +1070,7 @@ public class PiTor : BaseOnlineController
     {
         try
         {
-            using (var jsonBuff = new BufferWriterPool<byte>(BufferWriterPoolType.Tiny))
+            using (var jsonBuff = new BufferWriterPool<byte>())
             {
                 using (var writer = new Utf8JsonWriter(jsonBuff, _jsonWriterOptions))
                 {
