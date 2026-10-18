@@ -39,11 +39,13 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     void updateConf()
     {
-        conf = ModuleInvoke.Init("Kinotochka", new OnlinesSettings("Kinotochka", "https://kinovibe.cc")
+        conf = ModuleInvoke.Init("Kinotochka", new OnlinesSettings("Kinotochka", "https://kinovibe.vip")
         {
             displayindex = 590,
             httpversion = 2,
+            rch_access = "apk,cors",
             stream_access = "apk,cors",
+            rchstreamproxy = "web"
         });
     }
 

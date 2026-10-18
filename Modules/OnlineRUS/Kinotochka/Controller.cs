@@ -37,7 +37,7 @@ public class KinotochkaController : BaseOnlineController
         if (string.IsNullOrWhiteSpace(title))
             return OnError();
 
-        if (await IsRequestBlocked(rch: false))
+        if (await IsRequestBlocked(rch: true))
             return badInitMsg;
 
         // enable 720p
@@ -150,7 +150,7 @@ public class KinotochkaController : BaseOnlineController
                 #region Серии
             rhubFallback:
 
-                var cache = await InvokeCacheResult<List<Episode>>($"kinotochka:playlist:v2:{newsuri}", 30, textJson: true, onget: async e =>
+                var cache = await InvokeCacheResult<List<Episode>>($"kinotochka:playlist:{newsuri}", 30, textJson: true, onget: async e =>
                 {
                     string filetxt = null;
 
@@ -176,14 +176,7 @@ public class KinotochkaController : BaseOnlineController
                             if (pl.file.Contains("].mp4"))
                                 pl.file = Regex.Replace(pl.file, "\\[[^\\]]+,([0-9]+)\\]\\.mp4$", "$1.mp4");
 
-                            string voice = Regex.Match(pl.comment, "\\[([^\\]]+)\\]").Groups[1].Value.Trim();
-                            if (string.IsNullOrEmpty(voice))
-                                voice = Regex.Match(pl.comment, "<br\\s*/?>\\s*([^<]+)", RegexOptions.IgnoreCase).Groups[1].Value.Trim();
-                            if (string.IsNullOrEmpty(voice))
-                                voice = "Kinotochka";
-
-                            string episode = Regex.Replace(pl.comment, "<br\\s*/?>.*$", string.Empty, RegexOptions.IgnoreCase).Trim();
-                            links.Add(new(episode, pl.file, voice));
+                            links.Add(new(pl.comment.Split("<")[0].Trim(), pl.file));
                         }
                     }
 
@@ -200,22 +193,7 @@ public class KinotochkaController : BaseOnlineController
                 {
                     var etpl = new EpisodeTpl(cache.Value.Count);
 
-                    string selectedVoice = voiceNames.FirstOrDefault(i => string.Equals(i, t, StringComparison.OrdinalIgnoreCase))
-                        ?? voiceNames.FirstOrDefault();
-
-                    var vtpl = new VoiceTpl(voiceNames.Count);
-                    foreach (string voice in voiceNames)
-                    {
-                        vtpl.Append(
-                            voice,
-                            string.Equals(voice, selectedVoice, StringComparison.OrdinalIgnoreCase),
-                            $"{host}/lite/kinotochka?rjson={rjson}&kinopoisk_id={kinopoisk_id}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(original_title)}&serial={serial}&s={s}&newsuri={HttpUtility.UrlEncode(newsuri)}&t={HttpUtility.UrlEncode(voice)}"
-                        );
-                    }
-
-                    var etpl = new EpisodeTpl(vtpl, cache.Value.Count);
-
-                    foreach (var l in cache.Value.Where(i => string.Equals(i.voice, selectedVoice, StringComparison.OrdinalIgnoreCase)))
+                    foreach (var l in cache.Value)
                     {
                         etpl.Append(
                             l.comment,
@@ -223,7 +201,6 @@ public class KinotochkaController : BaseOnlineController
                             s,
                             Regex.Match(l.comment, "^([0-9]+)").Groups[1].Value,
                             HostStreamProxy(l.file),
-                            voice_name: selectedVoice,
                             vast: init.vast
                         );
                     }
@@ -280,7 +257,6 @@ public class KinotochkaController : BaseOnlineController
                 mtpl.Append(
                     "По умолчанию",
                     HostStreamProxy(cache.Value.content),
-                    voice_name: "Kinotochka",
                     vast: init.vast
                 );
 

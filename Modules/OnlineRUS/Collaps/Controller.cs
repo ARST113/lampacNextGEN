@@ -3,10 +3,7 @@ using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.Models.Templates;
-using Shared.Services;
-using System;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -35,8 +32,7 @@ public class CollapsController : BaseOnlineController<ModuleConf>
                httpHydra,
                init.host,
                init.dash,
-               onstreamtofile => HostStreamProxy(Encoder.Uri(onstreamtofile)),
-               (onstreamtofile, audio) => accsArgs($"{host}/lite/collaps/video.m3u8?id={EncryptQuery(onstreamtofile)}&audio={audio}")
+               onstreamtofile => HostStreamProxy(Encoder.Uri(onstreamtofile))
             );
         };
     }
@@ -68,7 +64,6 @@ public class CollapsController : BaseOnlineController<ModuleConf>
             title,
             original_title,
             s,
-            t,
             vast: init.vast,
             rjson: rjson,
             headers: init.streamproxy ? null : httpHeaders(init.host, init.headers_stream)

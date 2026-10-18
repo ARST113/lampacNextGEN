@@ -16,8 +16,6 @@ public class MovieModel
     public List<ApiModel> links { get; set; }
 
     public string subtitlehtml { get; set; }
-
-    public string proxy { get; set; }
 }
 
 public class SearchModel
