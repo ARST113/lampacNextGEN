@@ -6,6 +6,9 @@
     "Model.cs",
     "ModInit.cs",
     "ModuleConf.cs",
-    "Service.cs"
+    "Service.cs",
+    "ZetflixBorth.cs",
+    "ZetflixGuard.cs",
+    "ZetflixWsSession.cs"
   ]
 }

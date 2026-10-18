@@ -1,1905 +1,1187 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Playwright;
+using Shared.Attributes;
 using Shared;
 using Shared.Models.Base;
 using Shared.Models.Templates;
-using Shared.PlaywrightCore;
 using Shared.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
-using System.Text;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
+using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web;
+using Shared.Services.Pools;
 
-namespace Zetflix
+namespace Zetflix;
+
+public class ZetflixController : BaseOnlineController<ModuleConf>
 {
-    public class ZetflixController : BaseOnlineController<ModuleConf>
+    static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
+
+    List<HeadersModel> bearer;
+
+    public ZetflixController() : base(ModInit.conf)
     {
-        public ZetflixController() : base(ModInit.conf) { }
-
-        static string PHPSESSID = null;
-
-        sealed class LiveMovieSource
+        requestInitialization += () =>
         {
-            public string title { get; set; }
-            public Dictionary<int, string> qualitys { get; set; }
-            public List<HeadersModel> headers { get; set; }
+            if (init.httpversion == 2)
+                httpHydra.RegisterHttp(http2Client);
+
+            bearer = HeadersModel.Init(
+                ("Authorization", $"Bearer {init.token}"),
+                ("Accept", "application/json")
+            );
+        };
+
+        loadKitInitialization = (j, i, c) =>
+        {
+            if (j.ContainsKey("m4s"))
+                i.m4s = c.m4s;
+
+            if (j.ContainsKey("reserve"))
+                i.reserve = c.reserve;
+
+            i.secret_token = c.secret_token;
+            i.token = c.token;
+
+            return i;
+        };
+    }
+
+    [HttpGet, Staticache(manually: true)]
+    [Route("lite/zetflix")]
+    async public Task<ActionResult> Index(string orid, string imdb_id, long kinopoisk_id, string title, string original_title, byte serial, string original_language, short year, int t = -1, short s = -1, bool rjson = false, bool similar = false)
+    {
+        if (string.IsNullOrEmpty(orid))
+        {
+            if (similar || (0 >= kinopoisk_id && string.IsNullOrEmpty(imdb_id)))
+                return await RouteToSpiderSearch(title);
         }
 
-        [HttpGet]
-        [Route("lite/zetflix")]
-        public async Task<ActionResult> Index(bool checksearch, long id, int serial, long kinopoisk_id, string title, string original_title, string t, int s = -1, bool orightml = false, bool origsource = false, bool rjson = false)
+        if (await IsRequestBlocked(rch: !string.IsNullOrEmpty(init.secret_token)))
+            return badInitMsg;
+
+        #region search
+    rhubFallback:
+
+        string memKey = string.IsNullOrEmpty(orid)
+            ? $"zetflix:search:{imdb_id}:{kinopoisk_id}"
+            : $"zetflix:search:{orid}";
+
+        var cache = await InvokeCacheResult<ContentRoot>(memKey, TimeSpan.FromHours(4), async e =>
         {
-            if (kinopoisk_id == 0)
-                return OnError();
+            ContentRoot root = !string.IsNullOrEmpty(orid)
+                ? await httpHydra.Get<ContentRoot>($"{init.apihost}/movies/token/{orid}", safety: true, newheaders: bearer)
+                : await httpHydra.Get<ContentRoot>($"{init.apihost}/movies/search?imdb={imdb_id}&kp={kinopoisk_id}", safety: true, newheaders: bearer);
 
-            if (checksearch)
+            if (root?.data?.category?.slug != null)
+                return e.Success(root);
+
+            return e.Fail("root", refresh_proxy: true);
+        });
+
+        if (IsRhubFallback(cache))
+            goto rhubFallback;
+
+        if (!cache.IsSuccess)
+            return OnError(cache.ErrorMsg);
+        #endregion
+
+        MediaItem data = cache.Value.data;
+        string defaultargs = $"&orid={orid}&imdb_id={imdb_id}&kinopoisk_id={kinopoisk_id}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(original_title)}&serial={serial}&year={year}&original_language={original_language}";
+
+        if (cache.Value.data.category.slug is "movie" or "anime")
+        {
+            #region Фильм
+            var mtpl = new MovieTpl(title, original_title);
+            bool directors_cut = data.flags.directors_cut;
+
+            foreach (var translation in data.translations)
             {
-                if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
-                    return OnError();
+                int trId = translation.id;
+                string link = $"{host}/lite/zetflix/video?t={trId}&token_movie={data.token}" + defaultargs;
+                string streamlink = accsArgs($"{link.Replace("/video", "/video.m3u8")}&play=true");
 
-                return Content("data-json=");
-            }
+                bool uhd = translation.uhd && init.m4s;
+                string quality = uhd ? "2160p" : translation.quality;
 
-            if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
-                return OnError();
-
-            if (await IsRequestBlocked(rch: false))
-                return badInitMsg;
-
-            string ztfhost = await goHost(init.host);
-            string log = $"{HttpContext.Request.Path.Value}\n\nstart init\n";
-
-            if (serial != 1)
-            {
-                var liveMovie = await CaptureLiveMovie(ztfhost, kinopoisk_id, s, title, original_title);
-                if (!liveMovie.IsEmpty)
+                if (directors_cut && trId == 66)
                 {
-                    if (origsource)
-                        return Content(liveMovie.ToJson(), "application/json; charset=utf-8");
-
-                    return ContentTpl(liveMovie);
+                    mtpl.Append(
+                        "Режиссерская версия",
+                        $"{link}&directors_cut=true",
+                        "call",
+                        $"{streamlink}&directors_cut=true",
+                        voice_name: quality,
+                        quality: uhd ? "2160p" : ""
+                    );
                 }
-            }
 
-            var oninvk = new ZetflixInvoke
-            (
-                host,
-                ztfhost,
-                init.hls,
-                (url, head) => httpHydra.Get(url, addheaders: head),
-                onstreamtofile => HostStreamProxy(onstreamtofile)
-            );
-
-            int rs = serial == 1 ? (s == -1 ? 1 : s) : s;
-
-            string html = await InvokeCache($"zetfix:view:{kinopoisk_id}:{rs}:{proxyManager?.CurrentProxyIp}", 20, async () =>
-            {
-                string uri = $"{ztfhost}/iplayer/videodb.php?kp={kinopoisk_id}" + (rs > 0 ? $"&season={rs}" : "");
-
-                var headers = HeadersModel.Init(
-                    Chromium.baseContextOptions.ExtraHTTPHeaders.ToDictionary(kv => kv.Key, kv => kv.Value),
-                    ("Referer", "https://www.google.com/")
+                mtpl.Append(
+                    translation.name,
+                    link,
+                    "call",
+                    streamlink,
+                    voice_name: quality,
+                    quality: uhd ? "2160p" : ""
                 );
+            }
 
-                string result = string.IsNullOrEmpty(PHPSESSID) ? null : await Http.Get(uri, proxy: proxy, cookie: $"PHPSESSID={PHPSESSID}", headers: headers);
-                if (result != null && !result.StartsWith("<script>(function"))
+            return ContentTpl(mtpl);
+            #endregion
+        }
+        else
+        {
+            #region Сериал
+            if (s == -1)
+            {
+                var tpl = new SeasonTpl(data.flags.uhd && init.m4s ? "2160p" : null);
+
+                foreach (var season in data.seasons.OrderBy(x => x.season))
                 {
-                    if (!result.Contains("new Playerjs"))
-                        return null;
-
-                    proxyManager?.Success();
-                    return result;
+                    tpl.Append(
+                        $"{season.season} сезон",
+                        $"{host}/lite/zetflix?rjson={rjson}&s={season.season}{defaultargs}",
+                        season.season.ToString()
+                    );
                 }
 
-                try
+                return ContentTpl(tpl);
+            }
+            else
+            {
+                #region Перевод
+                var vtpl = new VoiceTpl();
+                var temp_translation = new HashSet<int>();
+
+                int activTranslate = t;
+                var selectedSeason = data.seasons?.FirstOrDefault(x => x.season == s);
+                if (selectedSeason == null)
+                    return OnError("selectedSeason");
+
+                foreach (var episode in selectedSeason.episodes)
                 {
-                    using (var browser = new PlaywrightBrowser(init.priorityBrowser))
+                    foreach (var translation in episode.translations)
                     {
-                        log += "browser init\n";
-
-                        var page = await browser.NewPageAsync(init.plugin, new Dictionary<string, string>()
+                        if (translation?.id > 0)
                         {
-                            ["Referer"] = "https://www.google.com/"
-                        }, proxy: proxy_data, keepopen: init.browser_keepopen).ConfigureAwait(false);
-
-                        if (page == null)
-                            return null;
-
-                        if (init.browser_keepopen)
-                        {
-                            await page.Context.ClearCookiesAsync(new BrowserContextClearCookiesOptions
+                            if (temp_translation.Add(translation.id))
                             {
-                                Domain = Regex.Replace(ztfhost, "^https?://", ""),
-                                Name = "PHPSESSID"
-                            }).ConfigureAwait(false);
-                        }
+                                if (activTranslate == -1)
+                                    activTranslate = translation.id;
 
-                        log += "page init\n";
-
-                        await page.RouteAsync("**/*", async route =>
-                        {
-                            try
-                            {
-                                if (await PlaywrightBase.AbortOrCache(page, route, abortMedia: true, fullCacheJS: true))
-                                    return;
-
-                                await route.ContinueAsync();
+                                vtpl.Append(
+                                    translation.name,
+                                    activTranslate == translation.id,
+                                    $"{host}/lite/zetflix?rjson={rjson}&s={s}&t={translation.id}{defaultargs}"
+                                );
                             }
-                            catch { }
-                        });
-
-                        await page.GotoAsync(uri, new PageGotoOptions()
-                        {
-                            Timeout = 10_000,
-                            WaitUntil = WaitUntilState.DOMContentLoaded
-                        }).ConfigureAwait(false);
-
-                        for (int attempt = 0; attempt < 12; attempt++)
-                        {
-                            result = await page.ContentAsync().ConfigureAwait(false);
-                            if (result?.Contains("new Playerjs") == true || result?.StartsWith("<script>(function") == true)
-                                break;
-
-                            await Task.Delay(125).ConfigureAwait(false);
                         }
-
-                        log += $"{result}\n\n";
-
-                        if (result == null || result.StartsWith("<script>(function"))
-                        {
-                            proxyManager?.Refresh();
-                            return null;
-                        }
-
-                        var cook = await page.Context.CookiesAsync().ConfigureAwait(false);
-                        PHPSESSID = cook?.FirstOrDefault(i => i.Name == "PHPSESSID")?.Value;
-
-                        if (!result.Contains("new Playerjs"))
-                            return null;
-
-                        return result;
                     }
                 }
-                catch (Exception ex)
+                #endregion
+
+                var etpl = new EpisodeTpl(vtpl);
+
+                foreach (var episode in selectedSeason.episodes)
                 {
-                    log += $"\nex: {ex}\n";
-                    return null;
+                    if (episode.translations != null && !episode.translations.Any(x => x.id == activTranslate))
+                        continue;
+
+                    string episodeNum = episode.episode.ToString();
+                    string link = $"{host}/lite/zetflix/video?t={activTranslate}&s={s}&e={episodeNum}&token_movie={data.token}" + defaultargs;
+
+                    etpl.Append(
+                        $"{episodeNum} серия",
+                        title ?? original_title,
+                        s,
+                        episodeNum,
+                        link,
+                        "call",
+                        streamlink: accsArgs($"{link.Replace("/video", "/video.m3u8")}&play=true")
+                    );
                 }
+
+                return ContentTpl(etpl);
+            }
+            #endregion
+        }
+    }
+
+
+    #region Video
+    [HttpGet]
+    [Route("lite/zetflix/video")]
+    [Route("lite/zetflix/video.m3u8")]
+    async public Task<ActionResult> Video(string token_movie, string title, string original_title, string t, int s, short e, bool play, bool directors_cut, long kinopoisk_id = 0, string imdb_id = null)
+    {
+        if (await IsRequestBlocked(rch: !string.IsNullOrEmpty(init.secret_token), rch_check: !play))
+            return badInitMsg;
+
+        var cache = await InvokeCacheResult<DirectData>($"zetflix:view:stream:{init.secret_token}:{init.token}:{token_movie}:{t}:{s}:{e}:{init.m4s}:{directors_cut}", 20, async cacheEntry =>
+        {
+            DirectData data = await ResolveStreamData(token_movie, t, s, e, directors_cut, kinopoisk_id, imdb_id);
+
+            if (data == null)
+                return cacheEntry.Fail("data", refresh_proxy: true);
+
+            return cacheEntry.Success(data);
+        });
+
+        if (!cache.IsSuccess)
+            return OnError(cache.ErrorMsg);
+
+        var data = cache.Value;
+
+        #region subtitle
+        var subtitles = new SubtitleTpl();
+
+        foreach (var sub in data.file?.tracks ?? new List<Track>())
+            subtitles.Append(sub.label, sub.src);
+        #endregion
+
+        List<StreamQualityDto> streams = null;
+
+        string liveCtx = LiveCtx(token_movie, t, s, e, directors_cut, kinopoisk_id, imdb_id);
+
+        foreach (var hlsSource in data.file?.hlsSource ?? new List<HlsSource>())
+        {
+            // first or default
+            if (streams == null || hlsSource.@default)
+            {
+                streams = new List<StreamQualityDto>(6);
+
+                foreach (var q in hlsSource.quality ?? new Dictionary<string, string>())
+                {
+                    string file = q.Value;
+                    if (init.reserve && hlsSource.reserve != null && hlsSource.reserve.TryGetValue(q.Key, out string reserve))
+                        file += " or " + reserve;
+
+                    // Ссылку площадки не «запекаем» в прокси-линк: плеер ходит в наш маршрут,
+                    // который заново авторизуется на площадке на каждый запрос (#region Живой поток).
+                    // Иначе подпись/краевой токен протухают через несколько минут и всё начинает отдавать 403.
+                    string live = accsArgs($"{host}/lite/zetflix/stream?k=p&q={HttpUtility.UrlEncode(q.Key)}&lvl=-1&u={UriB64(file)}{liveCtx}");
+                    streams.Add(new StreamQualityDto(live, $"{q.Key}p"));
+                }
+            }
+        }
+
+        // 2160/1440 площадка отдаёт только в AV1 (CODECS=av01) — на устройствах без AV1 это чёрный экран.
+        // Если AV1 не запрошен (m4s=false), отправляем эти качества в конец: по умолчанию играет H.264 1080p.
+        if (!init.m4s && streams != null && streams.Count > 1)
+            streams = streams.OrderBy(x => x.quality is "2160p" or "1440p" ? 1 : 0).ToList();
+
+        if (streams == null || streams.Count == 0)
+            return OnError("streams");
+
+        var streamquality = new StreamQualityTpl(streams);
+
+        var first = streamquality.Firts();
+        if (first == null)
+            return OnError();
+
+        if (play)
+            return RedirectToPlay(first.link);
+
+        #region segments
+        var segments = new SegmentTpl();
+
+        var dfile = data.file;
+        string skipTime = dfile?.skipTime;
+        string removeTime = dfile?.removeTime;
+
+        if (skipTime != null && skipTime.Contains("-"))
+        {
+            foreach (string skp in skipTime.Split(","))
+            {
+                var range = skp.Trim().Split('-');
+                if (range.Length >= 2 && int.TryParse(range[0].Trim(), out int start) && int.TryParse(range[1].Trim(), out int end))
+                    segments.skip(start, end);
+            }
+        }
+
+        if (removeTime != null && removeTime.Contains("-"))
+        {
+            foreach (string skp in removeTime.Split(","))
+            {
+                var range = skp.Trim().Split('-');
+                if (range.Length >= 2 && int.TryParse(range[0].Trim(), out int start) && int.TryParse(range[1].Trim(), out int end))
+                    segments.ad(start, end);
+            }
+        }
+        #endregion
+
+        return ContentTo(VideoTpl.ToJson(
+            "play",
+            first.link,
+            (title ?? original_title),
+            streamquality: streamquality,
+            vast: init.vast,
+            subtitles: subtitles,
+            segments: segments,
+            httpContext: HttpContext
+        ));
+    }
+    #endregion
+
+    #region Живой поток (самообновляемые ссылки)
+    string LiveOrigin()
+        => string.IsNullOrEmpty(init.linkhost) ? "https://tories-as.stloadi.live" : init.linkhost.TrimEnd('/');
+
+    string LiveCtx(string token_movie, string t, int s, short e, bool directors_cut, long kinopoisk_id, string imdb_id)
+    {
+        var ctx = new System.Text.StringBuilder();
+
+        ctx.Append($"&tm={HttpUtility.UrlEncode(token_movie)}&t={HttpUtility.UrlEncode(t)}&s={s}&e={e}");
+
+        if (directors_cut)
+            ctx.Append("&dc=1");
+
+        if (kinopoisk_id > 0)
+            ctx.Append($"&kp={kinopoisk_id}");
+
+        if (!string.IsNullOrEmpty(imdb_id))
+            ctx.Append($"&im={HttpUtility.UrlEncode(imdb_id)}");
+
+        return ctx.ToString();
+    }
+
+    List<HeadersModel> LiveHeaders(string edgeHash)
+    {
+        string origin = LiveOrigin();
+
+        var headers = HeadersModel.Init(
+            ("Origin", origin),
+            ("Referer", origin + "/"),
+            ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+        );
+
+        if (!string.IsNullOrEmpty(edgeHash))
+            headers.Add(new HeadersModel("Accepts-Controls", edgeHash));
+
+        return headers;
+    }
+
+    async Task<string> LiveEdgeHash()
+    {
+        string edge = await ZetflixGuard.ForHost(LiveOrigin()).GetTokenAsync();
+
+        if (string.IsNullOrEmpty(edge))
+            edge = ZetflixSessionManager.GetGlobalEdgeHash();
+
+        return edge;
+    }
+
+    async Task<string> LiveFetchPlaylist(string url, string edgeHash, string cacheKey = null)
+    {
+        if (string.IsNullOrEmpty(url))
+            return null;
+
+        // мастер-плейлист меняется редко — не дёргаем площадку на каждый запрос плеера
+        if (!string.IsNullOrEmpty(cacheKey))
+        {
+            var cached = await InvokeCacheResult<string>($"zetflix:live:pl:{cacheKey}", TimeSpan.FromSeconds(45), async cacheEntry =>
+            {
+                string text2 = await LiveFetchPlaylist(url, edgeHash, null);
+
+                if (string.IsNullOrEmpty(text2))
+                    return cacheEntry.Fail("pl");
+
+                return cacheEntry.Success(text2);
             });
 
-            if (html == null)
-            {
-                if (serial == 1)
-                {
-                    if (s == -1 && id > 0)
-                    {
-                        int seasonCount = await GetTmdbAvailableSeasonCount(id);
-
-                        var seedSerial = BuildSyntheticSerialEmbed(1, "Озвучка");
-                        if (seasonCount > 0 && seedSerial?.pl?.Count > 0 && !seedSerial.movie)
-                        {
-                            if (origsource)
-                                return Json(seedSerial);
-
-                            return ContentTpl(oninvk.Tpl(seedSerial, seasonCount, id, kinopoisk_id, title, original_title, t, s, vast: init.vast));
-                        }
-                    }
-
-                    if (rs > 0)
-                    {
-                        var fallbackSerial = await CaptureBestSerialFallback(ztfhost, id, kinopoisk_id, rs, retry: true);
-                        if (fallbackSerial?.pl?.Count > 0 && !fallbackSerial.movie)
-                        {
-                            if (origsource)
-                                return Json(fallbackSerial);
-
-                            return ContentTpl(oninvk.Tpl(fallbackSerial, 1, id, kinopoisk_id, title, original_title, t, s, vast: init.vast));
-                        }
-                    }
-
-                    return OnError();
-                }
-
-                var liveMovie = await CaptureLiveMovie(ztfhost, kinopoisk_id, rs, title, original_title);
-                if (!liveMovie.IsEmpty)
-                {
-                    if (origsource)
-                        return Content(liveMovie.ToJson(), "application/json; charset=utf-8");
-
-                    return ContentTpl(liveMovie);
-                }
-
-                return OnError();
-            }
-
-            if (orightml)
-                return Content(html, "text/plain; charset=utf-8");
-
-            var content = oninvk.Embed(html);
-
-            if (serial == 1 && s == -1 && NeedSyntheticSeasonList(content, id))
-            {
-                int seasonCount = await GetTmdbAvailableSeasonCount(id);
-                var seedSerial = BuildSyntheticSerialEmbed(1, "Озвучка");
-                if (seasonCount > 0 && seedSerial?.pl?.Count > 0 && !seedSerial.movie)
-                {
-                    if (origsource)
-                        return Json(seedSerial);
-
-                    return ContentTpl(oninvk.Tpl(seedSerial, seasonCount, id, kinopoisk_id, title, original_title, t, s, vast: init.vast));
-                }
-            }
-
-            if (serial == 1 && NeedLiveSerialFallback(content))
-            {
-                var fallbackSerial = await CaptureBestSerialFallback(ztfhost, id, kinopoisk_id, rs, retry: true);
-                if (fallbackSerial?.pl?.Count > 0 && !fallbackSerial.movie)
-                    content = fallbackSerial;
-            }
-
-            if (serial != 1 && ((content?.movie == true && NeedLiveMovieFallback(content)) || content?.pl == null))
-            {
-                var liveMovie = await CaptureLiveMovie(ztfhost, kinopoisk_id, rs, title, original_title);
-                if (!liveMovie.IsEmpty)
-                {
-                    if (origsource)
-                        return Content(liveMovie.ToJson(), "application/json; charset=utf-8");
-
-                    return ContentTpl(liveMovie);
-                }
-            }
-
-            if (content?.pl == null)
-                return OnError();
-
-            if (origsource)
-                return Json(content);
-
-            int number_of_seasons = 1;
-            if (!content.movie && s == -1)
-            {
-                number_of_seasons = await InvokeCache($"zetfix:number_of_seasons:v7:{kinopoisk_id}:{id}", 1800, async () =>
-                {
-                    if (id > 0)
-                    {
-                        int tmdbSeasons = await oninvk.number_of_seasons(id);
-                        if (tmdbSeasons > 1)
-                            return tmdbSeasons;
-                    }
-
-                    return await NumberOfSeasons(kinopoisk_id, id, title, original_title, HttpContext.Request.Query["uid"].ToString());
-                });
-            }
-
-            return ContentTpl(oninvk.Tpl(content, number_of_seasons, id, kinopoisk_id, title, original_title, t, s, vast: init.vast));
+            return cached.IsSuccess ? cached.Value : null;
         }
 
-        async ValueTask<int> NumberOfSeasons(long kinopoisk_id, long id, string title, string original_title, string uid)
+        foreach (string candidate in url.Split(" or ", StringSplitOptions.RemoveEmptyEntries))
         {
-            int detected = 0;
-            string encTitle = HttpUtility.UrlEncode(title ?? string.Empty);
-            string encOriginalTitle = HttpUtility.UrlEncode(original_title ?? string.Empty);
-            string encUid = HttpUtility.UrlEncode(uid ?? string.Empty);
+            // площадка отдаёт манифесты только «своему» выходному IP, поэтому идём через прокси модуля
+            string text = await LiveFetchText(candidate.Trim(), edgeHash);
 
-            for (int season = 1; season <= 20; season++)
+            // смешивать выходы нельзя: ссылка, выданная одному IP, у другого отдаёт 403
+            if (string.IsNullOrEmpty(text) && liveUseProxy)
+                text = await httpHydra.Get(candidate.Trim(), safety: true, addheaders: LiveHeaders(edgeHash));
+
+            if (!string.IsNullOrEmpty(text) && text.Contains("#EXTM3U"))
+                return text;
+        }
+
+        return null;
+    }
+
+    HttpClient LiveHttp()
+    {
+        if (_liveHttp != null)
+            return _liveHttp;
+
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.All
+        };
+
+        try
+        {
+            if (liveUseProxy && init.useproxy && init.proxy?.list != null && init.proxy.list.Length > 0)
+                handler.Proxy = ProxyManager.ConfigureWebProxy(init.proxy, init.proxy.list.First()).proxy;
+        }
+        catch { }
+
+        _liveHttp = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+        return _liveHttp;
+    }
+    static HttpClient _liveHttp;
+
+    // площадка допускает и прямой выход сервера — важно лишь, чтобы манифест и сегменты шли с одного IP
+    static readonly bool liveUseProxy = true;
+
+    async Task<string> LiveFetchText(string url, string edgeHash)
+    {
+        // WARP-прокси площадки иногда отказывает на короткое время — пара повторов спасает поток
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+
+                foreach (var h in LiveHeaders(edgeHash))
+                    request.Headers.TryAddWithoutValidation(h.name, h.val);
+
+                using var response = await LiveHttp().SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                return await response.Content.ReadAsStringAsync();
+            }
+            catch
+            {
+                await Task.Delay(250);
+            }
+        }
+
+        return null;
+    }
+
+    static string UriB64(string value)
+        => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value ?? string.Empty)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    static string UriFromB64(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return null;
+
+        string s = value.Replace('-', '+').Replace('_', '/');
+
+        switch (s.Length % 4)
+        {
+            case 2: s += "=="; break;
+            case 3: s += "="; break;
+        }
+
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(s));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    static string AbsUri(string baseUrl, string uri)
+    {
+        if (string.IsNullOrEmpty(uri))
+            return null;
+
+        if (uri.StartsWith("http://") || uri.StartsWith("https://"))
+            return uri;
+
+        try
+        {
+            string baseOne = baseUrl;
+            int idx = baseOne.IndexOf(" or ", StringComparison.Ordinal);
+
+            if (idx > 0)
+                baseOne = baseOne.Substring(0, idx);
+
+            return Uri.TryCreate(new Uri(baseOne), uri, out Uri abs) ? abs.ToString() : uri;
+        }
+        catch
+        {
+            return uri;
+        }
+    }
+
+    // площадка умеет отдавать резервные зеркала через " or " — разбираем каждое отдельно
+    static string AbsUriList(string baseUrl, string uri)
+    {
+        if (string.IsNullOrEmpty(uri))
+            return null;
+
+        var parts = uri.Split(" or ", StringSplitOptions.RemoveEmptyEntries);
+
+        if (parts.Length < 2)
+            return AbsUri(baseUrl, uri.Trim());
+
+        var list = new List<string>(parts.Length);
+
+        foreach (string part in parts)
+            list.Add(AbsUri(baseUrl, part.Trim()));
+
+        return string.Join(" or ", list);
+    }
+
+    static List<string> PlaylistUris(string playlist)
+    {
+        var list = new List<string>();
+
+        if (string.IsNullOrEmpty(playlist))
+            return list;
+
+        foreach (string raw in playlist.Split('\n'))
+        {
+            string line = raw.Trim();
+
+            if (line.Length == 0 || line[0] == '#')
+                continue;
+
+            list.Add(line);
+        }
+
+        return list;
+    }
+
+    static string PlaylistMapUri(string playlist)
+    {
+        if (string.IsNullOrEmpty(playlist))
+            return null;
+
+        var m = System.Text.RegularExpressions.Regex.Match(playlist, @"#EXT-X-MAP:[^\n]*?URI=""([^""]+)""");
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    string LiveUrl(string kind, string q, int lvl, int i, string uri, string ctx)
+        => accsArgs($"{host}/lite/zetflix/stream?k={kind}&q={HttpUtility.UrlEncode(q)}&lvl={lvl}&i={i}&u={UriB64(uri)}{ctx}");
+
+    ActionResult LiveM3u8(string playlist)
+    {
+        if (string.IsNullOrEmpty(playlist))
+            return OnError("m3u8");
+
+        HttpContext.Response.Headers["Cache-Control"] = "no-store";
+        return Content(playlist, "application/vnd.apple.mpegurl");
+    }
+
+    // мастер-плейлист: варианты качества переписываем на наш маршрут
+    string LiveRewriteMaster(string playlist, string q, string ctx, string baseUrl)
+    {
+        var sb = new System.Text.StringBuilder(playlist.Length + 2048);
+        bool pending = false;
+        int lvl = 0;
+
+        foreach (string raw in playlist.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+
+            if (pending && line.Length > 0 && line[0] != '#')
+            {
+                sb.Append(LiveUrl("p", q, lvl, -1, AbsUriList(baseUrl, line.Trim()), ctx)).Append('\n');
+                lvl++;
+                pending = false;
+                continue;
+            }
+
+            if (line.StartsWith("#EXT-X-STREAM-INF"))
+                pending = true;
+
+            sb.Append(line).Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    // медиа-плейлист: сегменты и init-карту переписываем на наш маршрут
+    string LiveRewriteMedia(string playlist, string q, int lvl, string ctx, string baseUrl)
+    {
+        var sb = new System.Text.StringBuilder(playlist.Length + 4096);
+        int idx = 0;
+
+        foreach (string raw in playlist.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+
+            if (line.Length > 0 && line[0] != '#')
+            {
+                sb.Append(LiveUrl("v", q, lvl, idx, AbsUriList(baseUrl, line.Trim()), ctx)).Append('\n');
+                idx++;
+                continue;
+            }
+
+            if (line.StartsWith("#EXT-X-MAP"))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(line, @"URI=""([^""]+)""");
+
+                if (m.Success)
+                    line = line.Substring(0, m.Index) + "URI=\"" + LiveUrl("v", q, lvl, -1, AbsUriList(baseUrl, m.Groups[1].Value), ctx) + "\"" + line.Substring(m.Index + m.Length);
+            }
+            else if (line.StartsWith("#EXT-X-KEY") || line.StartsWith("#EXT-X-MEDIA") || line.StartsWith("#EXT-X-I-FRAME-STREAM-INF") || line.StartsWith("#EXT-X-PART") || line.StartsWith("#EXT-X-PRELOAD-HINT"))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(line, @"URI=""([^""]+)""");
+
+                if (m.Success)
+                    line = line.Substring(0, m.Index) + "URI=\"" + LiveUrl("r", q, lvl, -1, AbsUriList(baseUrl, m.Groups[1].Value), ctx) + "\"" + line.Substring(m.Index + m.Length);
+            }
+
+            sb.Append(line).Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    string LivePickQuality(DirectData data, string q)
+    {
+        HlsSource source = null;
+
+        foreach (var hlsSource in data?.file?.hlsSource ?? new List<HlsSource>())
+        {
+            if (hlsSource?.quality == null || hlsSource.quality.Count == 0)
+                continue;
+
+            if (source == null)
+                source = hlsSource;
+
+            if (hlsSource.@default)
+            {
+                source = hlsSource;
+                break;
+            }
+        }
+
+        if (source == null)
+            return null;
+
+        string url = null;
+
+        if (!string.IsNullOrEmpty(q))
+            source.quality.TryGetValue(q, out url);
+
+        if (string.IsNullOrEmpty(url))
+            url = source.quality.Values.FirstOrDefault();
+
+        if (string.IsNullOrEmpty(url))
+            return null;
+
+        if (init.reserve && source.reserve != null && !string.IsNullOrEmpty(q) && source.reserve.TryGetValue(q, out string reserve) && !string.IsNullOrEmpty(reserve))
+            url += " or " + reserve;
+
+        return url;
+    }
+
+    async Task<List<string>> LiveVariants(string master, string masterText, string q, string tm, string t, int s, short e)
+    {
+        var cache = await InvokeCacheResult<List<string>>($"zetflix:live:v:{init.token}:{tm}:{t}:{s}:{e}:{q}:{master.GetHashCode()}", TimeSpan.FromSeconds(20), async cacheEntry =>
+        {
+            var list = LiveAbsUris(master, masterText);
+
+            if (list.Count == 0)
+                return cacheEntry.Fail("variants");
+
+            return cacheEntry.Success(list);
+        });
+
+        return cache.IsSuccess ? cache.Value : LiveAbsUris(master, masterText);
+    }
+
+    // площадка отдаёт и относительные пути — приводим к абсолютным от базового плейлиста
+    static List<string> LiveAbsUris(string baseUrl, string playlist)
+    {
+        var list = new List<string>();
+
+        foreach (string uri in PlaylistUris(playlist))
+            list.Add(AbsUriList(baseUrl, uri));
+
+        return list;
+    }
+
+    async Task<LiveSegmentMap> LiveSegments(string variantUrl, string edgeHash, string q, int lvl, string tm, string t, int s, short e)
+    {
+        var cache = await InvokeCacheResult<LiveSegmentMap>($"zetflix:live:g:{init.token}:{tm}:{t}:{s}:{e}:{q}:{lvl}:{variantUrl.GetHashCode()}", TimeSpan.FromSeconds(20), async cacheEntry =>
+        {
+            string text = await LiveFetchPlaylist(variantUrl, edgeHash);
+
+            if (string.IsNullOrEmpty(text))
+                return cacheEntry.Fail("segments");
+
+            var segs = new LiveSegmentMap
+            {
+                map = AbsUriList(variantUrl, PlaylistMapUri(text)),
+                items = LiveAbsUris(variantUrl, text)
+            };
+
+            if (segs.items.Count == 0)
+                return cacheEntry.Fail("empty");
+
+            return cacheEntry.Success(segs);
+        });
+
+        return cache.IsSuccess ? cache.Value : null;
+    }
+
+    async Task<DirectData> ResolveStreamData(string token_movie, string t, int s, short e, bool directors_cut, long kinopoisk_id, string imdb_id)
+    {
+        DirectData data = null;
+
+        if (!string.IsNullOrEmpty(init.secret_token))
+        {
+            string userIp = requestInfo.IP;
+            if (init.localip || init.streamproxy)
+            {
+                userIp = await mylocalip();
+                if (userIp == null)
+                    return null;
+            }
+
+            #region url запроса
+            var uri = StringBuilderPool.ThreadInstance;
+
+            uri.Append($"{init.linkhost}/direct?secret_token={init.secret_token}&token_movie={token_movie}")
+               .Append($"&ip={userIp}&translation={t}");
+
+            if (s > 0)
+                uri.Append($"&season={s}");
+
+            if (e > 0)
+                uri.Append($"&episode={e}");
+
+            if (init.m4s)
+                uri.Append("&av1=true");
+
+            if (directors_cut)
+                uri.Append("&directors_cut");
+            #endregion
+
+            var root = await httpHydra.Get<DirectRoot>(uri.ToString(), safety: true);
+            if (root?.data?.file?.hlsSource != null && root.data.file.hlsSource.Count > 0)
+                data = root.data;
+        }
+
+        if (data == null)
+            data = await ResolveBnsiStream(token_movie, t, s, e, kinopoisk_id, imdb_id);
+
+        if (data?.file?.hlsSource == null || data.file.hlsSource.Count == 0)
+            return null;
+
+        return data;
+    }
+
+    [HttpGet, Route("lite/zetflix/stream")]
+    async public Task<ActionResult> Stream(string k, string q, int lvl = -1, int i = 0, string u = null,
+        string tm = null, string t = null, int s = 0, short e = 0, int dc = 0, long kp = 0, string im = null)
+    {
+        if (await IsRequestBlocked(rch: false))
+            return badInitMsg;
+
+        string edge = await LiveEdgeHash();
+        string ctx = LiveCtx(tm, t, s, e, dc != 0, kp, im);
+        string raw = UriFromB64(u);
+
+        // ключи шифрования и прочие одиночные ресурсы — отдаём свежий прокси-линк
+        if (k == "r")
+        {
+            if (string.IsNullOrEmpty(raw))
+                return OnError("raw");
+
+            if (await LiveStreamBytes(raw, edge))
+                return new EmptyResult();
+
+            return OnError("raw");
+        }
+
+        var cache = await InvokeCacheResult<DirectData>($"zetflix:live:stream:{init.token}:{tm}:{t}:{s}:{e}:{dc}:{init.m4s}", TimeSpan.FromSeconds(60), async cacheEntry =>
+        {
+            DirectData data = await ResolveStreamData(tm, t, s, e, dc != 0, kp, im);
+
+            if (data?.file?.hlsSource == null || data.file.hlsSource.Count == 0)
+                return cacheEntry.Fail("data");
+
+            return cacheEntry.Success(data);
+        });
+
+        string master = cache.IsSuccess ? LivePickQuality(cache.Value, q) : null;
+
+        // площадка не ответила — работаем с тем, что пришло от плеера
+        if (string.IsNullOrEmpty(master))
+        {
+            if (string.IsNullOrEmpty(raw))
+                return OnError(cache.IsSuccess ? "quality" : cache.ErrorMsg);
+
+            if (k != "p")
+            {
+                if (await LiveStreamBytes(raw, edge))
+                    return new EmptyResult();
+
+                return OnError("segment");
+            }
+
+            string stale = await LiveFetchPlaylist(raw, edge);
+            if (string.IsNullOrEmpty(stale))
+                return OnError("stale");
+
+            return stale.Contains("#EXT-X-STREAM-INF")
+                ? LiveM3u8(LiveRewriteMaster(stale, q, ctx, raw))
+                : LiveM3u8(LiveRewriteMedia(stale, q, lvl, ctx, raw));
+        }
+
+        string masterText = await LiveFetchPlaylist(master, edge, $"{init.token}:{tm}:{t}:{s}:{e}:{dc}:{q}:{master.GetHashCode()}");
+        if (string.IsNullOrEmpty(masterText))
+            return OnError("master");
+
+        #region мастер / вариант плейлиста
+        if (k == "p")
+        {
+            if (lvl < 0)
+            {
+                return masterText.Contains("#EXT-X-STREAM-INF")
+                    ? LiveM3u8(LiveRewriteMaster(masterText, q, ctx, master))
+                    : LiveM3u8(LiveRewriteMedia(masterText, q, 0, ctx, master));
+            }
+
+            var variants = await LiveVariants(master, masterText, q, tm, t, s, e);
+            if (variants == null || variants.Count <= lvl)
+                return OnError("variant");
+
+            string mediaText = await LiveFetchPlaylist(variants[lvl], edge);
+
+            if (string.IsNullOrEmpty(mediaText))
+            {
+                // у CDN площадки бывают протухшие ссылки в кэше — берём данные заново
+                var fresh = await ResolveStreamData(tm, t, s, e, dc != 0, kp, im);
+                string m2 = LivePickQuality(fresh, q);
+
+                if (!string.IsNullOrEmpty(m2))
+                {
+                    var v2 = LiveAbsUris(m2, await LiveFetchPlaylist(m2, edge));
+
+                    if (v2 != null && v2.Count > lvl)
+                        mediaText = await LiveFetchPlaylist(v2[lvl], edge);
+                }
+            }
+
+            if (string.IsNullOrEmpty(mediaText))
+                return OnError("media");
+
+            return LiveM3u8(LiveRewriteMedia(mediaText, q, lvl, ctx, variants[lvl]));
+        }
+        #endregion
+
+        #region сегмент
+        string variantUrl;
+
+        if (masterText.Contains("#EXT-X-STREAM-INF"))
+        {
+            var lvls = await LiveVariants(master, masterText, q, tm, t, s, e);
+            if (lvls == null || lvls.Count == 0)
+                return OnError("variants");
+
+            lvl = lvl >= 0 && lvl < lvls.Count ? lvl : 0;
+            variantUrl = lvls[lvl];
+        }
+        else
+        {
+            lvl = 0;
+            variantUrl = master;
+        }
+
+        var segs = await LiveSegments(variantUrl, edge, q, lvl, tm, t, s, e);
+        string segUrl = LiveSegmentUrl(segs, i) ?? raw;
+
+        if (!string.IsNullOrEmpty(segUrl) && await LiveStreamBytes(segUrl, edge))
+            return new EmptyResult();
+
+        // повторный резолв «с нуля»: у CDN площадки бывают протухшие ссылки в кэше
+        var freshSeg = await ResolveStreamData(tm, t, s, e, dc != 0, kp, im);
+        string masterFresh = LivePickQuality(freshSeg, q);
+
+        if (!string.IsNullOrEmpty(masterFresh))
+        {
+            string masterTextFresh = await LiveFetchPlaylist(masterFresh, edge);
+
+            if (!string.IsNullOrEmpty(masterTextFresh))
+            {
+                int lvlFresh = 0;
+                string variantFresh = masterFresh;
+
+                if (masterTextFresh.Contains("#EXT-X-STREAM-INF"))
+                {
+                    var lvls = LiveAbsUris(masterFresh, masterTextFresh);
+
+                    if (lvls.Count == 0)
+                        return OnError("variants");
+
+                    lvlFresh = lvl >= 0 && lvl < lvls.Count ? lvl : 0;
+                    variantFresh = lvls[lvlFresh];
+                }
+
+                var segsFresh = await LiveSegments(variantFresh, edge, q, lvlFresh, tm, t, s, e);
+                string segUrlFresh = LiveSegmentUrl(segsFresh, i);
+
+                if (!string.IsNullOrEmpty(segUrlFresh) && await LiveStreamBytes(segUrlFresh, edge))
+                    return new EmptyResult();
+            }
+        }
+
+        return OnError("segment");
+        #endregion
+    }
+    #endregion
+
+    // Сегменты отдаём сами: площадка привязывает их к тому же выходному IP, через который отдан плейлист,
+    // поэтому и плейлист, и сегменты должны идти через прокси модуля (Cloudflare WARP), а не через общий /proxy.
+    async Task<bool> LiveStreamBytes(string url, string edgeHash)
+    {
+        string range = HttpContext.Request.Headers["Range"].ToString();
+
+        foreach (string candidate in url.Split(" or ", StringSplitOptions.RemoveEmptyEntries))
+        {
+            for (int attempt = 0; attempt < 2; attempt++)
             {
                 try
                 {
-                    string uri = $"http://{CoreInit.conf.listen.localhost}:{CoreInit.conf.listen.port}/lite/zetflix?serial=1&rjson=true&kinopoisk_id={kinopoisk_id}&s={season}&title={encTitle}&original_title={encOriginalTitle}";
-                    if (id > 0)
-                        uri += $"&id={id}";
-                    if (!string.IsNullOrEmpty(encUid))
-                        uri += $"&uid={encUid}";
+                    using var request = new HttpRequestMessage(HttpMethod.Get, candidate.Trim());
 
-                    string json = await Http.Get(uri, timeoutSeconds: 8, statusCodeOK: false);
-                    if (!string.IsNullOrWhiteSpace(json))
-                    {
-                        var root = JsonNode.Parse(json);
-                        if (root?["type"]?.GetValue<string>() == "episode" && (root["data"] as JsonArray)?.Count > 0)
-                        {
-                            detected = season;
-                            continue;
-                        }
-                    }
+                    foreach (var h in LiveHeaders(edgeHash))
+                        request.Headers.TryAddWithoutValidation(h.name, h.val);
 
-                    if (season > 1 && detected > 0)
+                    if (!string.IsNullOrEmpty(range))
+                        request.Headers.TryAddWithoutValidation("Range", range);
+
+                    using var response = await LiveHttp().SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+                    if (!response.IsSuccessStatusCode)
                         break;
+
+                    HttpContext.Response.StatusCode = (int)response.StatusCode;
+
+                    if (response.Content.Headers.ContentType != null)
+                        HttpContext.Response.ContentType = response.Content.Headers.ContentType.ToString();
+
+                    if (response.Content.Headers.ContentRange != null)
+                        HttpContext.Response.Headers["Content-Range"] = response.Content.Headers.ContentRange.ToString();
+
+                    if (response.Content.Headers.ContentLength != null)
+                        HttpContext.Response.ContentLength = response.Content.Headers.ContentLength;
+
+                    HttpContext.Response.Headers["Accept-Ranges"] = "bytes";
+
+                    using var stream = await response.Content.ReadAsStreamAsync();
+                    await stream.CopyToAsync(HttpContext.Response.Body, HttpContext.RequestAborted);
+
+                    return true;
                 }
                 catch
                 {
-                    if (season > 1 && detected > 0)
-                        break;
-                }
-            }
-
-            return detected > 0 ? detected : 1;
-        }
-
-        bool NeedSyntheticSeasonList(EmbedModel content, long id)
-        {
-            if (id <= 0)
-                return false;
-
-            if (content?.pl == null || content.pl.Count == 0)
-                return true;
-
-            if (content.movie)
-                return true;
-
-            return !content.pl.Any(p => p.folder != null && p.folder.Length > 0);
-        }
-
-        bool NeedLiveSerialFallback(EmbedModel content)
-        {
-            if (content?.pl == null || content.pl.Count == 0)
-                return true;
-
-            if (content.movie)
-                return true;
-
-            return !content.pl.Any(p => p.folder != null && p.folder.Length > 0);
-        }
-
-        async ValueTask<EmbedModel> CaptureLiveSerialEmbed(string ztfhost, long kinopoisk_id, int season)
-        {
-            string memKey = $"zetflix:live_serial_tpl:v1:{kinopoisk_id}:{season}:{proxyManager?.CurrentProxyIp}";
-            if (!hybridCache.TryGetValue(memKey, out EmbedModel cache))
-            {
-                cache = await CaptureLiveSerialEmbedInternal(ztfhost, kinopoisk_id, season);
-                if (cache?.pl?.Count > 0 && !cache.movie)
-                    hybridCache.Set(memKey, cache, cacheTime(300));
-            }
-
-            return cache;
-        }
-
-        async ValueTask<EmbedModel> CaptureSyntheticSerialEmbed(string ztfhost, long id, long kinopoisk_id, int season)
-        {
-            if (id <= 0 || season <= 0)
-                return default;
-
-            string memKey = $"zetflix:synthetic_serial:v1:{id}:{kinopoisk_id}:{season}:{proxyManager?.CurrentProxyIp}";
-            if (!hybridCache.TryGetValue(memKey, out EmbedModel cache))
-            {
-                cache = await CaptureSyntheticSerialEmbedInternal(ztfhost, id, kinopoisk_id, season);
-                if (cache?.pl?.Count > 0 && !cache.movie)
-                    hybridCache.Set(memKey, cache, cacheTime(300));
-            }
-
-            return cache;
-        }
-
-        async ValueTask<EmbedModel> CaptureBestSerialFallback(string ztfhost, long id, long kinopoisk_id, int season, bool retry)
-        {
-            async ValueTask<EmbedModel> attempt()
-            {
-                var liveSerial = await CaptureLiveSerialEmbed(ztfhost, kinopoisk_id, season);
-                if (liveSerial?.pl?.Count > 0 && !liveSerial.movie)
-                    return liveSerial;
-
-                if (id > 0)
-                {
-                    var syntheticSerial = await CaptureSyntheticSerialEmbed(ztfhost, id, kinopoisk_id, season);
-                    if (syntheticSerial?.pl?.Count > 0 && !syntheticSerial.movie)
-                        return syntheticSerial;
-                }
-
-                return default;
-            }
-
-            var content = await attempt();
-            if (content?.pl?.Count > 0 && !content.movie)
-                return content;
-
-            if (!retry)
-                return default;
-
-            await Task.Delay(250);
-            return await attempt();
-        }
-
-        async ValueTask<EmbedModel> CaptureSyntheticSerialEmbedInternal(string ztfhost, long id, long kinopoisk_id, int season)
-        {
-            if (string.IsNullOrWhiteSpace(ztfhost) || kinopoisk_id == 0 || id <= 0 || season <= 0)
-                return default;
-
-            string workingVoice = await DetectSyntheticSerialVoice(ztfhost, kinopoisk_id, season);
-            if (string.IsNullOrWhiteSpace(workingVoice))
-                workingVoice = "Озвучка";
-
-            int episodeCount = await GetTmdbSeasonEpisodeCount(id, season);
-            if (episodeCount <= 0)
-                return default;
-
-            return BuildSyntheticSerialEmbed(episodeCount, workingVoice);
-        }
-
-        async ValueTask<string> DetectSyntheticSerialVoice(string ztfhost, long kinopoisk_id, int season)
-        {
-            foreach (string voice in new[] { "Озвучка", "По умолчанию", "Дубляж" })
-            {
-                var probe = await CaptureLiveSerialEpisodeInternal(ztfhost, kinopoisk_id, season, voice, 1);
-                if (probe.qualitys?.Count > 0)
-                    return voice == "По умолчанию" ? "Озвучка" : voice;
-            }
-
-            return default;
-        }
-
-        async ValueTask<int> GetTmdbSeasonEpisodeCount(long id, int season)
-        {
-            if (id <= 0 || season <= 0)
-                return 0;
-
-            try
-            {
-                string themoviedb = await Http.Get($"https://api.themoviedb.org/3/tv/{id}/season/{season}?api_key=4ef0d7355d9ffb5151e987764708ce96&language=ru-RU", timeoutSeconds: 10, statusCodeOK: false);
-                if (string.IsNullOrWhiteSpace(themoviedb))
-                    return 0;
-
-                var root = JsonNode.Parse(themoviedb) as JsonObject;
-                var episodes = root?["episodes"] as JsonArray;
-                return episodes?.Count ?? 0;
-            }
-            catch
-            {
-                return 0;
-            }
-        }
-
-        async ValueTask<int> GetTmdbAvailableSeasonCount(long id)
-        {
-            if (id <= 0)
-                return 1;
-
-            try
-            {
-                string themoviedb = await Http.Get($"https://api.themoviedb.org/3/tv/{id}?api_key=4ef0d7355d9ffb5151e987764708ce96&language=ru-RU", timeoutSeconds: 10, statusCodeOK: false);
-                if (string.IsNullOrWhiteSpace(themoviedb))
-                    return 1;
-
-                var root = JsonNode.Parse(themoviedb) as JsonObject;
-                var seasons = root?["seasons"] as JsonArray;
-                if (seasons == null || seasons.Count == 0)
-                    return Math.Max(root?["number_of_seasons"]?.GetValue<int>() ?? 1, 1);
-
-                int count = 0;
-                foreach (var item in seasons)
-                {
-                    if (item is not JsonObject season)
-                        continue;
-
-                    int seasonNumber = season["season_number"]?.GetValue<int>() ?? 0;
-                    int episodeCount = season["episode_count"]?.GetValue<int>() ?? 0;
-                    string airDate = season["air_date"]?.GetValue<string>();
-
-                    if (seasonNumber <= 0 || episodeCount <= 0)
-                        continue;
-
-                    if (!string.IsNullOrWhiteSpace(airDate))
-                        count++;
-                }
-
-                return count > 0 ? count : Math.Max(root?["number_of_seasons"]?.GetValue<int>() ?? 1, 1);
-            }
-            catch
-            {
-                return 1;
-            }
-        }
-
-        static EmbedModel BuildSyntheticSerialEmbed(int episodeCount, string voiceTitle)
-        {
-            if (episodeCount <= 0)
-                return default;
-
-            var episodes = new Folder[episodeCount];
-            for (int i = 1; i <= episodeCount; i++)
-            {
-                episodes[i - 1] = new Folder()
-                {
-                    comment = $"{i} серия",
-                    file = $"episode://{i}"
-                };
-            }
-
-            return new EmbedModel()
-            {
-                pl = new List<RootObject>()
-                {
-                    new RootObject()
-                    {
-                        title = string.IsNullOrWhiteSpace(voiceTitle) ? "Озвучка" : voiceTitle,
-                        folder = episodes
-                    }
-                },
-                movie = false,
-                quality = "1080p"
-            };
-        }
-
-        async ValueTask<EmbedModel> CaptureLiveSerialEmbedInternal(string ztfhost, long kinopoisk_id, int season)
-        {
-            if (string.IsNullOrWhiteSpace(ztfhost) || kinopoisk_id == 0 || season <= 0)
-                return default;
-
-            string source = $"/iplayer/videodb.php?kp={kinopoisk_id}&season={season}";
-            string playerId = Convert.ToBase64String(Encoding.UTF8.GetBytes(source));
-            string playerUri = $"{ztfhost}/iplayer/player.php?id={playerId}";
-
-            try
-            {
-                string playerHtml = await Http.Get(playerUri, headers: HeadersModel.Init(
-                    ("Referer", $"{ztfhost}/"),
-                    ("Origin", ztfhost)
-                ), timeoutSeconds: 15, statusCodeOK: false);
-
-                var direct = await TrySerialEmbedFromPlayerHtml(playerHtml, playerUri, ztfhost, season);
-                if (direct?.pl?.Count > 0 && !direct.movie)
-                    return direct;
-            }
-            catch { }
-
-            try
-            {
-                using var browser = new PlaywrightBrowser(init.priorityBrowser);
-                var page = await browser.NewPageAsync(init.plugin, new Dictionary<string, string>()
-                {
-                    ["Referer"] = "https://www.google.com/"
-                }, proxy: proxy_data, keepopen: init.browser_keepopen).ConfigureAwait(false);
-
-                if (page == null)
-                    return default;
-
-                await page.RouteAsync("**/*", async route =>
-                {
-                    try
-                    {
-                        string url = route.Request.Url.Split("?")[0];
-                        if (Regex.IsMatch(url, "\\.(woff2?|vtt|srt|css|svg|jpe?g|png|gif|webp|ico|m3u8|mp4|m4s|ts)$", RegexOptions.IgnoreCase))
-                        {
-                            await route.AbortAsync();
-                            return;
-                        }
-
-                        await route.ContinueAsync();
-                    }
-                    catch { }
-                });
-
-                try
-                {
-                    await page.GotoAsync(playerUri, new PageGotoOptions()
-                    {
-                        Timeout = 15_000,
-                        WaitUntil = WaitUntilState.DOMContentLoaded
-                    }).ConfigureAwait(false);
-                }
-                catch { }
-
-                for (int i = 0; i < 40; i++)
-                {
-                    try
-                    {
-                        string playerHtml = await page.ContentAsync().ConfigureAwait(false);
-                        var direct = await TrySerialEmbedFromPlayerHtml(playerHtml, playerUri, ztfhost, season);
-                        if (direct?.pl?.Count > 0 && !direct.movie)
-                        {
-                            proxyManager?.Success();
-                            return direct;
-                        }
-                    }
-                    catch { }
-
-                    try
-                    {
-                        foreach (var frame in page.Frames)
-                        {
-                            string frameHtml = await frame.ContentAsync().ConfigureAwait(false);
-                            var direct = BuildSerialEmbedFromHtml(frameHtml, season);
-                            if (direct?.pl?.Count > 0 && !direct.movie)
-                            {
-                                proxyManager?.Success();
-                                return direct;
-                            }
-                        }
-                    }
-                    catch { }
-
+                    // сбой прокси — повторяем, затем пробуем следующее зеркало
                     await Task.Delay(250);
                 }
             }
-            catch { }
-
-            proxyManager?.Refresh();
-            return default;
         }
 
-        async ValueTask<EmbedModel> TrySerialEmbedFromPlayerHtml(string playerHtml, string playerUri, string ztfhost, int season)
+        return false;
+    }
+
+    static string LiveSegmentUrl(LiveSegmentMap segs, int i)
+    {
+        if (segs == null)
+            return null;
+
+        return i < 0 ? segs.map : (i < segs.items.Count ? segs.items[i] : null);
+    }
+
+    #region ResolveBnsiStream
+    async Task<DirectData> ResolveBnsiStream(string token_movie, string t, int s, short e, long kinopoisk_id, string imdb_id)
+    {
+        string linkHost = string.IsNullOrEmpty(init.linkhost) ? "https://tories-as.stloadi.live" : init.linkhost.TrimEnd('/');
+        string token = string.IsNullOrEmpty(init.token) ? init.secret_token : init.token;
+        if (string.IsNullOrEmpty(token))
+            return null;
+
+        var pUri = new System.Text.StringBuilder();
+        pUri.Append($"{linkHost}/?token={token}");
+        if (!string.IsNullOrEmpty(token_movie))
+            pUri.Append($"&token_movie={token_movie}");
+        else if (kinopoisk_id > 0)
+            pUri.Append($"&kp={kinopoisk_id}");
+        else if (!string.IsNullOrEmpty(imdb_id))
+            pUri.Append($"&imdb={imdb_id}");
+
+        if (s > 0) pUri.Append($"&season={s}");
+        if (e > 0) pUri.Append($"&episode={e}");
+        if (!string.IsNullOrEmpty(t)) pUri.Append($"&translation={t}");
+
+        string playerUrl = pUri.ToString();
+        var playerHeaders = HeadersModel.Init(
+            ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
+            ("Referer", $"{linkHost}/")
+        );
+
+        string html = await httpHydra.Get(playerUrl, safety: true, addheaders: playerHeaders);
+        if (string.IsNullOrEmpty(html))
+            return null;
+
+        var vpMatch = System.Text.RegularExpressions.Regex.Match(html, @"name=[""']viewporti[""']\s+content=[""']([^""']+)[""']");
+        if (!vpMatch.Success)
+            return null;
+        string viewporti = vpMatch.Groups[1].Value;
+
+        var flMatch = System.Text.RegularExpressions.Regex.Match(html, @"fileList\s*=\s*JSON\.parse\('([^']+)'\);");
+        if (!flMatch.Success)
+            flMatch = System.Text.RegularExpressions.Regex.Match(html, @"fileList\s*=\s*JSON\.parse\(""([^""]+)""\);");
+        if (!flMatch.Success)
+            return null;
+
+        string actId = null;
+        try
         {
-            var direct = BuildSerialEmbedFromHtml(playerHtml, season);
-            if (direct?.pl?.Count > 0 && !direct.movie)
-                return direct;
+            string rawJson = flMatch.Groups[1].Value;
+            var fl = Newtonsoft.Json.Linq.JObject.Parse(rawJson);
 
-            string iframeSrc = Regex.Match(playerHtml ?? string.Empty, "<iframe[^>]*?\\ssrc=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(iframeSrc))
-                return default;
+            if (fl["active"]?["id"] != null)
+                actId = fl["active"]["id"].ToString();
 
-            string iframeUri = iframeSrc.StartsWith("//") ? $"https:{iframeSrc}" :
-                               iframeSrc.StartsWith("/") ? $"{ztfhost}{iframeSrc}" :
-                               iframeSrc;
-
-            var iframeResult = await Http.BaseGet(iframeUri,
-                headers: HeadersModel.Init(
-                    ("Referer", playerUri),
-                    ("Origin", ztfhost),
-                    ("Sec-Fetch-Dest", "iframe"),
-                    ("Sec-Fetch-Mode", "navigate"),
-                    ("Sec-Fetch-Site", "cross-site")
-                ),
-                timeoutSeconds: 15,
-                statusCodeOK: false,
-                cookieContainer: new CookieContainer()
-            );
-
-            return BuildSerialEmbedFromHtml(iframeResult.content, season);
-        }
-
-        EmbedModel BuildSerialEmbedFromHtml(string html, int season)
-        {
-            if (string.IsNullOrWhiteSpace(html))
-                return default;
-
-            var oninvk = new ZetflixInvoke(null, null, init.hls, null, link => link);
-            var embed = oninvk.Embed(html);
-            if (embed?.pl?.Count > 0 && !embed.movie && embed.pl.Any(p => p.folder != null && p.folder.Length > 0))
-                return embed;
-
-            if (!TryParseObrutPlayerRoot(html, out JsonObject root))
-                return default;
-
-            return BuildSerialEmbedFromObrutRoot(root, season);
-        }
-
-        EmbedModel BuildSerialEmbedFromObrutRoot(JsonObject root, int season)
-        {
-            if (root?["file"] is not JsonArray seasons)
-                return default;
-
-            JsonObject seasonNode = FindObrutFolderByNumber(seasons, season);
-            if (seasonNode == null && seasons.Count == 1 && season == 1)
-                seasonNode = seasons[0] as JsonObject;
-
-            if (seasonNode == null || seasonNode["folder"] is not JsonArray episodes)
-                return default;
-
-            var voiceMap = new Dictionary<string, List<Folder>>(StringComparer.OrdinalIgnoreCase);
-            var voiceOrder = new List<string>();
-
-            void addVoice(string voiceTitle, string comment, string file)
+            if (fl["all"] != null && !string.IsNullOrEmpty(t))
             {
-                if (string.IsNullOrWhiteSpace(voiceTitle) || string.IsNullOrWhiteSpace(comment) || string.IsNullOrWhiteSpace(file))
-                    return;
-
-                if (!voiceMap.TryGetValue(voiceTitle, out var folders))
+                string trKey = "t" + t;
+                if (s > 0 && e > 0)
                 {
-                    folders = new List<Folder>();
-                    voiceMap[voiceTitle] = folders;
-                    voiceOrder.Add(voiceTitle);
-                }
-
-                folders.Add(new Folder()
-                {
-                    comment = comment,
-                    file = file
-                });
-            }
-
-            foreach (var episodeItem in episodes)
-            {
-                if (episodeItem is not JsonObject episodeNode)
-                    continue;
-
-                string comment = NormalizeObrutEpisodeComment(episodeNode);
-                if (string.IsNullOrWhiteSpace(comment))
-                    continue;
-
-                if (episodeNode["folder"] is JsonArray voices && voices.Count > 0)
-                {
-                    int voiceIndex = 0;
-
-                    foreach (var voiceItem in voices)
-                    {
-                        if (voiceItem is not JsonObject voiceNode)
-                            continue;
-
-                        string file = voiceNode["file"]?.GetValue<string>();
-                        if (string.IsNullOrWhiteSpace(file))
-                            continue;
-
-                        voiceIndex++;
-                        string voiceTitle = NormalizeObrutSerialVoiceTitle(voiceNode["title"]?.GetValue<string>(), voiceIndex);
-                        addVoice(voiceTitle, comment, file);
-                    }
+                    var epToken = fl["all"]?[s.ToString()]?[e.ToString()]?[trKey];
+                    if (epToken?["id"] != null)
+                        actId = epToken["id"].ToString();
                 }
                 else
                 {
-                    string file = episodeNode["file"]?.GetValue<string>();
-                    addVoice("Озвучка", comment, file);
-                }
-            }
-
-            if (voiceOrder.Count == 0)
-                return default;
-
-            var result = new List<RootObject>(voiceOrder.Count);
-            foreach (string voiceTitle in voiceOrder)
-            {
-                result.Add(new RootObject()
-                {
-                    title = voiceTitle,
-                    folder = voiceMap[voiceTitle].ToArray()
-                });
-            }
-
-            return new EmbedModel()
-            {
-                pl = result,
-                movie = false,
-                quality = "1080p"
-            };
-        }
-
-        bool NeedLiveMovieFallback(EmbedModel content)
-        {
-            if (content?.pl == null || content.pl.Count == 0)
-                return true;
-
-            foreach (var item in content.pl)
-            {
-                if (string.IsNullOrEmpty(item.file))
-                    continue;
-
-                if (item.file.Contains("hdvideobox.me", StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-
-            return false;
-        }
-
-        static string NormalizeObrutEpisodeComment(JsonObject episodeNode)
-        {
-            string title = Regex.Replace(episodeNode?["title"]?.GetValue<string>() ?? string.Empty, "\\s+", " ").Trim();
-            if (string.IsNullOrWhiteSpace(title))
-                return string.Empty;
-
-            if (Regex.IsMatch(title, "^\\d+"))
-                return title;
-
-            return TryExtractNodeNumber(title, out int number) ? $"{number} серия" : title;
-        }
-
-        async ValueTask<MovieTpl> CaptureLiveMovie(string ztfhost, long kinopoisk_id, int season, string title, string original_title)
-        {
-            var mtpl = new MovieTpl(title, original_title, 1);
-
-            string memKey = $"zetflix:live_movie:v4:{kinopoisk_id}:{season}:{proxyManager?.CurrentProxyIp}";
-            if (!hybridCache.TryGetValue(memKey, out List<LiveMovieSource> cache))
-            {
-                cache = await CaptureLiveMovieInternal(ztfhost, kinopoisk_id, season);
-                if (cache?.Count > 0)
-                    hybridCache.Set(memKey, cache, cacheTime(600));
-            }
-
-            if (cache == null || cache.Count == 0)
-                return mtpl;
-
-            mtpl = new MovieTpl(title, original_title, cache.Count);
-
-            foreach (var source in cache)
-            {
-                if (source?.qualitys == null || source.qualitys.Count == 0)
-                    continue;
-
-                var streamquality = new StreamQualityTpl();
-                foreach (var item in source.qualitys.OrderByDescending(i => i.Key))
-                    streamquality.Append(HostStreamProxy(item.Value, headers: source.headers), $"{item.Key}p");
-
-                var selected = streamquality.Firts();
-                if (string.IsNullOrEmpty(selected.link))
-                    continue;
-
-                string voiceTitle = string.IsNullOrWhiteSpace(source.title) ? "По умолчанию" : source.title;
-                mtpl.Append(voiceTitle, selected.link, streamquality: streamquality, vast: init.vast, hls_manifest_timeout: 30000);
-            }
-
-            return mtpl;
-        }
-
-        async ValueTask<List<LiveMovieSource>> CaptureLiveMovieInternal(string ztfhost, long kinopoisk_id, int season)
-        {
-            if (string.IsNullOrWhiteSpace(ztfhost) || kinopoisk_id == 0)
-                return default;
-
-            string source = $"/iplayer/videodb.php?kp={kinopoisk_id}" + (season > 0 ? $"&season={season}" : string.Empty);
-            string playerId = Convert.ToBase64String(Encoding.UTF8.GetBytes(source));
-            string playerUri = $"{ztfhost}/iplayer/player.php?id={playerId}";
-            string iframeUri = null;
-
-            try
-            {
-                string playerHtml = await Http.Get(playerUri, headers: HeadersModel.Init(
-                    ("Referer", $"{ztfhost}/"),
-                    ("Origin", ztfhost)
-                ));
-
-                var fotpro = await TryFotproMovie(playerHtml);
-                var validFotpro = await ValidateMovieManifests(fotpro);
-                if (validFotpro?.Count > 0)
-                    return validFotpro;
-
-                string iframeSrc = Regex.Match(playerHtml ?? string.Empty, "<iframe[^>]*?\\ssrc=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-                if (!string.IsNullOrWhiteSpace(iframeSrc))
-                {
-                    iframeUri = iframeSrc.StartsWith("//") ? $"https:{iframeSrc}" :
-                               iframeSrc.StartsWith("/") ? $"{ztfhost}{iframeSrc}" :
-                               iframeSrc;
-
-                    if (iframeUri.Contains(".obrut.show/", StringComparison.OrdinalIgnoreCase))
+                    var theatrical = fl["all"]?["theatrical"]?[trKey];
+                    if (theatrical is Newtonsoft.Json.Linq.JObject thObj)
                     {
-                        var obrut = await TryObrutMovie(iframeUri, playerUri, ztfhost);
-                        var validObrut = await ValidateMovieManifests(obrut);
-                        if (validObrut?.Count > 0)
-                            return validObrut;
-                    }
-                }
-            }
-            catch { }
-
-            try
-            {
-                using (var browser = new PlaywrightBrowser(init.priorityBrowser))
-                {
-                    var page = await browser.NewPageAsync(init.plugin, new Dictionary<string, string>()
-                    {
-                        ["Referer"] = "https://www.google.com/"
-                    }, proxy: proxy_data, keepopen: init.browser_keepopen).ConfigureAwait(false);
-
-                    if (page == null)
-                        return default;
-
-                    await page.RouteAsync("**/*", async route =>
-                    {
-                        try
+                        foreach (var prop in thObj.Properties())
                         {
-                            string url = route.Request.Url.Split("?")[0];
-                            if (Regex.IsMatch(url, "\\.(woff2?|vtt|srt|css|svg|jpe?g|png|gif|webp|ico)$", RegexOptions.IgnoreCase))
+                            if (prop.Value?["id"] != null)
                             {
-                                await route.AbortAsync();
-                                return;
+                                actId = prop.Value["id"].ToString();
+                                break;
                             }
-
-                            await route.ContinueAsync();
                         }
-                        catch { }
-                    });
-
-                    var qualitys = new Dictionary<int, string>();
-                    List<HeadersModel> headers = null;
-
-                    bool captured = await CaptureMovieWithBrowser(page, playerUri, qualitys, () => headers = FilterStreamHeaders(page));
-                    if (!captured && !string.IsNullOrWhiteSpace(iframeUri))
-                        captured = await CaptureMovieWithBrowser(page, iframeUri, qualitys, () => headers = FilterStreamHeaders(page));
-
-                    if (!captured || qualitys.Count == 0)
-                    {
-                        proxyManager?.Refresh();
-                        return default;
                     }
-
-                    proxyManager?.Success();
-                    return new List<LiveMovieSource>()
+                    if (actId == null && fl["all"]?["directors"]?[trKey] is Newtonsoft.Json.Linq.JObject dirObj)
                     {
-                        new LiveMovieSource() { title = "По умолчанию", qualitys = qualitys, headers = headers }
-                    };
-                }
-            }
-            catch
-            {
-                return default;
-            }
-        }
-
-        [HttpGet]
-        [Route("lite/zetflix/video")]
-        [Route("lite/zetflix/video.m3u8")]
-        public async ValueTask<ActionResult> Video(long kinopoisk_id, string title, string original_title, string t, int s, int e, bool play)
-        {
-            if (kinopoisk_id == 0 || s <= 0 || e <= 0 || string.IsNullOrWhiteSpace(t))
-                return OnError();
-
-            if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
-                return OnError();
-
-            if (await IsRequestBlocked(rch: false))
-                return badInitMsg;
-
-            string ztfhost = await goHost(init.host);
-            var cache = await InvokeCache($"zetflix:live_serial:v8:{kinopoisk_id}:{s}:{e}:{t}:{proxyManager?.CurrentProxyIp}", 300,
-                async () => await CaptureLiveSerialEpisodeInternal(ztfhost, kinopoisk_id, s, t, e)
-            );
-
-            if (cache.qualitys == null || cache.qualitys.Count == 0)
-                return OnError();
-
-            var streamquality = new StreamQualityTpl();
-            foreach (var item in cache.qualitys.OrderByDescending(i => i.Key))
-                streamquality.Append(HostStreamProxy(item.Value, headers: cache.headers), $"{item.Key}p");
-
-            var selected = streamquality.Firts();
-            if (string.IsNullOrWhiteSpace(selected.link))
-                return OnError();
-
-            if (play)
-                return Redirect(selected.link);
-
-            return ContentTo(VideoTpl.ToJson("play", selected.link, $"{title ?? original_title} ({e} серия)", streamquality: streamquality, quality: selected.quality, vast: init.vast, hls_manifest_timeout: 30000));
-        }
-
-        async ValueTask<(Dictionary<int, string> qualitys, List<HeadersModel> headers)> CaptureLiveSerialEpisodeInternal(string ztfhost, long kinopoisk_id, int season, string voice, int episode)
-        {
-            if (string.IsNullOrWhiteSpace(ztfhost) || string.IsNullOrWhiteSpace(voice) || season <= 0 || episode <= 0)
-                return default;
-
-            string source = $"/iplayer/videodb.php?kp={kinopoisk_id}&season={season}";
-            string playerId = Convert.ToBase64String(Encoding.UTF8.GetBytes(source));
-            string pageUri = $"{ztfhost}/iplayer/player.php?id={playerId}";
-
-            try
-            {
-                string playerHtml = await Http.Get(pageUri, headers: HeadersModel.Init(
-                    ("Referer", $"{ztfhost}/"),
-                    ("Origin", ztfhost)
-                ));
-
-                string iframeSrc = Regex.Match(playerHtml ?? string.Empty, "<iframe[^>]*?\\ssrc=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-                if (string.IsNullOrWhiteSpace(iframeSrc))
-                    return await TryPlayerjsSerial(ztfhost, kinopoisk_id, season, voice, episode);
-
-                string iframeUri = iframeSrc.StartsWith("//") ? $"https:{iframeSrc}" :
-                                   iframeSrc.StartsWith("/") ? $"{ztfhost}{iframeSrc}" :
-                                   iframeSrc;
-
-                if (!iframeUri.Contains(".obrut.show/", StringComparison.OrdinalIgnoreCase))
-                    return await TryPlayerjsSerial(ztfhost, kinopoisk_id, season, voice, episode);
-
-                var obrutResult = await TryObrutSerial(iframeUri, pageUri, ztfhost, season, episode, voice);
-                if (obrutResult.qualitys?.Count > 0)
-                    return obrutResult;
-
-                return await TryPlayerjsSerial(ztfhost, kinopoisk_id, season, voice, episode);
-            }
-            catch
-            {
-                return default;
-            }
-        }
-
-        async ValueTask<(Dictionary<int, string> qualitys, List<HeadersModel> headers)> TryPlayerjsSerial(string ztfhost, long kinopoisk_id, int season, string voice, int episode)
-        {
-            try
-            {
-                // Try to reuse the cached HTML from Index endpoint first
-                string html = hybridCache.TryGetValue($"zetfix:view:{kinopoisk_id}:{season}:{proxyManager?.CurrentProxyIp}", out string cachedHtml) ? cachedHtml : null;
-
-                if (string.IsNullOrWhiteSpace(html) || html.StartsWith("<script>(function") || !html.Contains("new Playerjs"))
-                {
-                    string uri = $"{ztfhost}/iplayer/videodb.php?kp={kinopoisk_id}&season={season}";
-                    var reqHeaders = HeadersModel.Init(
-                        ("dnt", "1"),
-                        ("pragma", "no-cache"),
-                        ("referer", "https://www.google.com/"),
-                        ("upgrade-insecure-requests", "1")
-                    );
-
-                    html = string.IsNullOrEmpty(PHPSESSID) ? null :
-                        await Http.Get(uri, proxy: proxy, cookie: $"PHPSESSID={PHPSESSID}", headers: reqHeaders);
-                }
-
-                if (string.IsNullOrWhiteSpace(html) || html.StartsWith("<script>(function") || !html.Contains("new Playerjs"))
-                    return default;
-
-                var oninvk = new ZetflixInvoke(null, ztfhost, init.hls,
-                    (url, head) => httpHydra.Get(url, addheaders: head),
-                    link => link);
-
-                var embed = oninvk.Embed(html);
-                if (embed?.pl == null || embed.pl.Count == 0 || embed.movie)
-                    return default;
-
-                string normalizedVoice = NormalizeObrutNodeText(voice);
-
-                foreach (var pl in embed.pl)
-                {
-                    string plVoice = NormalizeObrutNodeText(pl.title);
-                    bool voiceMatch = string.IsNullOrEmpty(normalizedVoice) ||
-                                      plVoice.Contains(normalizedVoice, StringComparison.OrdinalIgnoreCase) ||
-                                      normalizedVoice.Contains(plVoice, StringComparison.OrdinalIgnoreCase);
-                    if (!voiceMatch)
-                        continue;
-
-                    if (pl.folder == null)
-                        continue;
-
-                    foreach (var ep in pl.folder)
-                    {
-                        string epNum = Regex.Match(ep.comment ?? string.Empty, "^([0-9]+)").Groups[1].Value;
-                        if (epNum != episode.ToString())
-                            continue;
-
-                        var qualitys = ParsePlayerjsQualityMap(ep.file);
-                        if (qualitys.Count > 0)
-                            return (qualitys, null);
+                        foreach (var prop in dirObj.Properties())
+                        {
+                            if (prop.Value?["id"] != null)
+                            {
+                                actId = prop.Value["id"].ToString();
+                                break;
+                            }
+                        }
                     }
                 }
-
-                if (embed.pl.Count > 0 && IsGenericVoiceLabel(normalizedVoice))
-                {
-                    var qualitys = ParsePlayerjsQualityMap(FindPlayerjsEpisodeFile(embed.pl[0].folder, episode));
-                    if (qualitys.Count > 0)
-                        return (qualitys, null);
-                }
-
-                return default;
-            }
-            catch
-            {
-                return default;
             }
         }
+        catch { }
 
-        static string FindPlayerjsEpisodeFile(Folder[] episodes, int episode)
-        {
-            if (episodes == null || episodes.Length == 0 || episode <= 0)
-                return null;
-
-            foreach (var ep in episodes)
-            {
-                string epNum = Regex.Match(ep.comment ?? string.Empty, "^([0-9]+)").Groups[1].Value;
-                if (epNum == episode.ToString())
-                    return ep.file;
-            }
-
+        if (string.IsNullOrEmpty(actId))
             return null;
-        }
 
-        static bool IsGenericVoiceLabel(string text)
+        string borth = ZetflixBorth.Compute(viewporti);
+        string postUrl = $"{linkHost}/bnsi/movies/{actId}";
+
+        var bnsiHeaders = HeadersModel.Init(
+            ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
+            ("Origin", linkHost),
+            ("Referer", playerUrl),
+            ("Borth", borth),
+            ("Accept", "application/json, text/plain, */*"),
+            ("X-Requested-With", "XMLHttpRequest"),
+            ("Content-Type", "application/x-www-form-urlencoded")
+        );
+
+        string audioParam = string.IsNullOrEmpty(t) ? "66" : t;
+        string postData = $"token={token}&av1={(init.m4s ? "true" : "false")}&autoplay=0&audio={audioParam}";
+
+        var bnsiResp = await httpHydra.Post<BnsiResponse>(postUrl, postData, safety: true, addheaders: bnsiHeaders);
+        if (bnsiResp?.hlsSource == null || bnsiResp.hlsSource.Count == 0)
         {
-            return string.IsNullOrWhiteSpace(text) || text is "озвучка" or "по умолчанию" or "дубляж";
-        }
-
-        static Dictionary<int, string> ParsePlayerjsQualityMap(string file)
-        {
-            var qualitys = new Dictionary<int, string>();
-            if (string.IsNullOrWhiteSpace(file))
-                return qualitys;
-
-            foreach (Match m in Regex.Matches(file, @"\[(1080|720|480|360)p?\](https?://[^\[|,\n\r\t ]+)", RegexOptions.IgnoreCase))
+            string dynamicBorth = await ZetflixBorth.ComputeFromHtmlAsync(html, viewporti, linkHost);
+            if (!string.IsNullOrEmpty(dynamicBorth) && dynamicBorth != borth)
             {
-                if (!int.TryParse(m.Groups[1].Value, out int q))
-                    continue;
-
-                qualitys[q] = m.Groups[2].Value.TrimEnd();
-            }
-
-            return qualitys;
-        }
-
-        async ValueTask<bool> CaptureMovieWithBrowser(IPage page, string targetUri, Dictionary<int, string> qualitys, Action onHeaders)
-        {
-            if (string.IsNullOrWhiteSpace(targetUri))
-                return false;
-
-            DateTime lastHit = default;
-
-            try
-            {
-                await page.GotoAsync(targetUri, new PageGotoOptions()
-                {
-                    Timeout = 8_000,
-                    WaitUntil = WaitUntilState.DOMContentLoaded
-                }).ConfigureAwait(false);
-            }
-            catch { }
-
-            for (int i = 0; i < 60; i++)
-            {
-                try
-                {
-                    var resources = await page.EvaluateAsync<string[]>("() => performance.getEntriesByType('resource').map(r => r.name)");
-                    if (resources != null)
-                    {
-                        foreach (string url in resources)
-                        {
-                            var quality = Regex.Match(url ?? string.Empty, @"/(240|360|480|720|1080|1440|2160)\\.mp4:hls:manifest\\.m3u8(?:\\?|$)", RegexOptions.IgnoreCase);
-                            if (!quality.Success)
-                                continue;
-
-                            qualitys[int.Parse(quality.Groups[1].Value)] = url;
-                            lastHit = DateTime.Now;
-                            onHeaders?.Invoke();
-                        }
-                    }
-                }
-                catch { }
-
-                if (qualitys.Count > 0 && (DateTime.Now - lastHit).TotalMilliseconds > 700)
-                    return true;
-
-                if (i % 8 == 0)
-                {
-                    try
-                    {
-                        await page.Mouse.ClickAsync(640, 360);
-                    }
-                    catch { }
-
-                    try
-                    {
-                        foreach (var frame in page.Frames)
-                        {
-                            await frame.EvaluateAsync(@"() => {
-                                const button = document.querySelector('button, .play, .vjs-big-play-button, .jw-icon-display, .jw-display-icon-container');
-                                if (button) button.click();
-                                const video = document.querySelector('video');
-                                if (video) {
-                                    video.muted = true;
-                                    video.play().catch(() => {});
-                                }
-                            }");
-                        }
-                    }
-                    catch { }
-                }
-
-                await Task.Delay(100);
-            }
-
-            return qualitys.Count > 0;
-        }
-
-        List<HeadersModel> FilterStreamHeaders(IPage page)
-        {
-            return HeadersModel.Init(
-                ("accept", "*/*"),
-                ("origin", page.Url is string current && current.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? Regex.Match(current, "^(https?://[^/]+)", RegexOptions.IgnoreCase).Groups[1].Value : string.Empty),
-                ("referer", page.Url)
-            ).Where(h => !string.IsNullOrWhiteSpace(h.val)).ToList();
-        }
-
-        async ValueTask<List<LiveMovieSource>> ValidateMovieManifests(List<LiveMovieSource> streams)
-        {
-            if (streams == null || streams.Count == 0)
-                return null;
-
-            var valid = new List<LiveMovieSource>(streams.Count);
-            foreach (var stream in streams)
-            {
-                if (stream?.qualitys == null || stream.qualitys.Count == 0)
-                    continue;
-
-                if (await ValidateMovieManifest(stream.qualitys, stream.headers))
-                    valid.Add(stream);
-            }
-
-            return valid.Count > 0 ? valid : null;
-        }
-
-        async ValueTask<bool> ValidateMovieManifest(Dictionary<int, string> qualitys, List<HeadersModel> headers)
-        {
-            if (qualitys == null || qualitys.Count == 0)
-                return false;
-
-            string probeUrl = qualitys.OrderByDescending(i => i.Key).First().Value?.Split("#.")[0];
-            if (string.IsNullOrWhiteSpace(probeUrl))
-                return false;
-
-            try
-            {
-                string manifest = await Http.Get(probeUrl, headers: headers, timeoutSeconds: 5, statusCodeOK: false);
-                return !string.IsNullOrWhiteSpace(manifest) && manifest.Contains("#EXTM3U", StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return false;
+                bnsiHeaders.RemoveAll(x => x.name == "Borth");
+                bnsiHeaders.Add(new HeadersModel("Borth", dynamicBorth));
+                bnsiResp = await httpHydra.Post<BnsiResponse>(postUrl, postData, safety: true, addheaders: bnsiHeaders);
             }
         }
 
-        async ValueTask<List<LiveMovieSource>> TryFotproMovie(string playerHtml)
-        {
-            if (string.IsNullOrWhiteSpace(playerHtml))
-                return default;
-
-            string fallbackSrc = Regex.Match(playerHtml, "data-fallback-src=\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(fallbackSrc))
-                return default;
-
-            string fallbackOrigin = Regex.Match(fallbackSrc, "^(https?://[^/]+)").Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(fallbackOrigin))
-                return default;
-
-            string iframeHtml = await Http.Get(fallbackSrc, headers: HeadersModel.Init(
-                ("Referer", $"{fallbackOrigin}/"),
-                ("Origin", fallbackOrigin)
-            ));
-
-            if (string.IsNullOrWhiteSpace(iframeHtml))
-                return default;
-
-            string href = Regex.Match(iframeHtml, "\"href\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-            string key = Regex.Match(iframeHtml, "\"key\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value.Replace("\\", "");
-            string file = Regex.Match(iframeHtml, "\"file\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value.Replace("\\", "");
-
-            if (string.IsNullOrWhiteSpace(file))
-            {
-                href = Regex.Match(iframeHtml, "\"href\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-                key = Regex.Match(iframeHtml, "\"key\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value.Replace("\\", "");
-                file = Regex.Match(iframeHtml, "\"file\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value.Replace("\\", "");
-            }
-
-            if (string.IsNullOrWhiteSpace(file))
-            {
-                href = Regex.Match(iframeHtml, "\"href\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value;
-                key = Regex.Match(iframeHtml, "\"key\":\"([^\"]+)\"", RegexOptions.IgnoreCase).Groups[1].Value.Replace("\\", "");
-                file = Regex.Match(iframeHtml, "playerConfigs\\s*=\\s*\\{.*?\"file\":\"([^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Singleline).Groups[1].Value.Replace("\\", "");
-
-                if (string.IsNullOrWhiteSpace(href))
-                    href = Regex.Match(iframeHtml, "playerConfigs\\s*=\\s*\\{.*?\"href\":\"([^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Singleline).Groups[1].Value.Replace("\\", "");
-
-                if (string.IsNullOrWhiteSpace(key))
-                    key = Regex.Match(iframeHtml, "playerConfigs\\s*=\\s*\\{.*?\"key\":\"([^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.Singleline).Groups[1].Value.Replace("\\", "");
-            }
-
-            if (string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(href) || string.IsNullOrWhiteSpace(key))
-                return default;
-
-            var playlistHeaders = HeadersModel.Init(
-                ("accept", "*/*"),
-                ("origin", fallbackOrigin),
-                ("referer", $"{fallbackOrigin}/"),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "same-site"),
-                ("x-csrf-token", key)
-            );
-
-            string playlist = await Http.Post($"https://vid11.{href}/playlist/{file}.txt", "", timeoutSeconds: 8, removeContentType: true, statusCodeOK: false, headers: playlistHeaders);
-            if (string.IsNullOrWhiteSpace(playlist))
-                playlist = await httpHydra.Post($"https://vid11.{href}/playlist/{file}.txt", "", addheaders: playlistHeaders);
-
-            if (string.IsNullOrWhiteSpace(playlist))
-                return default;
-
-            string masterUrl = playlist.Trim();
-            if (!masterUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-                return default;
-
-            string master = await Http.Get(masterUrl, headers: HeadersModel.Init(
-                ("origin", fallbackOrigin),
-                ("referer", $"{fallbackOrigin}/")
-            ), timeoutSeconds: 8, statusCodeOK: false);
-
-            var headers = HeadersModel.Init(
-                ("origin", fallbackOrigin),
-                ("referer", $"{fallbackOrigin}/"),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "cross-site")
-            );
-
-            var qualitys = new Dictionary<int, string>();
-            foreach (var variant in ParseVariants(master, masterUrl))
-            {
-                if (variant.height > 0)
-                    qualitys[variant.height] = $"{variant.url}#.m3u8";
-            }
-
-            if (qualitys.Count == 0)
-                qualitys[1080] = $"{masterUrl}#.m3u8";
-
-            return new List<LiveMovieSource>()
-            {
-                new LiveMovieSource() { title = "По умолчанию", qualitys = qualitys, headers = headers }
-            };
-        }
-
-        async ValueTask<List<LiveMovieSource>> TryObrutMovie(string iframeUri, string playerUri, string ztfhost)
-        {
-            if (string.IsNullOrWhiteSpace(iframeUri))
-                return default;
-
-            string iframeOrigin = Regex.Match(iframeUri, "^(https?://[^/]+)", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(iframeOrigin))
-                return default;
-
-            var cookieContainer = new CookieContainer();
-            var iframeResult = await Http.BaseGet(iframeUri,
-                headers: HeadersModel.Init(
-                    ("Referer", playerUri),
-                    ("Origin", ztfhost),
-                    ("Sec-Fetch-Dest", "iframe"),
-                    ("Sec-Fetch-Mode", "navigate"),
-                    ("Sec-Fetch-Site", "cross-site")
-                ),
-                timeoutSeconds: 15,
-                statusCodeOK: false,
-                cookieContainer: cookieContainer
-            );
-
-            string iframeHtml = iframeResult.content;
-            if (string.IsNullOrWhiteSpace(iframeHtml))
-                return default;
-
-            if (TryParseObrutPlayerRoot(iframeHtml, out JsonObject root))
-            {
-                var movieVoices = FindObrutMovieVoices(root);
-                if (movieVoices.Count > 0)
-                {
-                    var result = new List<LiveMovieSource>(movieVoices.Count);
-
-                    foreach (var voiceNode in movieVoices)
-                    {
-                        var qualitys = ParseObrutQualityMap(voiceNode.file);
-                        if (qualitys.Count == 0)
-                            continue;
-
-                        string cookie = BuildCookieHeader(cookieContainer, new Uri(qualitys.First().Value.Replace("#.m3u8", "")));
-                        var headers = HeadersModel.Init(
-                            ("accept", "*/*"),
-                            ("origin", iframeOrigin),
-                            ("referer", iframeUri),
-                            ("sec-fetch-dest", "empty"),
-                            ("sec-fetch-mode", "cors"),
-                            ("sec-fetch-site", "same-site")
-                        );
-
-                        if (!string.IsNullOrEmpty(cookie))
-                            headers.Add(new HeadersModel("cookie", cookie));
-
-                        result.Add(new LiveMovieSource()
-                        {
-                            title = voiceNode.title,
-                            qualitys = qualitys,
-                            headers = headers
-                        });
-                    }
-
-                    if (result.Count > 0)
-                        return result;
-                }
-            }
-
-            string playerData = Regex.Match(iframeHtml, "new\\s+Player\\(\"([^\"]+)\"\\)", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(playerData))
-                return default;
-
-            int payloadIndex = playerData.IndexOf("eyJ", StringComparison.Ordinal);
-            if (payloadIndex == -1)
-                return default;
-
-            try
-            {
-                string payload = playerData[payloadIndex..];
-                payload = payload
-                    .Replace("//dC90L3Q=", string.Empty)
-                    .Replace("//Yi9iL2I=", string.Empty)
-                    .Replace("//dS91L3U=", string.Empty)
-                    .Replace("//ci9yL3I=", string.Empty)
-                    .Replace("//by9vL28=", string.Empty);
-
-                byte[] bytes = Convert.FromBase64String(payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '='));
-                string decoded = Encoding.Latin1.GetString(bytes);
-
-                var qualitys = new Dictionary<int, string>();
-                foreach (Match m in Regex.Matches(decoded, "\\[(240|360|480|720|1080)p\\](https?:\\\\/\\\\/[^,\\\"]+)", RegexOptions.IgnoreCase))
-                {
-                    if (!int.TryParse(m.Groups[1].Value, out int q))
-                        continue;
-
-                    string url = m.Groups[2].Value.Replace("\\/", "/");
-                    qualitys[q] = $"{url}#.m3u8";
-                }
-
-                if (qualitys.Count == 0)
-                {
-                    string auto = Regex.Match(decoded, "\\[[^\\]]*Авто[^\\]]*\\](https?:\\\\/\\\\/[^,\\\"]+)", RegexOptions.IgnoreCase).Groups[1].Value;
-                    if (!string.IsNullOrWhiteSpace(auto))
-                        qualitys[1080] = $"{auto.Replace("\\/", "/")}#.m3u8";
-                }
-
-                if (qualitys.Count == 0)
-                    return default;
-
-                string cookie = BuildCookieHeader(cookieContainer, new Uri(qualitys.First().Value.Replace("#.m3u8", "")));
-                var headers = HeadersModel.Init(
-                    ("accept", "*/*"),
-                    ("origin", iframeOrigin),
-                    ("referer", iframeUri),
-                    ("sec-fetch-dest", "empty"),
-                    ("sec-fetch-mode", "cors"),
-                    ("sec-fetch-site", "same-site")
-                );
-
-                if (!string.IsNullOrEmpty(cookie))
-                    headers.Add(new HeadersModel("cookie", cookie));
-
-                return new List<LiveMovieSource>()
-                {
-                    new LiveMovieSource() { title = "По умолчанию", qualitys = qualitys, headers = headers }
-                };
-            }
-            catch
-            {
-                return default;
-            }
-        }
-
-        async ValueTask<(Dictionary<int, string> qualitys, List<HeadersModel> headers)> TryObrutSerial(string iframeUri, string playerUri, string ztfhost, int season, int episode, string voice)
-        {
-            if (string.IsNullOrWhiteSpace(iframeUri) || season <= 0 || episode <= 0)
-                return default;
-
-            string iframeOrigin = Regex.Match(iframeUri, "^(https?://[^/]+)", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(iframeOrigin))
-                return default;
-
-            var cookieContainer = new CookieContainer();
-            var iframeResult = await Http.BaseGet(iframeUri,
-                headers: HeadersModel.Init(
-                    ("Referer", playerUri),
-                    ("Origin", ztfhost),
-                    ("Sec-Fetch-Dest", "iframe"),
-                    ("Sec-Fetch-Mode", "navigate"),
-                    ("Sec-Fetch-Site", "cross-site")
-                ),
-                timeoutSeconds: 15,
-                statusCodeOK: false,
-                cookieContainer: cookieContainer
-            );
-
-            string iframeHtml = iframeResult.content;
-            if (string.IsNullOrWhiteSpace(iframeHtml))
-                return default;
-
-            if (!TryParseObrutPlayerRoot(iframeHtml, out JsonObject root))
-                return default;
-
-            string file = FindObrutSerialFile(root, season, episode, voice);
-            if (string.IsNullOrWhiteSpace(file))
-                return default;
-
-            var qualitys = ParseObrutQualityMap(file);
-            if (qualitys.Count == 0)
-                return default;
-
-            string cookie = BuildCookieHeader(cookieContainer, new Uri(qualitys.First().Value.Replace("#.m3u8", "")));
-            var headers = HeadersModel.Init(
-                ("accept", "*/*"),
-                ("origin", iframeOrigin),
-                ("referer", iframeUri),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "same-site")
-            );
-
-            if (!string.IsNullOrEmpty(cookie))
-                headers.Add(new HeadersModel("cookie", cookie));
-
-            return (qualitys, headers);
-        }
-
-        static bool TryParseObrutPlayerRoot(string iframeHtml, out JsonObject root)
-        {
-            root = null;
-
-            string playerData = Regex.Match(iframeHtml ?? string.Empty, "new\\s+Player\\(\"([^\"]+)\"\\)", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(playerData))
-                return false;
-
-            string decoded = DecodeObrutPlayerPayload(playerData);
-            if (string.IsNullOrWhiteSpace(decoded) || !TryExtractBalancedJsonObject(decoded, out string jsonText))
-                return false;
-
-            try
-            {
-                root = JsonNode.Parse(jsonText) as JsonObject;
-                return root != null;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        static string DecodeObrutPlayerPayload(string playerData)
-        {
-            if (string.IsNullOrWhiteSpace(playerData))
-                return null;
-
-            int payloadIndex = playerData.IndexOf("eyJ", StringComparison.Ordinal);
-            if (payloadIndex == -1)
-                return null;
-
-            try
-            {
-                string payload = playerData[payloadIndex..];
-                payload = payload
-                    .Replace("//dC90L3Q=", string.Empty)
-                    .Replace("//Yi9iL2I=", string.Empty)
-                    .Replace("//dS91L3U=", string.Empty)
-                    .Replace("//ci9yL3I=", string.Empty)
-                    .Replace("//by9vL28=", string.Empty);
-
-                int padding = (4 - payload.Length % 4) % 4;
-                byte[] bytes = Convert.FromBase64String(payload.PadRight(payload.Length + padding, '='));
-                return Encoding.Latin1.GetString(bytes);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        static bool TryExtractBalancedJsonObject(string text, out string jsonText)
-        {
-            jsonText = null;
-
-            if (string.IsNullOrWhiteSpace(text))
-                return false;
-
-            int start = text.IndexOf('{');
-            if (start == -1)
-                return false;
-
-            bool inString = false;
-            bool escaped = false;
-            int depth = 0;
-
-            for (int i = start; i < text.Length; i++)
-            {
-                char ch = text[i];
-
-                if (inString)
-                {
-                    if (escaped)
-                    {
-                        escaped = false;
-                    }
-                    else if (ch == '\\')
-                    {
-                        escaped = true;
-                    }
-                    else if (ch == '"')
-                    {
-                        inString = false;
-                    }
-
-                    continue;
-                }
-
-                if (ch == '"')
-                {
-                    inString = true;
-                    continue;
-                }
-
-                if (ch == '{')
-                {
-                    depth++;
-                    continue;
-                }
-
-                if (ch != '}')
-                    continue;
-
-                depth--;
-                if (depth == 0)
-                {
-                    jsonText = text[start..(i + 1)];
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        static string FindObrutSerialFile(JsonObject root, int season, int episode, string voice)
-        {
-            if (root?["file"] is not JsonArray seasons)
-                return null;
-
-            JsonObject seasonNode = FindObrutFolderByNumber(seasons, season);
-            if (seasonNode == null && seasons.Count == 1 && season == 1)
-                seasonNode = seasons[0] as JsonObject;
-
-            if (seasonNode == null || seasonNode["folder"] is not JsonArray episodes)
-                return null;
-
-            JsonObject episodeNode = FindObrutFolderByNumber(episodes, episode);
-            if (episodeNode == null)
-                return null;
-
-            if (episodeNode["folder"] is JsonArray voices && voices.Count > 0)
-            {
-                JsonObject voiceNode = FindObrutVoiceNode(voices, voice) ?? voices[0] as JsonObject;
-                return voiceNode?["file"]?.GetValue<string>();
-            }
-
-            return episodeNode["file"]?.GetValue<string>();
-        }
-
-        static List<(string title, string file)> FindObrutMovieVoices(JsonObject root)
-        {
-            var result = new List<(string title, string file)>();
-            if (root?["file"] == null)
-                return result;
-
-            if (root["file"] is JsonArray voices)
-            {
-                foreach (var item in voices)
-                {
-                    if (item is not JsonObject obj)
-                        continue;
-
-                    string file = obj["file"]?.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(file))
-                        continue;
-
-                    result.Add((NormalizeObrutMovieVoiceTitle(obj["title"]?.GetValue<string>(), result.Count + 1), file));
-                }
-
-                return result;
-            }
-
-            string single = root["file"]?.GetValue<string>();
-            if (!string.IsNullOrWhiteSpace(single))
-                result.Add(("По умолчанию", single));
-
-            return result;
-        }
-
-        static JsonObject FindObrutFolderByNumber(JsonArray items, int number)
-        {
-            foreach (var item in items)
-            {
-                if (item is not JsonObject obj)
-                    continue;
-
-                if (!TryExtractNodeNumber(obj["title"]?.GetValue<string>(), out int current))
-                    continue;
-
-                if (current == number)
-                    return obj;
-            }
-
+        if (bnsiResp?.hlsSource == null || bnsiResp.hlsSource.Count == 0)
             return null;
-        }
 
-        static JsonObject FindObrutVoiceNode(JsonArray items, string voice)
+        if (!string.IsNullOrEmpty(bnsiResp.pnr) && !string.IsNullOrEmpty(bnsiResp.pnk))
         {
-            if (items == null || items.Count == 0)
-                return null;
+            ZetflixSessionManager.GetOrCreate(bnsiResp.pnr, bnsiResp.pnk, linkHost);
+        }
+        _ = Task.Run(() => ZetflixGuard.ForHost(linkHost).GetTokenAsync());
 
-            string wanted = NormalizeObrutNodeText(voice);
-            JsonObject partial = null;
-
-            foreach (var item in items)
+        return new DirectData
+        {
+            file = new FileData
             {
-                if (item is not JsonObject obj)
-                    continue;
-
-                string current = NormalizeObrutNodeText(obj["title"]?.GetValue<string>());
-                if (string.IsNullOrWhiteSpace(current))
-                    continue;
-
-                if (string.IsNullOrWhiteSpace(wanted))
-                    return obj;
-
-                if (current == wanted || current.Contains(wanted, StringComparison.OrdinalIgnoreCase) || wanted.Contains(current, StringComparison.OrdinalIgnoreCase))
-                    return obj;
-
-                if (partial == null && current.EndsWith(wanted, StringComparison.OrdinalIgnoreCase))
-                    partial = obj;
+                hlsSource = bnsiResp.hlsSource,
+                tracks = bnsiResp.tracks
             }
-
-            return partial;
-        }
-
-        static bool TryExtractNodeNumber(string text, out int number)
-        {
-            number = 0;
-            var match = Regex.Match(text ?? string.Empty, "(\\d+)");
-            return match.Success && int.TryParse(match.Groups[1].Value, out number);
-        }
-
-        static string NormalizeObrutNodeText(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                return string.Empty;
-
-            return Regex.Replace(text, "\\s+", " ").Trim().ToLowerInvariant();
-        }
-
-        static string NormalizeObrutMovieVoiceTitle(string text, int index)
-        {
-            text = Regex.Replace(text ?? string.Empty, "\\s+", " ").Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-                return text;
-
-            return index <= 1 ? "По умолчанию" : $"Озвучка {index}";
-        }
-
-        static string NormalizeObrutSerialVoiceTitle(string text, int index)
-        {
-            text = Regex.Replace(text ?? string.Empty, "\\s+", " ").Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-                return text;
-
-            return index <= 1 ? "Озвучка" : $"Озвучка {index}";
-        }
-
-        static Dictionary<int, string> ParseObrutQualityMap(string file)
-        {
-            var qualitys = new Dictionary<int, string>();
-
-            foreach (Match m in Regex.Matches(file ?? string.Empty, "\\[(240|360|480|720|1080)p\\](https?:\\\\/\\\\/[^,\\\"]+|https?://[^,\\\"]+)", RegexOptions.IgnoreCase))
-            {
-                if (!int.TryParse(m.Groups[1].Value, out int q))
-                    continue;
-
-                string url = m.Groups[2].Value.Replace("\\/", "/");
-                qualitys[q] = $"{url}#.m3u8";
-            }
-
-            if (qualitys.Count > 0)
-                return qualitys;
-
-            string auto = Regex.Match(file ?? string.Empty, "\\[(?:auto|авто)\\](https?:\\\\/\\\\/[^,\\\"]+|https?://[^,\\\"]+)", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (!string.IsNullOrWhiteSpace(auto))
-                qualitys[1080] = $"{auto.Replace("\\/", "/")}#.m3u8";
-
-            if (qualitys.Count > 0)
-                return qualitys;
-
-            string direct = Regex.Match(file ?? string.Empty, "(https?:\\\\/\\\\/[^,\\\"]+|https?://[^,\\\"]+)", RegexOptions.IgnoreCase).Groups[1].Value;
-            if (!string.IsNullOrWhiteSpace(direct))
-                qualitys[1080] = $"{direct.Replace("\\/", "/")}#.m3u8";
-
-            return qualitys;
-        }
-
-        static List<(string url, int height)> ParseVariants(string master, string masterUrl)
-        {
-            var result = new List<(string url, int height)>();
-            if (string.IsNullOrWhiteSpace(master))
-                return result;
-
-            var lines = master.Replace("\r", string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            for (int i = 0; i < lines.Length - 1; i++)
-            {
-                string line = lines[i].Trim();
-                if (!line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                int height = 0;
-                var resolution = Regex.Match(line, @"RESOLUTION=\d+x(?<h>\d+)", RegexOptions.IgnoreCase);
-                if (resolution.Success)
-                    int.TryParse(resolution.Groups["h"].Value, out height);
-
-                string next = lines[i + 1].Trim();
-                if (string.IsNullOrEmpty(next) || next.StartsWith("#"))
-                    continue;
-
-                try
-                {
-                    result.Add((new Uri(new Uri(masterUrl), next).ToString(), height));
-                }
-                catch { }
-            }
-
-            return result;
-        }
-
-        static List<HeadersModel> FilterStreamHeaders(IReadOnlyDictionary<string, string> headers)
-        {
-            if (headers == null || headers.Count == 0)
-                return null;
-
-            var result = new List<HeadersModel>(headers.Count);
-
-            foreach (var item in headers)
-            {
-                string key = item.Key.ToLowerInvariant();
-                if (key is "host" or "accept-encoding" or "connection" or "range" or "content-length")
-                    continue;
-
-                result.Add(new HeadersModel(item.Key, item.Value));
-            }
-
-            return result.Count > 0 ? result : null;
-        }
-
-        static string BuildCookieHeader(CookieContainer cookieContainer, Uri uri)
-        {
-            if (cookieContainer == null || uri == null)
-                return null;
-
-            var parts = new List<string>();
-            foreach (System.Net.Cookie cookie in cookieContainer.GetCookies(uri))
-                parts.Add($"{cookie.Name}={cookie.Value}");
-
-            return parts.Count > 0 ? string.Join("; ", parts) : null;
-        }
-
-        async ValueTask<string> goHost(string host)
-        {
-            if (!Regex.IsMatch(host ?? string.Empty, "^https?://go\\."))
-                return host;
-
-            string backhost = host;
-
-            string memkey = $"zeflix:gohost:v4:{host}";
-            if (hybridCache.TryGetValue(memkey, out string ztfhost))
-            {
-                if (string.IsNullOrEmpty(ztfhost))
-                    return backhost;
-
-                return ztfhost;
-            }
-
-            string html = await httpHydra.Get(host);
-            if (html != null)
-            {
-                ztfhost = Regex.Match(html, "\"([^\"]+)\"\\);</script>").Groups[1].Value;
-                if (!string.IsNullOrEmpty(ztfhost))
-                {
-                    ztfhost = $"https://{ztfhost}";
-                    hybridCache.Set(memkey, ztfhost, DateTime.Now.AddMinutes(20));
-                    return ztfhost;
-                }
-            }
-
-            try
-            {
-                using var browser = new PlaywrightBrowser(init.priorityBrowser);
-                var page = await browser.NewPageAsync(init.plugin, headers: Http.defaultFullHeaders, proxy: proxy_data).ConfigureAwait(false);
-                if (page != null)
-                {
-                    await page.GotoAsync(host, new PageGotoOptions()
-                    {
-                        Timeout = 20_000,
-                        WaitUntil = WaitUntilState.DOMContentLoaded
-                    }).ConfigureAwait(false);
-
-                    ztfhost = page.Url;
-                    if (!string.IsNullOrWhiteSpace(ztfhost) && Uri.TryCreate(ztfhost, UriKind.Absolute, out var uri) && Regex.IsMatch(uri.Host, @"^\d+apr\.zet-flix\.online$", RegexOptions.IgnoreCase))
-                    {
-                        ztfhost = $"{uri.Scheme}://{uri.Host}";
-                        hybridCache.Set(memkey, ztfhost, DateTime.Now.AddMinutes(20));
-                        return ztfhost;
-                    }
-                }
-            }
-            catch { }
-
-            hybridCache.Set(memkey, string.Empty, DateTime.Now.AddMinutes(1));
-
-            return backhost;
-        }
+        };
     }
+    #endregion
+
+    #region RouteToSpiderSearch
+    [HttpGet, Staticache(manually: true)]
+    [Route("lite/zetflix-search")]
+    async public Task<ActionResult> RouteToSpiderSearch(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return OnError("title", gbcache: false);
+
+        if (await IsRequestBlocked(rch: !string.IsNullOrEmpty(init.token)))
+            return badInitMsg;
+
+        var cache = await InvokeCacheResult<List<MediaItem>>($"zetflix:search:{title}", TimeSpan.FromHours(4), async e =>
+        {
+            var root = await httpHydra.Get<SearchListRoot>($"{init.apihost}/movies/name/list?name={HttpUtility.UrlEncode(title)}", safety: true, newheaders: bearer);
+            if (root?.data == null)
+                return e.Fail("data", refresh_proxy: true);
+
+            return e.Success(root.data);
+        });
+
+        return ContentTpl(cache, () =>
+        {
+            var stpl = new SimilarTpl(cache.Value.Count);
+
+            foreach (var j in cache.Value)
+            {
+                stpl.Append(
+                    j.name ?? j.original_name,
+                    j.year.ToString(),
+                    string.Empty,
+                    $"{host}/lite/zetflix?orid={j.token}",
+                    PosterApi.Size(j.poster)
+                );
+            }
+
+            return stpl;
+        });
+    }
+    #endregion
+}
+
+public class LiveSegmentMap
+{
+    public string map { get; set; }
+
+    public List<string> items { get; set; } = new List<string>();
 }

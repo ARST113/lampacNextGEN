@@ -1,21 +1,41 @@
 using Shared.Models.Base;
 using System;
 
-namespace Zetflix
+namespace Zetflix;
+
+public class ModuleConf : BaseSettings, ICloneable
 {
-    public class ModuleConf : BaseSettings
+    public ModuleConf(string plugin, string apihost, string linkhost, string token, string secret_token, bool localip, bool m4s)
     {
-        public ModuleConf(string plugin, string host, bool enable = true, bool streamproxy = false, bool rip = false)
-        {
-            this.enable = enable;
-            this.plugin = plugin;
-            this.streamproxy = streamproxy;
-            this.rip = rip;
+        this.plugin = plugin;
+        this.token = token;
+        this.secret_token = secret_token;
+        this.localip = localip;
+        this.m4s = m4s;
 
-            if (host != null)
-                this.host = host.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? host : Decrypt(host);
-        }
+        this.linkhost = linkhost == null ? string.Empty : (linkhost.StartsWith("http") ? linkhost : Decrypt(linkhost)!);
+        this.apihost = apihost == null ? string.Empty : (apihost.StartsWith("http") ? apihost : Decrypt(apihost));
+    }
 
-        public bool browser_keepopen { get; set; }
+
+    public string secret_token { get; set; }
+
+    public string linkhost { get; set; }
+
+    public bool localip { get; set; }
+
+    public bool m4s { get; set; }
+
+    public bool reserve { get; set; }
+
+
+    public ModuleConf Clone()
+    {
+        return (ModuleConf)MemberwiseClone();
+    }
+
+    object ICloneable.Clone()
+    {
+        return MemberwiseClone();
     }
 }
