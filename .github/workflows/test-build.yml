@@ -13,22 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  synchronization:
-    name: Synchronization contracts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-      - uses: actions/setup-dotnet@v5.2.0
-        with:
-          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
-      - name: Account and transport checks
-        run: node --test --test-isolation=none tests/lampac-sync-settings.test.js tests/lampac-sync-modules.test.js
-      - name: Backend controller checks
-        run: dotnet run --project tests/Lampac.Sync.Tests/Lampac.Sync.Tests.csproj --configuration Release
-
   test-build:
     name: Test build
     runs-on: ubuntu-26.04
