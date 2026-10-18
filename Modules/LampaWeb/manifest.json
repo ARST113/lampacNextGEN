@@ -6,6 +6,7 @@
     "Models",
     "Services",
     "LampaPluginBuilder.cs",
-    "ModInit.cs"
+    "ModInit.cs",
+    "ProfilePluginGate.cs"
   ]
 }

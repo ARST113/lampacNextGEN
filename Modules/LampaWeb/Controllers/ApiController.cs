@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
@@ -37,6 +37,18 @@ public class ApiController : BaseController
         NullValueHandling = NullValueHandling.Ignore,
         DefaultValueHandling = DefaultValueHandling.Ignore
     }), "application/json; charset=utf-8");
+
+    // Профильные галочки плагинов из админки (вкладка «Профили/плагины»): клиент забирает
+    // набор запрещённых для своего uid плагинов и учитывает его в lampacPluginAllowed().
+    // Без Staticache — ответ зависит от профиля. AllowAnonymous: uid и так приходит
+    // от клиента, а сам ответ содержит только url'ы плагинов.
+    [HttpGet, AllowAnonymous]
+    [Route("/lampac/profile-plugins.js")]
+    public ActionResult ProfilePlugins()
+    {
+        HttpContext.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+        return Content(ProfilePluginGate.Script(requestInfo?.user_uid), "application/javascript; charset=utf-8");
+    }
 
 
     #region Index
