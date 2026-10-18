@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VK Music token</title>
+  <style>
+    body{margin:0;font-family:Arial,sans-serif;background:#0f172a;color:#e5e7eb}
+    main{max-width:760px;margin:0 auto;padding:32px 18px}
+    h1{font-size:28px;margin:0 0 14px}
+    p{color:#aeb7c5;line-height:1.5}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0b1220;border:1px solid #263244;border-radius:8px;padding:12px}
+    .ok{color:#86efac}.bad{color:#fca5a5}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>VK Music</h1>
+    <p id="message">Saving token...</p>
+    <pre id="result"></pre>
+    <p>After a successful save, return to Lampa and open <b>VK Music</b>.</p>
+  </main>
+  <script>
+    const message = document.getElementById('message');
+    const result = document.getElementById('result');
+    const pretty = value => JSON.stringify(value, null, 2);
+
+    async function save() {
+      const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+      const token = hash.get('access_token');
+      const error = hash.get('error');
+      const state = hash.get('state') || '';
+
+      if (error) {
+        message.className = 'bad';
+        message.textContent = 'VK returned an authorization error.';
+        result.textContent = hash.get('error_description') || error;
+        return;
+      }
+
+      if (!token) {
+        message.className = 'bad';
+        message.textContent = 'access_token was not found.';
+        result.textContent = location.href;
+        return;
+      }
+
+      const form = new FormData();
+      form.set('access_token', token);
+
+      const saveParams = new URLSearchParams(location.search || '');
+      if (state) {
+        const stateParams = new URLSearchParams(state.replace(/^\?/, ''));
+        stateParams.forEach((value, key) => {
+          if (!saveParams.has(key)) saveParams.set(key, value);
+        });
+      }
+      const saveSearch = saveParams.toString() ? '?' + saveParams.toString() : '';
+
+      const response = await fetch('/vkmusic/vk/auth/save' + saveSearch, {
+        method: 'POST',
+        body: form
+      });
+      const text = await response.text();
+      let data;
+      try { data = JSON.parse(text); } catch (e) { data = { status: response.status, body: text }; }
+
+      if (response.ok && data.saved) {
+        message.className = 'ok';
+        message.textContent = 'Token saved. You can return to Lampa.';
+        history.replaceState(null, '', location.pathname + saveSearch);
+      } else {
+        message.className = 'bad';
+        message.textContent = 'Could not save token.';
+      }
+
+      result.textContent = pretty(data);
+    }
+
+    save();
+  </script>
+</body>
+</html>

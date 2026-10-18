@@ -216,9 +216,13 @@ public class ApiController : ControllerBase
         return Ok(ApiResponse<StatsDto>.Ok(new StatsDto
         {
             Today = today,
+
             Month = month,
+
             UniqueIp = uniqueIp,
+
             UniqueUserAgent = uniqueUserAgent,
+
             TopUsers = topUsers,
             TopBalancers = topBalancers
         }));

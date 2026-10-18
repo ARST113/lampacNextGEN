@@ -50,7 +50,7 @@ public class TimeCodeController : BaseController
     [Route("/timecode/all")]
     async public Task<ActionResult> Get(string card_id)
     {
-        if (string.IsNullOrEmpty(card_id) || requestInfo.user_uid == null)
+        if (string.IsNullOrEmpty(card_id) || getUserid(requestInfo) == null)
             return Json(new { });
 
         string userId = getUserid(requestInfo);

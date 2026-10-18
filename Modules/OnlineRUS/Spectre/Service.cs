@@ -45,7 +45,24 @@ public static class Service
         if (e.plugin != null && e.plugin.Equals("spectre", StringComparison.OrdinalIgnoreCase))
         {
             var streamdata = e.decryptLink?.userdata as StreamData;
-            if (streamdata?.id == null || !watchs.TryGetValue(streamdata.id, out WatchMux watch) || watch?.ws == null)
+            if (streamdata?.direct == true)
+            {
+                e.requestMessage.Headers.Clear();
+                e.requestMessage.Headers.TryAddWithoutValidation("Origin", streamdata.origin);
+                e.requestMessage.Headers.TryAddWithoutValidation("Referer", streamdata.referer);
+                e.requestMessage.Headers.TryAddWithoutValidation("User-Agent", streamdata.userAgent ?? Http.UserAgent);
+                e.requestMessage.Headers.TryAddWithoutValidation("Accept", "*/*");
+                e.requestMessage.Headers.TryAddWithoutValidation("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
+                e.requestMessage.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "cross-site");
+                e.requestMessage.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+                e.requestMessage.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+                return;
+            }
+
+            if (streamdata?.id == null)
+                return;
+
+            if (!watchs.TryGetValue(streamdata.id, out WatchMux watch) || watch?.ws == null)
             {
                 if (ModInit.conf.debug)
                     Console.WriteLine("watch null");

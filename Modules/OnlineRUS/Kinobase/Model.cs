@@ -13,6 +13,8 @@ public class EmbedModel
     public Season[] serial { get; set; }
 
     public string quality { get; set; }
+
+    public string proxy { get; set; }
 }
 
 public class Playlist

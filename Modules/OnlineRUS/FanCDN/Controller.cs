@@ -52,7 +52,7 @@ public class FanCDNController : BaseOnlineController
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
-        if (kinopoisk_id == 0 || serial == 1 || cookies == null)
+        if (string.IsNullOrWhiteSpace(title) || year == 0 || serial == 0)
             return OnError();
 
         var oninvk = new FanCDNInvoke

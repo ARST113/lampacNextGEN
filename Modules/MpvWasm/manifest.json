@@ -1,0 +1,14 @@
+{
+  "enable": true,
+  "dynamic": true,
+  "tree": [
+    "ModInit.cs",
+    "ModuleConf.cs",
+    "MpvWasmController.cs",
+    "MpvWasmProxyService.cs",
+    "MpvWasmHlsRewriteService.cs",
+    "MpvWasmUrlCodec.cs",
+    "MpvWasmSecurity.cs",
+    "MpvWasmHeaders.cs"
+  ]
+}

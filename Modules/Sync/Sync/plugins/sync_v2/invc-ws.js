@@ -1,91 +1,43 @@
-(function() {
+(function () {
   'use strict';
+  if (window.lampacSyncSocketInitialized) return;
+  window.lampacSyncSocketInitialized = true;
+  var sync = window.LampacSync;
+  var client = null;
+  var started = false;
+  var epoch = 0;
+  window.lwsEvent = {uid: '', connectionId: '', init: false};
 
-    /* Слушать события
-      document.addEventListener('lwsEvent', function(e) {
-        console.log(e.detail);
-		// e.detail.name
-		// e.detail.data
-      }); 
-	*/
-
-  {invc-rch_nws}
-
-  var nwsClient;
-  
-  window.lwsEvent = {
-    uid: '', 
-	connectionId: '',
-	init: false
-  };
-  
-  window.lwsEvent.send = function hubEvnt(name, data) {
-    nwsClient.invoke("events", window.lwsEvent.uid, name, data);
-  };
-  
-  window.lwsEvent.sendId = function hubEvnt(connectionId, name, data) {
-    nwsClient.invoke("eventsId", connectionId, window.lwsEvent.uid, name, data);
-  };
-
-  function sendEvent(name, data) {
-    var hubEvents = document.createEvent('CustomEvent');
-    hubEvents.initCustomEvent('lwsEvent', true, true, {
-      uid: window.lwsEvent.uid,
-      name: name,
-      data: data
-    });
-
-    document.dispatchEvent(hubEvents);
+  function dispatch(name, data, uid) {
+    var event = document.createEvent('CustomEvent');
+    event.initCustomEvent('lwsEvent', true, true, {uid: uid, name: name, data: data});
+    document.dispatchEvent(event);
   }
 
+  window.lwsEvent.send = function (name, data) {
+    if (sync.ready() && client && epoch === sync.epoch()) client.invoke('events', sync.uid(), name, data);
+  };
+  window.lwsEvent.sendId = function (connectionId, name, data) {
+    if (sync.ready() && client && epoch === sync.epoch()) client.invoke('eventsId', connectionId, sync.uid(), name, data);
+  };
 
-  function account(url) {
-    url = url + '';
-    if (url.indexOf('account_email=') == -1) {
-      var email = Lampa.Storage.get('account_email');
-      if (email) url = Lampa.Utils.addUrlComponent(url, 'account_email=' + encodeURIComponent(email));
-    }
-    if (url.indexOf('uid=') == -1) {
-      var uid = Lampa.Storage.get('lampac_unic_id', '');
-      if (uid) url = Lampa.Utils.addUrlComponent(url, 'uid=' + encodeURIComponent(uid));
-    }
-    if (url.indexOf('token=') == -1) {
-      var token = '{token}';
-      if (token != '') url = Lampa.Utils.addUrlComponent(url, 'token={token}');
-    }
-    return url;
-  }
-
-
-  function waitEvent() {
-    if (!window.nwsClient) window.nwsClient = {};
-    else if (window.nwsClient[hostkey] && window.nwsClient[hostkey].socket)
-      window.nwsClient[hostkey].socket.close();
-
-    window.nwsClient[hostkey] = new NativeWsClient('{localhost}/nws', {
-      autoReconnect: true
-    });
-
-    nwsClient = window.nwsClient[hostkey];
-
-    nwsClient.on('Connected', function(connectionId) {
-      window.lwsEvent.connectionId = connectionId;
-	  nwsClient.invoke("RegistryEvent", window.lwsEvent.uid);
-      window.rch_nws[hostkey].Registry(nwsClient);
-	  window.rch_nws[hostkey].connectionId = connectionId;
-      sendEvent('system', 'connected');
-    });
-
-    nwsClient.on("event", function(uid, name, data) {
-      sendEvent(name, data);
-    });
-
-    nwsClient.connect();
-  }
-
-
-  function start(j) {
-    window.reqinfo = j;
+  function connect() {
+    if (!sync.ready()) return;
+    if (client) client.close();
+    epoch = sync.epoch();
+    var currentEpoch = epoch;
+    var uid = sync.uid();
+    var current = new NativeWsClient('{localhost}/nws'.replace(/^http/, 'ws'), {autoReconnect: true});
+    // NativeWsClient defaults to the same device ID used by online playback.
+    // Lampac closes an earlier socket with that ID, so give sync its own ID.
+    var socketId = 'sync-' + Lampa.Utils.uid(32).toLowerCase() + '-' + currentEpoch;
+    if (/[?&]id=/.test(current.url)) current.url = current.url.replace(/([?&])id=[^&]*/, '$1id=' + encodeURIComponent(socketId));
+    else current.url = Lampa.Utils.addUrlComponent(current.url, 'id=' + encodeURIComponent(socketId));
+    client = current;
+    // Sync owns this socket. Do not close or replace window.nwsClient's playback socket.
+    window.lampacSyncSocket = current;
+    window.lwsEvent.uid = uid;
+    window.lwsEvent.connectionId = '';
     window.lwsEvent.init = true;
     window.lwsEvent.uid = j.user_uid;
     if (typeof NativeWsClient == 'undefined') {
@@ -108,4 +60,14 @@
       start(window.reqinfo);
   }
 
+  sync.onChange(function () {
+    if (typeof NativeWsClient !== 'undefined') connect();
+    else if (!started) {
+      started = true;
+      Lampa.Utils.putScriptAsync(['{localhost}/js/nws-client-es5.js?v21042026'], function () {
+        started = false;
+        if (typeof NativeWsClient !== 'undefined') connect();
+      });
+    }
+  });
 })();

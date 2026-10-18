@@ -1,0 +1,33 @@
+name: MPV2 Android test — choose stream URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      stream_url:
+        description: 'Replaceable HTTP(S) media URL; blank uses the test MKV'
+        type: string
+        required: false
+        default: ''
+      android_api:
+        description: 'Android API level'
+        type: choice
+        options: ['35', '34', '33']
+        default: '35'
+        required: false
+      test_seconds:
+        description: 'Observe 15-180 seconds of playback'
+        type: string
+        default: '70'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  android-mpv2:
+    uses: ARST113/lampacNextGEN/.github/workflows/mpv2-android-emulator.yml@feat/mpv2-nextgen-audio-perf-ui-20261010
+    with:
+      stream_url: ${{ inputs.stream_url }}
+      android_api: ${{ inputs.android_api }}
+      test_seconds: ${{ inputs.test_seconds }}
+    secrets: inherit

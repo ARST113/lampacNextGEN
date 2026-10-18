@@ -56,9 +56,11 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
         conf = ModuleInvoke.Init("Animebesst", new OnlinesSettings("Animebesst", "https://anime1.best")
         {
             displayindex = 135,
-            rch_access = "apk",
+            rch_access = "apk,cors,web",
             stream_access = "apk,cors,web",
-            httpversion = 2
+            httpversion = 2,
+            rhub = false,
+            rhub_fallback = false
         });
     }
 

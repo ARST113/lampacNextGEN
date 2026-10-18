@@ -8,5 +8,8 @@
     "Controller.cs",
     "ModInit.cs",
     "SqlContext.cs"
+  ],
+  "syntaxPaths": [
+    "../Shared/SyncIdentity.cs"
   ]
 }

@@ -7,10 +7,14 @@ using Shared.Models;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.PlaywrightCore;
+using Shared.Services;
+using Shared.Services.Utilities;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,12 +41,16 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
                 host,
                 "lite/pizdatoehd",
                 init,
-                streamfile =>
+                (streamfile, streamProxyAddress) =>
                 {
                     if (init.cdn != null && !streamfile.Contains(".vtt"))
-                        return HostStreamProxy(Regex.Replace(streamfile, "https?://[^/]+", init.cdn));
+                        streamfile = Regex.Replace(streamfile, "https?://[^/]+", init.cdn);
 
-                    return HostStreamProxy(streamfile);
+                    WebProxy streamProxy = null;
+                    if (!string.IsNullOrWhiteSpace(streamProxyAddress))
+                        streamProxy = ProxyManager.ConfigureWebProxy(init.proxy, streamProxyAddress).proxy;
+
+                    return HostStreamProxy(init, streamfile, proxy: streamProxy);
                 }
             );
         };
@@ -52,7 +60,9 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
     [Route("lite/pizdatoehd")]
     async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, byte clarification, short year, string href, string t, short s = -1, bool rjson = false, bool similar = false, string source = null, string id = null)
     {
-        if (await IsRequestBlocked(rch: false))
+        bool blocked = await IsRequestBlocked(rch: false);
+        Console.WriteLine($"[PizdatoeHD] request blocked={blocked} title={title} href={href} enable={init.enable} rhub={init.rhub}");
+        if (blocked)
             return badInitMsg;
 
         if (string.IsNullOrEmpty(href) && !string.IsNullOrEmpty(source) && !string.IsNullOrEmpty(id))
@@ -77,8 +87,20 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
                 string _kp = kinopoisk_id.ToString();
 
                 var matches = ModInit.database
-                    .Where(e => (imdb_id != null && e.Value.imdb == imdb_id) || (_kp != "0" && e.Value.kp == _kp))
+                    .Where(e =>
+                        (imdb_id != null && e.Value.imdb == imdb_id) ||
+                        (_kp != "0" && e.Value.kp == _kp) ||
+                        (
+                            (year <= 0 || e.Value.year == year.ToString()) &&
+                            (
+                                SearchNameTo.Equals(e.Value.title, normalizedTitle) ||
+                                SearchNameTo.Equals(e.Value.title, normalizedOriginalTitle)
+                            )
+                        )
+                    )
                     .ToList();
+
+                Console.WriteLine($"[PizdatoeHD] search local title={title} kp={kinopoisk_id} imdb={imdb_id} matches={matches.Count}");
 
                 if (matches.Count != 0)
                 {
@@ -121,32 +143,55 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
 
                             var result = await page.GotoAsync(search_uri, new PageGotoOptions()
                             {
-                                WaitUntil = WaitUntilState.DOMContentLoaded,
-                                Timeout = 10_000
-                            });
+                                clarification == 1 ? title : original_title,
+                                title
+                            }
+                            .Where(query => !string.IsNullOrWhiteSpace(query))
+                            .Distinct(StringComparer.OrdinalIgnoreCase);
 
-                            if (result == null)
-                                return e.Fail("не удалось загрузить страницу", refresh_proxy: true);
-
-                            string html = await result.TextAsync();
-                            if (string.IsNullOrEmpty(html))
-                                return e.Fail("не удалось получить содержимое страницы");
-
-                            var content = oninvk.Search(html, title, original_title, year);
-                            if (content == null || content.IsError)
-                                return e.Fail(string.Empty, refresh_proxy: true);
-
-                            if (content.IsEmpty)
+                            foreach (string query in queries)
                             {
-                                if (rch.enable || content.content != null)
-                                    return e.Fail(content.content ?? "content");
+                                string search_uri = $"{init.host}/search/?do=search&subaction=search&q={HttpUtility.UrlEncode(query)}";
+                                var result = await page.GotoAsync(search_uri, new PageGotoOptions()
+                                {
+                                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                                    Timeout = 10_000
+                                });
+
+                                if (result == null)
+                                    continue;
+
+                                string html = await result.TextAsync();
+                                if (string.IsNullOrEmpty(html))
+                                    continue;
+
+                                var content = oninvk.Search(html, title, original_title, year);
+                                if (content == null || content.IsError)
+                                    continue;
+
+                                if (content.IsEmpty)
+                                {
+                                    if (content.content != null)
+                                        return e.Fail(content.content);
+
+                                    continue;
+                                }
+
+                                if (!string.IsNullOrEmpty(content.href))
+                                    return e.Success(content);
+
+                                if ((content.similar?.Count ?? 0) > (best?.similar?.Count ?? 0))
+                                    best = content;
                             }
 
-                            return e.Success(content);
+                            if (best != null)
+                                return e.Success(best);
 
+                            return e.Fail(string.Empty, refresh_proxy: true);
                         }
-                        catch
+                        catch (Exception ex)
                         {
+                            Serilog.Log.Error(ex, "{Class} {CatchId}", "PizdatoeHD", "search");
                             return e.Fail("catch");
                         }
                     });
@@ -190,6 +235,8 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
             }
             #endregion
 
+            Console.WriteLine($"[PizdatoeHD] selected href={href}");
+
             #region news
             var cache = await InvokeCacheResult<RootObject>($"pizdatoehd:{href}", 15, async e =>
             {
@@ -222,20 +269,29 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
                         if (result == null)
                             return e.Fail("не удалось загрузить страницу", refresh_proxy: true);
 
-                        html = await result.TextAsync();
+                        html = await page.ContentAsync();
+                        Console.WriteLine($"[PizdatoeHD] card status={result.Status} url={page.Url} size={html?.Length ?? 0} challenge={html?.Contains("id=\"anubis_challenge\"") == true} access={html?.Contains("error-code", StringComparison.OrdinalIgnoreCase) == true}");
                     }
+
+                    html = await SolveAnubisAsync(page, $"{init.host}/{href}", html);
+
+                    Console.WriteLine($"[PizdatoeHD] card solved url={page.Url} size={html?.Length ?? 0} challenge={html?.Contains("id=\"anubis_challenge\"") == true} seasons={html?.Contains("data-season_id=", StringComparison.Ordinal) == true}");
 
                     if (string.IsNullOrEmpty(html))
                         return e.Fail("не удалось получить содержимое страницы");
 
                     var content = oninvk.Embed(href, html);
                     if (content == null)
+                    {
+                        Console.WriteLine($"[PizdatoeHD] embed failed href={href} title={await page.TitleAsync()}");
                         return e.Fail("не удалось распарсить страницу");
+                    }
 
                     return e.Success(content);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Serilog.Log.Error(ex, "{Class} {CatchId}", "PizdatoeHD", "news");
                     return e.Fail("catch");
                 }
             });
@@ -259,15 +315,30 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
-        var cache = await InvokeCacheResult<MovieModel>(ipkey($"pizdatoehd:movie:{voice}:{href}:{t}:{s}:{e}"), 20, async result =>
+        var cache = await InvokeCacheResult<MovieModel>(ipkey($"pizdatoehd:movie:{voice}:{href}:{t}:{s}:{e}"), TimeSpan.FromSeconds(20), async result =>
         {
-            using (var browser = new PlaywrightBrowser(init.priorityBrowser))
+            var attempts = new List<(string address, WebProxy http, (string ip, string username, string password) data)>();
+            if (init.proxy?.list != null && init.proxy.list.Length > 0)
             {
+                foreach (string address in init.proxy.list.OrderBy(_ => Guid.NewGuid()))
+                {
+                    var configured = ProxyManager.ConfigureWebProxy(init.proxy, address);
+                    attempts.Add((address, configured.proxy, configured.data));
+                }
+            }
+            else
+            {
+                attempts.Add((null, proxy, proxy_data));
+            }
+
+            foreach (var attempt in attempts)
+            {
+                using var browser = new PlaywrightBrowser(init.priorityBrowser);
                 try
                 {
                     var page = await CreatePageAsync(browser);
                     if (page == null)
-                        return result.Fail("page");
+                        continue;
 
                     if (!string.IsNullOrEmpty(init.cookie))
                     {
@@ -305,16 +376,28 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
                             }
                         };
 
-                        PlaywrightBase.GotoAsync(page, $"{init.host}/{href}#t:{t}-s:{s}-e:{e}");
+                        string requestedUrl = $"{init.host}/{href}#t:{t}-s:{s}-e:{e}";
+                        var pageResult = await page.GotoAsync(requestedUrl, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = 25_000
+                        });
+
+                        if (pageResult == null)
+                            continue;
+
+                        string html = await page.ContentAsync();
+                        await SolveAnubisAsync(page, requestedUrl, html, attempt.http);
 
                         string json = await browser.WaitPageResult(10);
                         if (string.IsNullOrEmpty(json))
-                            return result.Fail("не удалось получить содержимое страницы");
+                            continue;
 
                         var content = oninvk.AjaxMovie(json);
                         if (content == null)
-                            return result.Fail("не удалось распарсить страницу");
+                            continue;
 
+                        content.proxy = attempt.address;
                         return result.Success(content);
                     }
                     else
@@ -322,28 +405,32 @@ public class PizdatoeHDController : BaseOnlineController<ModuleConf>
                         var page_result = await page.GotoAsync($"{init.host}/{voice}", new PageGotoOptions()
                         {
                             WaitUntil = WaitUntilState.DOMContentLoaded,
-                            Timeout = 10_000
+                            Timeout = 20_000
                         });
 
                         if (page_result == null)
-                            return result.Fail("не удалось загрузить страницу", refresh_proxy: true);
+                            continue;
 
-                        string html = await page_result.TextAsync();
+                        string html = await page.ContentAsync();
+                        html = await SolveAnubisAsync(page, $"{init.host}/{voice}", html, attempt.http);
                         if (string.IsNullOrEmpty(html))
-                            return result.Fail("не удалось получить содержимое страницы");
+                            continue;
 
                         var content = oninvk.Movie(html);
                         if (content == null)
-                            return result.Fail("не удалось распарсить страницу");
+                            continue;
 
+                        content.proxy = attempt.address;
                         return result.Success(content);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return result.Fail("catch");
+                    Serilog.Log.Warning(ex, "PizdatoeHD movie attempt failed Proxy={Proxy}", attempt.data.ip);
                 }
             }
+
+            return result.Fail("all proxy attempts failed", refresh_proxy: true);
         });
 
         if (cache.Value?.links == null || cache.Value.links.Count == 0)

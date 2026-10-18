@@ -135,11 +135,18 @@ namespace Zetflix
 
                         await page.GotoAsync(uri, new PageGotoOptions()
                         {
-                            Timeout = 15_000,
-                            WaitUntil = WaitUntilState.NetworkIdle
+                            Timeout = 10_000,
+                            WaitUntil = WaitUntilState.DOMContentLoaded
                         }).ConfigureAwait(false);
 
-                        result = await page.ContentAsync().ConfigureAwait(false);
+                        for (int attempt = 0; attempt < 12; attempt++)
+                        {
+                            result = await page.ContentAsync().ConfigureAwait(false);
+                            if (result?.Contains("new Playerjs") == true || result?.StartsWith("<script>(function") == true)
+                                break;
+
+                            await Task.Delay(125).ConfigureAwait(false);
+                        }
 
                         log += $"{result}\n\n";
 
@@ -1844,7 +1851,7 @@ namespace Zetflix
             if (!Regex.IsMatch(host ?? string.Empty, "^https?://go\\."))
                 return host;
 
-            string backhost = "https://7apr.zet-flix.online";
+            string backhost = host;
 
             string memkey = $"zeflix:gohost:v4:{host}";
             if (hybridCache.TryGetValue(memkey, out string ztfhost))

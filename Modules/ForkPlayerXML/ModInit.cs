@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Shared.Models.Events;
 using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
@@ -65,7 +65,7 @@ public class ModInit : IModuleLoaded
 
             /*
              * пример реализации
-             * 
+             *
             string platform = "apk"; // cors, web
             if (e.init.rchstreamproxy != null && e.init.rchstreamproxy.Contains(platform))
             {

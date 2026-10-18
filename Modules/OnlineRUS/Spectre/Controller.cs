@@ -19,6 +19,8 @@ namespace Spectre;
 
 public class SpectreController : BaseOnlineController<ModuleConf>
 {
+    static readonly Serilog.ILogger Log = Serilog.Log.ForContext<SpectreController>();
+
     public SpectreController() : base(ModInit.conf)
     {
         loadKitInitialization = (j, i, c) =>
@@ -379,12 +381,15 @@ public class SpectreController : BaseOnlineController<ModuleConf>
             Console.WriteLine("streamId: " + streamId);
 
         var result = await goMovie($"{init.linkhost}/?token_movie={token_movie}&token={init.token}", id_file, streamId);
-        if (result.streams.data.Count == 0 || result.wsUri == null)
+        if (result.streams.data.Count == 0)
             return OnError();
 
-        bool res = await Service.AddOrUpdate(streamId, result.wsUri, result.watch);
-        if (!res)
-            return OnError();
+        if (!string.IsNullOrWhiteSpace(result.wsUri))
+        {
+            bool res = await Service.AddOrUpdate(streamId, result.wsUri, result.watch);
+            if (!res)
+                return OnError();
+        }
 
         var first = result.streams.Firts();
 
@@ -609,21 +614,45 @@ public class SpectreController : BaseOnlineController<ModuleConf>
 
                             string json = await fetchResponse.TextAsync().ConfigureAwait(false);
                             var jo = JsonConvert.DeserializeObject<JObject>(json);
+                            if (jo == null)
+                            {
+                                Log.Warning("Spectre returned invalid JSON for file {FileId}", id_file);
+                                await route.FulfillAsync(new RouteFulfillOptions
+                                {
+                                    Status = fetchResponse.Status,
+                                    Body = json,
+                                    Headers = fetchResponse.Headers
+                                }).ConfigureAwait(false);
+                                return;
+                            }
 
-                            watch.requestReferer = route.Request.Headers["referer"];
-                            watch.requestOrigin = route.Request.Headers["origin"];
+                            route.Request.Headers.TryGetValue("referer", out string requestReferer);
+                            route.Request.Headers.TryGetValue("origin", out string requestOrigin);
+                            route.Request.Headers.TryGetValue("user-agent", out string requestUserAgent);
 
-                            wsUri = jo.Value<string>("pnr") + $"?sid={jo.Value<string>("pnk")}&v=2.1&t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+                            watch.requestReferer = requestReferer ?? uri;
+                            watch.requestOrigin = requestOrigin ?? new Uri(uri).GetLeftPart(UriPartial.Authority);
 
-                            var selectedItem =
-                                jo["hlsSource"]
-                                    .Children<JObject>()
-                                    .FirstOrDefault(x => (bool?)x["default"] == true)
-                                ??
-                                jo["hlsSource"]
-                                    .FirstOrDefault() as JObject;
+                            string pnr = jo.SelectToken("$..pnr")?.Value<string>();
+                            string pnk = jo.SelectToken("$..pnk")?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(pnr) && !string.IsNullOrWhiteSpace(pnk))
+                                wsUri = pnr + $"?sid={pnk}&v=2.1&t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
-                            foreach (var q in selectedItem["quality"].Children<JProperty>())
+                            var selectedItem = FindQualityItem(jo.SelectToken("$..hlsSource"));
+                            var qualities = selectedItem?["quality"] as JObject;
+                            if (qualities == null)
+                            {
+                                Log.Warning("Spectre response has no qualities for file {FileId}: {Json}", id_file, json);
+                                await route.FulfillAsync(new RouteFulfillOptions
+                                {
+                                    Status = fetchResponse.Status,
+                                    Body = json,
+                                    Headers = fetchResponse.Headers
+                                }).ConfigureAwait(false);
+                                return;
+                            }
+
+                            foreach (var q in qualities.Properties())
                             {
                                 if (!init.m4s && (q.Name == "2160" || q.Name == "1440"))
                                     continue;
@@ -635,21 +664,32 @@ public class SpectreController : BaseOnlineController<ModuleConf>
                                 if (string.IsNullOrEmpty(watch.resolution))
                                     watch.resolution = q.Name;
 
-                                link = link
-                                    .Split(new[] { " or " }, StringSplitOptions.RemoveEmptyEntries)
-                                    .FirstOrDefault()
-                                    .Trim();
+                                string directOrigin = watch.requestOrigin;
+                                string directReferer = watch.requestReferer;
+
+                                if (string.IsNullOrWhiteSpace(wsUri))
+                                {
+                                    directOrigin = new Uri(init.linkhost).GetLeftPart(UriPartial.Authority);
+                                    directReferer = uri;
+                                }
 
                                 var streamData = new StreamData()
                                 {
                                     id = streamId,
-                                    resolution = q.Name
+                                    resolution = q.Name,
+                                    direct = string.IsNullOrWhiteSpace(wsUri),
+                                    origin = directOrigin,
+                                    referer = directReferer,
+                                    userAgent = requestUserAgent
                                 };
 
                                 streamquality.Append(HostStreamProxy(link, userdata: streamData), $"{q.Name}p");
                             }
 
-                            browser.SetPageResult(null);
+                            if (streamquality.Any())
+                                browser.SetPageResult(null);
+                            else
+                                Log.Warning("Spectre response has no playable streams for file {FileId}", id_file);
 
                             if (ModInit.conf.debug)
                             {
@@ -667,6 +707,17 @@ public class SpectreController : BaseOnlineController<ModuleConf>
                         }
                         else
                         {
+                            if (route.Request.Url.Contains("allarknow.online", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var headers = new Dictionary<string, string>(route.Request.Headers, StringComparer.OrdinalIgnoreCase)
+                                {
+                                    ["Referer"] = "https://kinogo-go.tv/"
+                                };
+
+                                await route.ContinueAsync(new RouteContinueOptions { Headers = headers });
+                                return;
+                            }
+
                             if (browser.IsCompleted ||
                                 route.Request.Url.Contains("/stat") ||
                                 route.Request.Url.Contains("/lists.php") ||
@@ -685,7 +736,10 @@ public class SpectreController : BaseOnlineController<ModuleConf>
                             await route.ContinueAsync();
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Spectre route failed for file {FileId} and URL {Url}", id_file, route.Request.Url);
+                    }
                 });
 
                 PlaywrightBase.GotoAsync(page, "https://kinogo-go.tv/");
@@ -695,10 +749,29 @@ public class SpectreController : BaseOnlineController<ModuleConf>
 
             return (watch, streamquality, wsUri);
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Error(ex, "Spectre player initialization failed for file {FileId}", id_file);
             return default;
         }
+    }
+
+    static JObject FindQualityItem(JToken token)
+    {
+        if (token is JObject current && current["quality"] is JObject)
+            return current;
+
+        if (token == null)
+            return null;
+
+        foreach (var child in token.Children())
+        {
+            var result = FindQualityItem(child);
+            if (result != null)
+                return result;
+        }
+
+        return null;
     }
     #endregion
 }

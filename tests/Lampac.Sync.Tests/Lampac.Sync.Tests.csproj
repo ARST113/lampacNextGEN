@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../Modules/Sync/Sync/Sync.csproj" />
+    <ProjectReference Include="../../Modules/Sync/TimeCode/TimeCode.csproj" />
+    <ProjectReference Include="../../Modules/Sync/Storage/Storage.csproj" />
+  </ItemGroup>
+</Project>

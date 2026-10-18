@@ -53,14 +53,11 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
 
     void updateConf()
     {
-        conf = ModuleInvoke.Init("AnimeGo", new OnlinesSettings("AnimeGo", "https://animego.me", streamproxy: true, enable: false)
+        conf = ModuleInvoke.Init("AnimeGo", new OnlinesSettings("AnimeGo", "https://animego.vc", streamproxy: true, enable: false)
         {
             displayindex = 155,
             httpversion = 2,
-            headers_stream = HeadersModel.Init(
-                ("origin", "https://aniboom.one"),
-                ("referer", "https://aniboom.one/")
-            ).ToDictionary()
+            headers_stream = HeadersModel.Init().ToDictionary()
         });
     }
 

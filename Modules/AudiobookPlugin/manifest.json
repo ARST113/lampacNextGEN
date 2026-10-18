@@ -1,0 +1,8 @@
+{
+  "enable": true,
+  "dll": "AudiobookPlugin",
+  "dynamic": true,
+  "references": [
+    "HtmlAgilityPack.dll"
+  ]
+}

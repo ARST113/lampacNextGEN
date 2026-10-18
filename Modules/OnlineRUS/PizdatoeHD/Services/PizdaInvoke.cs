@@ -19,11 +19,11 @@ public class PizdaInvoke
     #region PizdaInvoke
     ModuleConf init;
     string host, route;
-    Func<string, string> onstreamfile;
+    Func<string, string, string> onstreamfile;
 
     static readonly Serilog.ILogger Log = Serilog.Log.ForContext<PizdaInvoke>();
 
-    public PizdaInvoke(string host, string route, ModuleConf init, Func<string, string> onstreamfile)
+    public PizdaInvoke(string host, string route, ModuleConf init, Func<string, string, string> onstreamfile)
     {
         this.host = host != null ? $"{host}/" : null;
         this.route = route;
@@ -229,7 +229,7 @@ public class PizdaInvoke
     public string Movie(MovieModel md, string title, string original_title, bool play, HttpContext httpContext, VastConf vast = null)
     {
         if (play)
-            return onstreamfile(md.links[0].stream_url);
+            return onstreamfile(md.links[0].stream_url, md.proxy);
 
         #region subtitles
         var subtitles = new SubtitleTpl();
@@ -242,7 +242,7 @@ public class PizdaInvoke
                 while (m.Success)
                 {
                     if (!string.IsNullOrEmpty(m.Groups[1].Value) && !string.IsNullOrEmpty(m.Groups[2].Value))
-                        subtitles.Append(m.Groups[1].Value, onstreamfile(m.Groups[2].Value));
+                        subtitles.Append(m.Groups[1].Value, onstreamfile(m.Groups[2].Value, md.proxy));
 
                     m = m.NextMatch();
                 }
@@ -256,11 +256,11 @@ public class PizdaInvoke
 
         var streamquality = new StreamQualityTpl();
         foreach (var l in md.links)
-            streamquality.Append(onstreamfile(l.stream_url), l.title);
+            streamquality.Append(onstreamfile(l.stream_url, md.proxy), l.title);
 
         return VideoTpl.ToJson(
             "play",
-            onstreamfile(md.links[0].stream_url),
+            onstreamfile(md.links[0].stream_url, md.proxy),
             (title ?? original_title ?? "auto"),
             streamquality: streamquality,
             subtitles: subtitles,
@@ -344,14 +344,14 @@ public class PizdaInvoke
                 if (links.Count == 0)
                     return default;
 
-                var streamquality = new StreamQualityTpl(links.Select(l => (onstreamfile(l.stream_url), l.title)));
+                var streamquality = new StreamQualityTpl(links.Select(l => (onstreamfile(l.stream_url, null), l.title)));
 
                 var first = streamquality.Firts();
                 if (first != null)
                 {
                     mtpl.Append(
                         first.quality,
-                        onstreamfile(first.link),
+                        onstreamfile(first.link, null),
                         streamquality: streamquality
                     );
                 }
@@ -369,9 +369,17 @@ public class PizdaInvoke
 
             if (result.content.Contains("data-translator_id="))
             {
+                var translatorIds = new HashSet<string>();
                 var match = new Regex("<[a-z]+ [^>]+ data-translator_id=\"(?<translator>[0-9]+)\"([^>]+)?>(?<name>[^<]+)(<img title=\"(?<imgname>[^\"]+)\" [^>]+/>)?").Match(result.content);
                 while (match.Success)
                 {
+                    string translatorId = match.Groups["translator"].Value;
+                    if (string.IsNullOrEmpty(translatorId) || !translatorIds.Add(translatorId))
+                    {
+                        match = match.NextMatch();
+                        continue;
+                    }
+
                     if (!init.premium && match.Groups[0].Value.Contains("prem_translator"))
                     {
                         match = match.NextMatch();
@@ -390,8 +398,8 @@ public class PizdaInvoke
 
                     vtpl.Append(
                         name,
-                        match.Groups["translator"].Value == selectVoice,
-                        host + $"{route}?rjson={rjson}&title={enc_title}&original_title={enc_original_title}&href={voice}&t={match.Groups["translator"].Value}"
+                        translatorId == selectVoice,
+                        host + $"{route}?rjson={rjson}&title={enc_title}&original_title={enc_original_title}&href={voice}&t={translatorId}"
                     );
 
                     match = match.NextMatch();

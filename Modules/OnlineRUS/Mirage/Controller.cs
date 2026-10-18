@@ -447,7 +447,7 @@ public class MirageController : BaseOnlineController<ModuleConf>
                 {
                     curenthsl.lastseek = seek;
 
-                    await page.EvaluateAsync(@"() => 
+                    await page.EvaluateAsync(@"() =>
                             document.getElementById('player').contentWindow.postMessage(
                               JSON.stringify({
                                 api: ""seek"",
@@ -644,7 +644,7 @@ public class MirageController : BaseOnlineController<ModuleConf>
                         {
                             tcsPageResponse.SetResult(true);
 
-                            await page.EvaluateAsync(@"() => 
+                            await page.EvaluateAsync(@"() =>
                                     document.getElementById('player').contentWindow.postMessage(
                                       JSON.stringify({
                                         api: ""pause""

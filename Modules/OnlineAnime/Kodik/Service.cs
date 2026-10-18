@@ -174,7 +174,10 @@ public struct KodikInvoke
 
         await httpHydra.GetSpan(link, iframe =>
         {
-            player_single = Rx.Match(iframe, "src=\"/(assets/js/app\\.player_[^\"]+\\.js)\"");
+            // The API request moved from app.player to the media-specific bundle.
+            player_single = Rx.Match(iframe, "src=\"/(assets/js/app\\.(?:serial|video|episode|season)[^\"]+\\.js)\"");
+            if (string.IsNullOrEmpty(player_single))
+                player_single = Rx.Match(iframe, "\"/(assets/js/app\\.player(?:_|\\.)[^\"]+\\.js)\"");
 
             ReadOnlySpan<char> playerSettings = Rx.Slice(iframe, "advertDebug", "preview-icons");
             if (playerSettings.IsEmpty)

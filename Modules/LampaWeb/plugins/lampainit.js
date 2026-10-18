@@ -4,51 +4,50 @@
   window.lampac_version = { major: 0, minor: 0 };
 
   //localStorage.setItem('cub_mirrors', '["mirror-kurwa.men"]');
-  
+
   window.lampa_settings = window.lampa_settings || {};
-  window.lampa_settings.torrents_use = true;    // Показывать кнопку торрентов
-  window.lampa_settings.demo = false;           // demo off
-  window.lampa_settings.read_only = false;      // Режим только для чтения, без кнопок онлайн и расширений
-  window.lampa_settings.socket_use = true;      // cub - Использовать сокеты для синхронизации данных
-  window.lampa_settings.socket_url = undefined; // cub - Адрес сокета, по умолчанию лампа берет адреса из манифеста
-  window.lampa_settings.socket_methods = true;  // cub - Обрабатывать сообщения сокетов
-  window.lampa_settings.account_use = true;   // cub - Использовать аккаунты
-  window.lampa_settings.account_sync = true;  // cub - Синхронизировать закладки, таймкоды и прочее
-  window.lampa_settings.plugins_store = true; // cub магазин расширений
-  window.lampa_settings.feed = true;          // cub лента
-  window.lampa_settings.iptv = false;         // Является ли приложение IPTV
-  window.lampa_settings.white_use = false;    // Белая и пушистая лампа, для одобрения модерации
-  window.lampa_settings.push_state = true;    // адрес в url /?card=1241982&media=movie 
-  window.lampa_settings.lang_use = true;      // Подключить другие языки интерфейса, по умолчанию только русский и английский
-  window.lampa_settings.plugins_use = true;   // Разрешить установку плагинов и расширений
-  window.lampa_settings.dcma = false;         // Добавить список блокировки карточек, пример: [{"id":3566556,"cat":"movie"},...]
-  window.lampa_settings.services = true;      // Различные сервисы cub в приложении
-  window.lampa_settings.youtube = true;       // Подключить YouTube API
-  window.lampa_settings.geo = true;           // Определять гео по IP, иначе будет RU
-  window.lampa_settings.mirrors = true;       // Использовать поиск зеркал
+  window.lampa_settings.torrents_use = true;
+  window.lampa_settings.demo = false;
+  window.lampa_settings.read_only = false;
+  window.lampa_settings.socket_use = true;
+  window.lampa_settings.socket_url = undefined;
+  window.lampa_settings.socket_methods = true;
+  window.lampa_settings.account_use = true;
+  window.lampa_settings.account_sync = true;
+  window.lampa_settings.plugins_store = true;
+  window.lampa_settings.feed = true;
+  window.lampa_settings.iptv = false;
+  window.lampa_settings.white_use = false;
+  window.lampa_settings.push_state = true;
+  window.lampa_settings.lang_use = true;
+  window.lampa_settings.plugins_use = true;
+  window.lampa_settings.dcma = false;
+  window.lampa_settings.services = true;
+  window.lampa_settings.youtube = true;
+  window.lampa_settings.geo = true;
+  window.lampa_settings.mirrors = true;
 
   window.lampa_settings.disable_features = window.lampa_settings.disable_features || {};
-  window.lampa_settings.disable_features.dmca = true;           // шлет нахер правообладателей - on
-  window.lampa_settings.disable_features.ads = true;            // Вспомогатиленые сервисы на подписку према
-  window.lampa_settings.disable_features.reactions = false;     // cub реакции
-  window.lampa_settings.disable_features.discuss = false;       // cub комментарии
-  window.lampa_settings.disable_features.ai = false;            // cub AI-поиск
-  window.lampa_settings.disable_features.install_proxy = false; // cub tmdb proxy
-  window.lampa_settings.disable_features.subscribe = false;     // cub подписки
-  window.lampa_settings.disable_features.blacklist = false;     // Черный список плагинов
-  window.lampa_settings.disable_features.persons = false;       // Подписка на актеров
-  window.lampa_settings.disable_features.trailers = false;      // Трейлеры
-  window.lampa_settings.disable_features.lgbt = true;           // Разрешить ЛГБТ контент
+  window.lampa_settings.disable_features.dmca = true;
+  window.lampa_settings.disable_features.ads = true;
+  window.lampa_settings.disable_features.reactions = false;
+  window.lampa_settings.disable_features.discuss = false;
+  window.lampa_settings.disable_features.ai = false;
+  window.lampa_settings.disable_features.install_proxy = false;
+  window.lampa_settings.disable_features.subscribe = false;
+  window.lampa_settings.disable_features.blacklist = false;
+  window.lampa_settings.disable_features.persons = false;
+  window.lampa_settings.disable_features.trailers = false;
+  window.lampa_settings.disable_features.lgbt = true;
 
   window.lampa_settings.developer = window.lampa_settings.developer || {};
-  
-  
+
   {lampainit-invc}
 
   var timer = setInterval(function() {
     if (typeof Lampa !== 'undefined') {
       clearInterval(timer);
-	  
+
       if (lampainit_invc)
         lampainit_invc.appload();
 
@@ -61,22 +60,16 @@
         Lampa.Storage.set('lampac_unic_id', unic_id);
       }
 
+      syncLampacPlugins();
+
       Lampa.Utils.putScriptAsync(["{localhost}/privateinit.js?account_email=" + encodeURIComponent(Lampa.Storage.get('account_email', '')) + "&uid=" + encodeURIComponent(Lampa.Storage.get('lampac_unic_id', ''))], function() {});
 
-      if (window.appready) {
-        start();
-      }
-      else {
-        Lampa.Listener.follow('app', function(e) {
-          if (e.type == 'ready') {
-            start();
-          }
-        });
-      }
+      if (window.appready) start();
+      else Lampa.Listener.follow('app', function(e) { if (e.type == 'ready') start(); });
 
-	  {pirate_store}
+      {pirate_store}
     }
-  }, 200);
+  }, 50);
 
   function pluginBaseName(url) {
     if (!url) return null;

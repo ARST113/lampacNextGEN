@@ -16,6 +16,7 @@
     <Project Path="Modules/Kit/Kit.csproj" />
     <Project Path="Modules/LampacApk/LampacApk.csproj" />
     <Project Path="Modules/LampaWeb/LampaWeb.csproj" />
+    <Project Path="Modules/MpvWasm/MpvWasm.csproj" />
     <Project Path="Modules/MsxNative/MsxNative.csproj" />
     <Project Path="Modules/Music/Music.csproj" />
     <Project Path="Modules/NextHUB/NextHUB.csproj" />

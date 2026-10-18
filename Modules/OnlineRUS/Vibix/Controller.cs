@@ -77,6 +77,7 @@ public class VibixController : BaseOnlineController
                             v.Key ?? movie.title,
                             accsArgs(v.Value[0].link),
                             streamquality: new StreamQualityTpl(v.Value, linkPredicate: accsArgs),
+                            voice_name: v.Key ?? movie.title ?? "Vibix",
                             vast: init.vast
                         );
                     }
@@ -207,6 +208,54 @@ public class VibixController : BaseOnlineController
             }
             #endregion
         }
+    }
+
+
+    Dictionary<string, List<StreamQualityDto>> ParseVoices(string file)
+    {
+        var voices = new Dictionary<string, List<StreamQualityDto>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(file))
+            return voices;
+
+        foreach (Match qualityMatch in Regex.Matches(file, @"\[(?<q>480|720|1080)p\](?<items>.*?)(?=,\[(?:480|720|1080)p\]|$)", RegexOptions.Singleline))
+        {
+            string items = qualityMatch.Groups["items"].Value;
+            var voiceMatches = Regex.Matches(items, @"\{(?<voice>[^}]+)\}(?<file>https?://[^,\t\[\;{ ]+)", RegexOptions.Singleline);
+
+            if (voiceMatches.Count == 0)
+            {
+                var defaultFile = Regex.Match(items, @"(?<file>https?://[^,\t\[\;{ ]+)").Groups["file"].Value;
+                if (!string.IsNullOrEmpty(defaultFile))
+                    AppendVoiceStream(voices, "Vibix", qualityMatch.Groups["q"].Value, defaultFile);
+                continue;
+            }
+
+            foreach (Match voiceMatch in voiceMatches)
+            {
+                AppendVoiceStream(
+                    voices,
+                    voiceMatch.Groups["voice"].Value,
+                    qualityMatch.Groups["q"].Value,
+                    voiceMatch.Groups["file"].Value
+                );
+            }
+        }
+
+        return voices;
+    }
+
+    void AppendVoiceStream(Dictionary<string, List<StreamQualityDto>> voices, string voice, string quality, string file)
+    {
+        if (!voices.TryGetValue(voice, out var streams))
+        {
+            streams = new List<StreamQualityDto>(3);
+            voices[voice] = streams;
+        }
+
+        streams.Insert(0, new StreamQualityDto(
+            $"{host}/lite/vibix/video.m3u8?id={EncryptQuery(file)}",
+            quality + "p"
+        ));
     }
 
 

@@ -19,15 +19,17 @@ public struct CollapsInvoke
     string apihost;
     bool dash;
     Func<string, string> onstreamfile;
+    Func<string, int, string> onstreamaudio;
     HttpHydra httpHydra;
 
-    public CollapsInvoke(string host, string route, HttpHydra httpHydra, string apihost, bool dash, Func<string, string> onstreamfile)
+    public CollapsInvoke(string host, string route, HttpHydra httpHydra, string apihost, bool dash, Func<string, string> onstreamfile, Func<string, int, string> onstreamaudio)
     {
         this.host = host != null ? $"{host}/" : null;
         this.route = route;
         this.apihost = apihost;
         this.dash = dash;
         this.onstreamfile = onstreamfile;
+        this.onstreamaudio = onstreamaudio;
         this.httpHydra = httpHydra;
     }
     #endregion
@@ -157,7 +159,7 @@ public struct CollapsInvoke
                 md.movie.name,
                 onstreamfile.Invoke(stream.Replace("\u0026", "&")),
                 subtitles: subtitles,
-                voice_name: md.movie.voicename,
+                voice_name: string.IsNullOrWhiteSpace(md.movie.voicename) ? "Collaps" : md.movie.voicename,
                 headers: headers,
                 vast: vast
             );
@@ -198,18 +200,23 @@ public struct CollapsInvoke
 
                     foreach (var episode in episodes)
                     {
+                        int audioIndex = selectedVoice == null
+                            ? -1
+                            : Array.FindIndex(episode.audio?.names ?? Array.Empty<string>(), i => string.Equals(i, selectedVoice, StringComparison.OrdinalIgnoreCase));
+
+                        if (selectedVoice != null && audioIndex < 0)
+                            continue;
+
                         string stream = episode.hls ?? episode.dasha ?? episode.dash;
-                        if (dash && (episode.dasha ?? episode.dash) != null)
+
+                        if (selectedVoice == null && dash && (episode.dasha ?? episode.dash) != null)
                             stream = episode.dasha ?? episode.dash;
 
                         if (string.IsNullOrEmpty(stream) || string.IsNullOrEmpty(episode.episode))
                             continue;
 
                         #region voicename
-                        string voicename = string.Empty;
-
-                        if (episode.audio.names != null)
-                            voicename = string.Join(", ", episode.audio.names);
+                        string voicename = selectedVoice ?? "Collaps";
                         #endregion
 
                         #region subtitle
@@ -230,7 +237,9 @@ public struct CollapsInvoke
                             title ?? original_title,
                             s,
                             episode.episode,
-                            onstreamfile.Invoke(stream.Replace("\u0026", "&")),
+                            audioIndex >= 0 && onstreamaudio != null
+                                ? onstreamaudio.Invoke(stream.Replace("\u0026", "&"), audioIndex)
+                                : onstreamfile.Invoke(stream.Replace("\u0026", "&")),
                             subtitles: subtitles,
                             voice_name: voicename,
                             headers: headers,

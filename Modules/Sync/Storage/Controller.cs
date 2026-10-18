@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using LampacSync.Shared;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Shared;
@@ -131,10 +132,11 @@ public class StorageController : BaseController
             }
         }
 
-        if (!string.IsNullOrEmpty(requestInfo.user_uid))
+        string syncUid = LampacSyncIdentity.Resolve(requestInfo, HttpContext);
+        if (!string.IsNullOrEmpty(syncUid))
         {
             string edata = JsonConvertPool.SerializeObject(new { path, pathfile });
-            _ = NwsEvents.SendAsync(connectionId, requestInfo.user_uid, "storage", edata).ConfigureAwait(false);
+            _ = NwsEvents.SendAsync(connectionId, syncUid, "storage", edata).ConfigureAwait(false);
         }
 
         var inf = new FileInfo(outFile);
@@ -289,7 +291,7 @@ public class StorageController : BaseController
     {
         path = Regex.Replace(path, "[^a-z0-9\\-]", "", RegexOptions.IgnoreCase);
 
-        string id = user_uid ?? requestInfo.user_uid;
+        string id = user_uid ?? LampacSyncIdentity.Resolve(requestInfo, HttpContext);
         if (string.IsNullOrEmpty(id))
             return null;
 

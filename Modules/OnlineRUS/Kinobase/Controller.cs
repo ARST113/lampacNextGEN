@@ -4,8 +4,10 @@ using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
 using Shared.PlaywrightCore;
+using Shared.Services;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -13,6 +15,8 @@ namespace Kinobase;
 
 public class KinobaseController : BaseOnlineController<ModuleConf>
 {
+    string selectedProxyAddress;
+
     public KinobaseController() : base(ModInit.conf) { }
 
     [HttpGet, Staticache(manually: true)]
@@ -42,7 +46,14 @@ public class KinobaseController : BaseOnlineController<ModuleConf>
 
                return black_magic(ongettourl);
            },
-           streamfile => HostStreamProxy(streamfile)
+           streamfile =>
+           {
+               System.Net.WebProxy streamProxy = null;
+               if (!string.IsNullOrWhiteSpace(selectedProxyAddress))
+                   streamProxy = ProxyManager.ConfigureWebProxy(init.proxy, selectedProxyAddress).proxy;
+
+               return HostStreamProxy(init, streamfile, proxy: streamProxy);
+           }
         );
 
         #region search
@@ -73,11 +84,14 @@ public class KinobaseController : BaseOnlineController<ModuleConf>
             if (content == null)
                 return e.Fail("embed");
 
+            content.proxy = selectedProxyAddress;
             return e.Success(content);
         });
 
         if (cache.IsSuccess && cache.Value.IsEmpty)
             return ShowError(cache.Value.errormsg);
+
+        selectedProxyAddress = cache.Value?.proxy;
 
         return ContentTpl(cache,
             () => oninvk.Tpl(cache.Value, title, href, s, t, rjson)
@@ -87,13 +101,28 @@ public class KinobaseController : BaseOnlineController<ModuleConf>
     #region black_magic
     async Task<string> black_magic(string uri)
     {
-        try
+        var attempts = new List<(string address, (string ip, string username, string password) data)>();
+        if (init.proxy?.list != null && init.proxy.list.Length > 0)
         {
-            using (var browser = new PlaywrightBrowser())
+            foreach (string address in init.proxy.list.Where(i => !string.IsNullOrWhiteSpace(i)).Distinct())
             {
-                var page = await browser.NewPageAsync(init.plugin, proxy: proxy_data, headers: init.headers).ConfigureAwait(false);
+                var configured = ProxyManager.ConfigureWebProxy(init.proxy, address);
+                attempts.Add((address, configured.data));
+            }
+        }
+        else
+        {
+            attempts.Add((null, proxy_data));
+        }
+
+        foreach (var attempt in attempts)
+        {
+            try
+            {
+                using var browser = new PlaywrightBrowser();
+                var page = await browser.NewPageAsync(init.plugin, proxy: attempt.data, headers: init.headers).ConfigureAwait(false);
                 if (page == null)
-                    return null;
+                    continue;
 
                 await page.Context.AddCookiesAsync(new List<Cookie>()
                 {
@@ -147,13 +176,35 @@ public class KinobaseController : BaseOnlineController<ModuleConf>
                     }
                 });
 
-                PlaywrightBase.GotoAsync(page, uri);
-                await browser.WaitForAnySelectorAsync(page, "#playerjsfile", ".uppod-media", ".alert").ConfigureAwait(false);
+                await page.GotoAsync(uri, new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 20_000
+                }).ConfigureAwait(false);
 
-                return await page.ContentAsync().ConfigureAwait(false);
+                await Task.WhenAny(
+                    browser.WaitForAnySelectorAsync(page, "#playerjsfile", ".uppod-media", ".alert"),
+                    Task.Delay(TimeSpan.FromSeconds(10))
+                ).ConfigureAwait(false);
+
+                string content = await page.ContentAsync().ConfigureAwait(false);
+                bool hasPlayer = content.Contains("id=\"playerjsfile\"") || content.Contains("class=\"uppod-media\"");
+                string alert = Regex.Match(content, "<div class=\"alert\">\\s*<h3>([^<]+)").Groups[1].Value.Trim();
+                Console.WriteLine($"[Kinobase] route={attempt.address ?? "direct"} player={hasPlayer} alert={alert}");
+
+                if (hasPlayer)
+                {
+                    selectedProxyAddress = attempt.address;
+                    return content;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Kinobase] route={attempt.address ?? "direct"} error={ex.Message}");
             }
         }
-        catch { return null; }
+
+        return null;
     }
     #endregion
 }

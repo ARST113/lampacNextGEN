@@ -63,6 +63,7 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
             displayindex = 505,
             httpversion = 2,
             stream_access = "apk,cors,web",
+            useproxystream = true,
             geostreamproxy = ["ALL"]
         });
     }

@@ -31,7 +31,7 @@ public class KinogoController : BaseOnlineController
     [Route("lite/kinogo")]
     async public Task<ActionResult> Index(string title, string original_title, short year, bool rjson, string href, bool similar, short s = -1, int t = -1, string voice = null)
     {
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
         #region search
@@ -538,7 +538,11 @@ public class KinogoController : BaseOnlineController
         if (html.IsEmpty)
             return null;
 
-        var rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+        var rx = Rx.Matches("<div class=\"short-title2\">(.*?)<div class=\"short\">(.*?)(?=<div class=\"short-title2\">|<div class=\"navigation\">|</article>|</body>)", html, 0, RegexOptions.Singleline);
+
+        if (rx.Count == 0)
+            rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+
         if (rx.Count == 0)
             return null;
 
@@ -550,20 +554,30 @@ public class KinogoController : BaseOnlineController
 
         foreach (var row in rx.Rows())
         {
-            string href = row.Match("<a href=\"https?://[^/]+/([^\"#]+)");
+            string href = row.Match("<a[^>]+class=\"short-title\"[^>]+href=\"https?://[^/]+/([^\"#]+)");
+            if (string.IsNullOrEmpty(href))
+                href = row.Match("data-href=\"https?://[^/]+/([^\"#]+)");
+            if (string.IsNullOrEmpty(href))
+                href = row.Match("<a href=\"https?://[^/]+/([^\"#]+)");
             if (string.IsNullOrEmpty(href))
                 continue;
 
-            string name = row.Match("<h2>([^<]+)</h2>");
+            string name = row.Match("<a[^>]+class=\"short-title\"[^>]*>([^<]+)</a>");
+            if (string.IsNullOrEmpty(name))
+                name = row.Match("<h2>([^<]+)</h2>");
             if (string.IsNullOrEmpty(name))
                 continue;
             name = HttpUtility.HtmlDecode(name);
 
-            string blockYear = row.Match("Год выпуска:</b><a[^>]*>([0-9]{4})");
+            string blockYear = row.Match("<span>Год выхода:</span>\\s*([0-9]{4})");
+            if (string.IsNullOrEmpty(blockYear))
+                blockYear = row.Match("Год выпуска:</b><a[^>]*>([0-9]{4})");
 
-            string img = row.Match("<img\\s+data-src=\"([^\"]+)\"");
-            if (!string.IsNullOrEmpty(img))
-                img = ModInit.conf.host + img;
+            string img = row.Match("<img[^>]+(?:data-src|src)=\"([^\"]+)\"");
+            if (!string.IsNullOrEmpty(img) && img.StartsWith("//"))
+                img = "https:" + img;
+            else if (!string.IsNullOrEmpty(img) && img.StartsWith("/"))
+                img = ModInit.conf.host.TrimEnd('/') + img;
 
             string uri = $"{host}/lite/kinogo?href={HttpUtility.UrlEncode(href)}";
             similar.Append(name, blockYear, string.Empty, uri, PosterApi.Size(img));

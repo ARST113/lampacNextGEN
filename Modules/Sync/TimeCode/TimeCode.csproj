@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\SyncIdentity.cs" Link="SyncIdentity.cs" />
+    <Content Include="..\Shared\sync-account.js" Link="sync-account.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
     <None Update="plugin.js">
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </None>

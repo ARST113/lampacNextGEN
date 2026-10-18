@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Shared;
 using Shared.Attributes;
 using Shared.Models.Base;
@@ -146,7 +146,10 @@ public class AnimevostController : BaseOnlineController
 
             return ContentTpl(cache, () =>
             {
-                var etpl = new EpisodeTpl(cache.Value.Count);
+                var vtpl = new VoiceTpl(1);
+                vtpl.Append("AnimeVost", true, $"{host}/lite/animevost?title={HttpUtility.UrlEncode(title)}&uri={HttpUtility.UrlEncode(uri)}&s={s}");
+
+                var etpl = new EpisodeTpl(vtpl, cache.Value.Count);
 
                 foreach (var l in cache.Value)
                 {
@@ -160,6 +163,7 @@ public class AnimevostController : BaseOnlineController
                         "^([0-9]+)").Groups[1].Value,
                         link,
                         "call",
+                        voice_name: "AnimeVost",
                         streamlink: accsArgs($"{link}&play=true")
                     );
                 }

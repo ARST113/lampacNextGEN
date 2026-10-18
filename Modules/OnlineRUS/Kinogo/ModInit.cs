@@ -55,12 +55,10 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
 
     void updateConf()
     {
-        conf = ModuleInvoke.Init("Kinogo", new OnlinesSettings("Kinogo", "https://kinogo.luxury")
+        conf = ModuleInvoke.Init("Kinogo", new OnlinesSettings("Kinogo", "https://kinogo.media")
         {
             displayindex = 530,
-            rch_access = "apk",
             stream_access = "apk,cors",
-            rchstreamproxy = "web"
         });
     }
 

@@ -1,5 +1,8 @@
-(function() {
+(function () {
   'use strict';
+  if (window.lampac_timecode_plugin) return;
+  window.lampac_timecode_plugin = true;
+  var sync = window.LampacSync;
 
   // Идентичность раздаёт сервер: тогда браузер на телефоне и нативный клиент на приставке
   // попадают в ОДНУ область данных. Пустая строка — сервер её не раздаёт (accsdb уже выдал
@@ -21,23 +24,40 @@
     }
   }
 
-  function _defineProperties(target, props) {
-    for (var i = 0; i < props.length; i++) {
-      var descriptor = props[i];
-      descriptor.enumerable = descriptor.enumerable || false;
-      descriptor.configurable = true;
-      if ("value" in descriptor) descriptor.writable = true;
-      Object.defineProperty(target, descriptor.key, descriptor);
-    }
+  function filename() {
+    var account = object(Lampa.Storage.get('account', {}));
+    var name = 'file_view' + (account.profile ? '_' + account.profile.id : '');
+    if (localStorage.getItem(name) === null && account.profile)
+      Lampa.Storage.set(name, Lampa.Arrays.clone(Lampa.Storage.cache('file_view', 10000, {})), true);
+    return name;
   }
 
-  function _createClass(Constructor, protoProps, staticProps) {
-    if (protoProps) _defineProperties(Constructor.prototype, protoProps);
-    if (staticProps) _defineProperties(Constructor, staticProps);
-    Object.defineProperty(Constructor, "prototype", {
-      writable: false
+  function path(method) {
+    var activity = object(Lampa.Storage.get('activity', {}));
+    var card = activity.movie || activity.card || {};
+    if (!card.id) return '';
+    return '/timecode/' + method + '?card_id=' + encodeURIComponent(card.id + '_' + (card.name ? 'tv' : 'movie')) +
+      '&profile_id=' + encodeURIComponent(sync.profile());
+  }
+
+  function update() {
+    var url = path('all');
+    if (!url || !sync.ready()) return;
+    var field = filename();
+    sync.request('GET', url, null, function (status, result) {
+      if (status !== 200 || !result || result.accsdb) return;
+      var viewed = Lampa.Storage.cache(field, 10000, {});
+      Object.keys(result).forEach(function (key) {
+        try {
+          var road = typeof result[key] === 'string' ? JSON.parse(result[key]) : result[key];
+          if (!road || !Lampa.Arrays.isObject(road)) return;
+          Lampa.Arrays.extend(road, {duration: 0, time: 0, percent: 0});
+          delete road.hash;
+          viewed[key] = road;
+        } catch (e) { /* A corrupt row must not prevent the other positions from loading. */ }
+      });
+      Lampa.Storage.set(field, viewed, true);
     });
-    return Constructor;
   }
 
   var Timecode = /*#__PURE__*/ function() {

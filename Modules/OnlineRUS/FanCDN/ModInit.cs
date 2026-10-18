@@ -44,7 +44,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
     {
         conf = ModuleInvoke.Init("FanCDN", new OnlinesSettings("FanCDN", "https://fanserial.me", streamproxy: true)
         {
-            enable = false,
+            enable = true,
             displayindex = 520,
             imitationHuman = true,
             headers_stream = HeadersModel.Init(Http.defaultFullHeaders,
