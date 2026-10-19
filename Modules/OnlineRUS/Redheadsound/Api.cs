@@ -7,6 +7,7 @@ using Shared.Models.Templates;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -142,6 +143,35 @@ public partial class RedheadsoundController
         return page;
     }
 
+    /// <summary>
+    /// Рабочая ссылка на поток: плеер ladoni кладёт её в config.h (XOR + base64),
+    /// а config.video теперь содержит невалидную подпись и отдаёт 403.
+    /// Ключ и алгоритм — как в официальном фиксе Gencit (#307).
+    /// </summary>
+    static string DecodeHls(string encoded)
+    {
+        if (string.IsNullOrWhiteSpace(encoded))
+            return null;
+
+        try
+        {
+            string base64 = encoded.Replace('-', '+').Replace('_', '/');
+            byte[] data = Convert.FromBase64String(base64.PadRight(base64.Length + (4 - base64.Length % 4) % 4, '='));
+            const string key = "xu0vKTL4wJBuU2j7";
+            for (int i = 0; i < data.Length; i++)
+                data[i] ^= (byte)key[i % key.Length];
+
+            string hls = Encoding.UTF8.GetString(data);
+            return Uri.TryCreate(hls, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http")
+                ? hls
+                : null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
     internal static LatPage ParseLatPage(string html)
     {
         if (string.IsNullOrEmpty(html))
@@ -154,7 +184,7 @@ public partial class RedheadsoundController
         try
         {
             var d = JObject.Parse(m.Groups[1].Value);
-            var page = new LatPage { video = d.SelectToken("config.video")?.ToString() };
+            var page = new LatPage { video = DecodeHls(d.SelectToken("config.h")?.ToString()) ?? d.SelectToken("config.video")?.ToString() };
 
             if (d["voices"] is JObject vs)
             {

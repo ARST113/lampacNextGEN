@@ -47,7 +47,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
                 if (playlist <= 0)
                 {
-                    if (apiData?.playlist_id <= 0)
+                    if (apiData == null || apiData.playlist_id <= 0)
                         return OnError(service?.LastError ?? "playlist");
 
                     playlist = apiData.playlist_id;
