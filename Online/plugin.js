@@ -409,7 +409,10 @@
 
         function next() {
           if (session !== lifeSession) return;
-          if (Date.now() >= until) return finishError(new Error('Lampac source discovery timed out'));
+          if (Date.now() >= until) {
+            filter.render().find('.lampac-balanser-loader').remove();
+            return finishError(new Error('Lampac source discovery timed out'));
+          }
           life_wait_timer = setTimeout(poll, 1000);
         }
 
@@ -472,6 +475,7 @@
               }
 
               if (!json.ready) next();
+              else filter.render().find('.lampac-balanser-loader').remove();
             },
             function (error) {
               if (session !== lifeSession) return;
