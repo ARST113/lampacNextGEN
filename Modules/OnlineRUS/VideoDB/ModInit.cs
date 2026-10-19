@@ -24,6 +24,7 @@ public class ModInit : IModuleLoaded
     public void Dispose()
     {
         EventListener.UpdateInitFile -= updateConf;
+        ChromeCookie.Dispose();
     }
 
     void updateConf()
@@ -51,5 +52,8 @@ public class ModInit : IModuleLoaded
         });
 
         cdp = CoreInit.CurrentConf?["VideoDB"]?["cdp"]?.ToString();
+
+        // подхватываем сохранённую cookie антибота и включаем фоновый прогрев
+        ChromeCookie.Init(cdp);
     }
 }

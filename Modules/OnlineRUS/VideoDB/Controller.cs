@@ -44,7 +44,8 @@ public class VideoDBController : BaseOnlineController
                 if (init.httpversion == 2)
                     httpHydra.RegisterHttp(http2Client);
 
-                string cookie = ChromeCookie.Value;
+                // GetAsync отдаёт сохранённую/прогретую cookie антибота и обновляет её только по необходимости
+                string cookie = await ChromeCookie.GetAsync(ModInit.cdp, href);
 
             cookieRetry:
                 var headers = httpHeaders(init, HeadersModel.Init(
