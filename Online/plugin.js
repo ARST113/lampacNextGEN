@@ -62,6 +62,10 @@
     // ── state & UI scaffold ──
     var network = new Network();
     network.timeout(BALANCER_TIMEOUT);
+    // Polling must not shorten the timeout of real provider requests.
+    var lifeNetwork = new Network();
+    lifeNetwork.timeout(4000);
+    var lifeSession = 0;
     var scroll = new Lampa.Scroll({
       mask: true,
       over: true
@@ -387,84 +391,99 @@
     };
     this.lifeSource = function () {
       var _this3 = this;
+      var session = ++lifeSession;
+      var url = _this3.requestParams(Defined.localhost + 'lifeevents?memkey=' + (_this3.memkey || ''));
+      var until = Date.now() + 120000;
+      var signature = '';
+      var settled = false;
+
+      life_wait_times = 0;
+      clearTimeout(life_wait_timer);
+
       return new Promise(function (resolve, reject) {
-        var url = _this3.requestParams(Defined.localhost + 'lifeevents?memkey=' + (_this3.memkey || ''));
-        var red = false;
-        var gou = function gou(json, any) {
-          if (json.accsdb) return reject(json);
-          var last_balanser = _this3.getLastChoiceBalanser();
-          if (!red) {
-            var _filter = json.online.filter(function (c) {
-              return any ? c.show : c.show && c.name.toLowerCase() == last_balanser;
-            });
-            if (_filter.length) {
-              red = true;
-              resolve(
-                json.online.filter(function (c) {
-                  return c.show;
-                })
-              );
-            } else if (any) {
-              reject();
-            }
-          }
-        };
-        var fin = function fin(call) {
-          network.timeout(3000);
-          network.silent(
+        function finishError(error) {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        }
+
+        function next() {
+          if (session !== lifeSession) return;
+          if (Date.now() >= until) return finishError(new Error('Lampac source discovery timed out'));
+          life_wait_timer = setTimeout(poll, 1000);
+        }
+
+        function poll() {
+          if (session !== lifeSession) return;
+          lifeNetwork.silent(
             account(url),
             function (json) {
+              if (session !== lifeSession) return;
               life_wait_times++;
-              filter_sources = [];
-              sources = {};
-              json.online.forEach(function (j) {
-                var name = balanserName(j);
-                sources[name] = {
-                  url: j.url,
-                  name: j.name,
-                  show: typeof j.show == 'undefined' ? true : j.show
-                };
-              });
-              filter_sources = Lampa.Arrays.getKeys(sources);
-              filter.set(
-                'sort',
-                filter_sources.map(function (e) {
-                  return {
-                    title: sources[e].name,
-                    source: e,
-                    selected: e == balanser,
-                    ghost: !sources[e].show
+
+              if (!json || json.accsdb) {
+                if (!settled) return finishError(json);
+                return;
+              }
+
+              var online = json.online || [];
+              var stamp = online.map(function (item) {
+                return [item.name, item.url, item.show, item.index].join(':');
+              }).join('|');
+
+              if (stamp !== signature) {
+                signature = stamp;
+                filter_sources = [];
+                sources = {};
+
+                online.forEach(function (item) {
+                  var name = balanserName(item);
+                  sources[name] = {
+                    url: item.url,
+                    name: item.name,
+                    show: typeof item.show == 'undefined' ? true : item.show
                   };
-                })
-              );
-              filter.chosen('sort', [sources[balanser] ? sources[balanser].name : balanser]);
-              gou(json);
-              var lastb = _this3.getLastChoiceBalanser();
-              if (life_wait_times > 15 || json.ready) {
-                filter.render().find('.lampac-balanser-loader').remove();
-                gou(json, true);
-              } else if (!red && sources[lastb] && sources[lastb].show) {
-                gou(json, true);
-                life_wait_timer = setTimeout(fin, 1000);
-              } else {
-                life_wait_timer = setTimeout(fin, 1000);
+                });
+
+                filter_sources = Lampa.Arrays.getKeys(sources);
+                filter.set('sort', filter_sources.map(function (name) {
+                  return {
+                    title: sources[name].name,
+                    source: name,
+                    selected: name == balanser,
+                    ghost: !sources[name].show
+                  };
+                }));
+                filter.chosen('sort', [sources[balanser] ? sources[balanser].name : balanser]);
               }
+
+              // Start rendering on the FIRST ready provider. Slow providers
+              // continue checking in the background and join the chooser later.
+              if (!settled) {
+                var available = online.filter(function (item) {
+                  return item.show;
+                });
+                if (available.length) {
+                  settled = true;
+                  resolve(available);
+                } else if (json.ready) {
+                  return finishError(json);
+                }
+              }
+
+              if (!json.ready) next();
             },
-            function () {
+            function (error) {
+              if (session !== lifeSession) return;
               life_wait_times++;
-              if (life_wait_times > 15) {
-                reject();
-              } else {
-                life_wait_timer = setTimeout(fin, 1000);
-              }
+              next();
             },
             false,
-            {
-              headers: addHeaders()
-            }
+            { headers: addHeaders() }
           );
-        };
-        fin();
+        }
+
+        poll();
       });
     };
     this.createSource = function () {
@@ -1697,8 +1716,10 @@
     };
     function suspendActivity() {
       stopBalanserTimer();
+      ++lifeSession;
       clearTimeout(life_wait_timer);
       clearTimeout(number_of_requests_timer);
+      lifeNetwork.clear();
       network.clear();
     }
 
