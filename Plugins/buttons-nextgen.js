@@ -632,7 +632,7 @@
                     var el=m.target,parent=el.parentNode;
                     if(parent&&parent.classList&&parent.classList.contains('buttons--container')&&
                         el.classList&&el.classList.contains('full-start__button')){
-                        var wasHidden=/(^|\\s)hide(\\s|$)/.test(m.oldValue||'');
+                        var wasHidden=/(^|\s)hide(\s|$)/.test(m.oldValue||'');
                         if(wasHidden!==el.classList.contains('hide'))changed=true;
                     }
                     return;
