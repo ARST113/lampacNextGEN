@@ -2137,11 +2137,22 @@
             '.full-start-new__buttons .full-start__button.button-mode-1', function(){
                 var btn=$(this), label=btn.children('span').first();
                 if(!label.length||typeof window.innerWidth==='undefined')return;
-                if(window.innerWidth<768){btn.removeClass('buttons-ng-expand-left');return}
+                if(window.innerWidth<1000){
+                    btn.removeClass('buttons-ng-expand-left');
+                    label.css('max-width','');
+                    return;
+                }
                 btn.removeClass('buttons-ng-expand-left');
+                label.css('max-width','');
                 var box=this.getBoundingClientRect();
+                // The label's absolute positioning must NEVER affect the flex width.
                 var labelWidth=label[0].scrollWidth||label.outerWidth()||0;
-                if(box.right+labelWidth-12>window.innerWidth-12)btn.addClass('buttons-ng-expand-left');
+                var rightSpace=Math.max(0,window.innerWidth-box.right-12);
+                var leftSpace=Math.max(0,box.left-12);
+                var expandLeft=labelWidth>rightSpace&&leftSpace>rightSpace;
+                var available=expandLeft?leftSpace:rightSpace;
+                label.css('max-width',Math.max(40,Math.min(window.innerWidth*.9,available+12))+'px');
+                if(expandLeft)btn.addClass('buttons-ng-expand-left');
             });
         var style = $('<style>' +
             '@keyframes button-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }' +
@@ -2194,13 +2205,13 @@
             '/* Mode 1: desktop/TV focus grows the visible pill horizontally without layout reflow. */' +
             '/* Keep original layout positions stable: no button wrapping or focus jumping. */' +
             '.full-start-new__buttons .full-start__button.button-mode-1 > span { display:none !important; }' +
-            '@media screen and (min-width:768px) {' +
+            '@media screen and (min-width:1000px) {' +
             '.full-start-new__buttons .full-start__button.button-mode-1 { position:relative !important; overflow:visible !important; }' +
             '.full-start-new__buttons .full-start__button.button-mode-1.focus, .full-start-new__buttons .full-start__button.button-mode-1:hover { z-index:45; }' +
             '.full-start-new__buttons .full-start__button.button-mode-1.focus > span, .full-start-new__buttons .full-start__button.button-mode-1:hover > span { display:flex !important; align-items:center; box-sizing:border-box; position:absolute !important; top:0; left:calc(100% - .85em); right:auto; width:max-content; max-width:calc(85vw - 1em); height:100%; margin:0 !important; padding:0 1em 0 1.35em; background:inherit; color:inherit; border-radius:0 1em 1em 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:1 !important; visibility:visible !important; pointer-events:none; z-index:46; }' +
             '.full-start-new__buttons .full-start__button.button-mode-1.buttons-ng-expand-left.focus > span, .full-start-new__buttons .full-start__button.button-mode-1.buttons-ng-expand-left:hover > span { left:auto; right:calc(100% - .85em); padding:0 1.35em 0 1em; border-radius:1em 0 0 1em; }' +
             '}' +
-            '@media screen and (max-width:767px) {' +
+            '@media screen and (max-width:999px) {' +
             '.full-start-new__buttons .full-start__button.button-mode-1 > span { display:none !important; }' +
             '}' +
             '' +
