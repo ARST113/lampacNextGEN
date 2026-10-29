@@ -98,6 +98,8 @@ assert.ok(src.includes("source.trigger(e.type)"),
   'source button proxy must forward activation to the original');
 assert.ok(src.includes("bmSourceObserver.observe(sources[0]"),
   'dynamic source buttons must be observed');
+assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
+  'JacRed should appear alongside Torrents');
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
   'avoid duplicate Lampac Online button');
 assert.ok(src.includes('top:calc(100% + .2em)'), 'hover text must be an overlay');
