@@ -90,6 +90,14 @@ context.window.__bmTest.bmMigrateIds();
 assert.deepEqual(JSON.parse(JSON.stringify(store.button_hidden)),[id],'legacy settings IDs migrated');
 assert.ok(src.includes("var bmNativePlay = targetContainer.children('.button--play').first().detach();"),
   'native Lampa Watch button must survive layout rebuild');
+assert.ok(src.includes("bmNativePlay.removeClass('selector focus').addClass('buttons-ng-native-play')"),
+  'Watch stays in DOM for native source selection without becoming a TV focus target');
+assert.ok(src.includes(".button--play.buttons-ng-native-play { display:none !important; }"),
+  'Watch button is not visible alongside direct torrent and JacRed controls');
+assert.ok(src.includes("c.collectionSet(container)") && src.includes("c.collectionFocus(candidate,container)"),
+  'D-pad navigator receives new post-render controls and preserves focus');
+assert.ok(!src.includes("toggle('full_start');\n            } catch"),
+  'do not force-switch controller away from dynamically opened JacRed or torrent content');
 assert.ok(!src.includes("find('.button--play, .button--edit-order, .button--folder').remove()"),
   'editor resets must never remove native Watch');
 assert.ok(src.includes("sources.children('.full-start__button').not('.hide,.button--play')"),
@@ -109,8 +117,8 @@ assert.ok(src.includes('max-width:100%') && src.includes('overflow-wrap:anywhere
   'long labels must fit inside their row and wrap internally if necessary');
 assert.ok(!src.includes('left:calc(100% - .85em)'),
   'labels must not cover other clickable controls using absolute positioning');
-assert.ok(src.includes('min-width:1000px') && src.includes('max-width:999px'),
-  'phone mode must remain compact with no focus label');
+assert.ok(src.includes('min-width:768px') && src.includes('max-width:767px'),
+  'TV CSS widths between 768 and 999 must reveal focus labels, phone stays compact');
 assert.ok(src.includes("mousemove.buttonsNgPointer") && src.includes("buttons-ng-hovered"),
   'desktop pointer must retain an expanded control until the mouse actually moves');
 assert.ok(src.includes('buttons-ng-mouse-active'),
