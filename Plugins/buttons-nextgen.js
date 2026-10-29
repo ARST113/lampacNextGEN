@@ -1,6 +1,6 @@
 /**
  * Плагин управления кнопками Lampa
- * Версия: 1.2.3-nextgen
+ * Версия: 1.2.4-nextgen
  * Автор: @Cheeze_l
  * 
  * Описание:
@@ -2130,6 +2130,19 @@
         if(Lampa.Storage.listener&&Lampa.Storage.listener.follow)Lampa.Storage.listener.follow('change',function(e){if(e.name==='account'&&bmActivate()&&currentContainer)reorderButtons(currentContainer,false)});
         Lampa.Listener.follow('profile_select',function(){if(bmActivate()&&currentContainer)reorderButtons(currentContainer,false)});
         Lampa.Listener.follow('worker_storage',function(e){if(e&&e.name===bmCloudKey){bmCloudPull();setTimeout(bmOfferLocalCloud,150)}});
+        // Desktop/TV-only edge-aware expansion: keep the full label inside
+        // a single extended button surface, never as a tooltip below it.
+        // Position does not participate in flex calculations, so D-pad focus stays stable.
+        $(document).on('mouseenter.buttonsNgExpand hover:focus.buttonsNgExpand',
+            '.full-start-new__buttons .full-start__button.button-mode-1', function(){
+                var btn=$(this), label=btn.children('span').first();
+                if(!label.length||typeof window.innerWidth==='undefined')return;
+                if(window.innerWidth<768){btn.removeClass('buttons-ng-expand-left');return}
+                btn.removeClass('buttons-ng-expand-left');
+                var box=this.getBoundingClientRect();
+                var labelWidth=label[0].scrollWidth||label.outerWidth()||0;
+                if(box.right+labelWidth-12>window.innerWidth-12)btn.addClass('buttons-ng-expand-left');
+            });
         var style = $('<style>' +
             '@keyframes button-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }' +
             '.full-start-new__buttons .full-start__button { box-sizing:border-box; position:relative; flex-shrink:0; }' +
@@ -2178,12 +2191,18 @@
             '.menu-edit-list__item.item-hidden .menu-edit-list__title { opacity: 0.6; }' +
             '.menu-edit-list__item.item-hidden .menu-edit-list__icon { opacity: 0.5; }' +
             '' +
-            '/* Режим 1: Стандартный (иконка, текст при наведении) */' +
-            '/* Tooltip is positioned outside the flex geometry: no hover feedback loop. */' +
-            '.full-start__button.button-mode-1 > span { position:absolute !important; top:calc(100% + .2em); left:0; width:max-content; max-width:70vw; box-sizing:border-box; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:.3em; padding:.2em .55em; background:rgba(20,20,24,.95); color:#fff; opacity:0 !important; visibility:hidden !important; pointer-events:none; z-index:40; transition:opacity .14s ease !important; }' +
-            '.full-start__button.button-mode-1:hover > span, .full-start__button.button-mode-1.focus > span { opacity:1 !important; visibility:visible !important; }' +
-            '.full-start__button.button-mode-1:nth-last-child(-n+3) > span { left:auto; right:0; }' +
-            '.full-start__button.button-mode-1 > svg { flex-shrink:0; }' +
+            '/* Mode 1: desktop/TV focus grows the visible pill horizontally without layout reflow. */' +
+            '/* Keep original layout positions stable: no button wrapping or focus jumping. */' +
+            '.full-start-new__buttons .full-start__button.button-mode-1 > span { display:none !important; }' +
+            '@media screen and (min-width:768px) {' +
+            '.full-start-new__buttons .full-start__button.button-mode-1 { position:relative !important; overflow:visible !important; }' +
+            '.full-start-new__buttons .full-start__button.button-mode-1.focus, .full-start-new__buttons .full-start__button.button-mode-1:hover { z-index:45; }' +
+            '.full-start-new__buttons .full-start__button.button-mode-1.focus > span, .full-start-new__buttons .full-start__button.button-mode-1:hover > span { display:flex !important; align-items:center; box-sizing:border-box; position:absolute !important; top:0; left:calc(100% - .85em); right:auto; width:max-content; max-width:calc(85vw - 1em); height:100%; margin:0 !important; padding:0 1em 0 1.35em; background:inherit; color:inherit; border-radius:0 1em 1em 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:1 !important; visibility:visible !important; pointer-events:none; z-index:46; }' +
+            '.full-start-new__buttons .full-start__button.button-mode-1.buttons-ng-expand-left.focus > span, .full-start-new__buttons .full-start__button.button-mode-1.buttons-ng-expand-left:hover > span { left:auto; right:calc(100% - .85em); padding:0 1.35em 0 1em; border-radius:1em 0 0 1em; }' +
+            '}' +
+            '@media screen and (max-width:767px) {' +
+            '.full-start-new__buttons .full-start__button.button-mode-1 > span { display:none !important; }' +
+            '}' +
             '' +
             '/* Режим 2: Только иконка (текст всегда скрыт) */' +
             '.full-start__button.button-mode-2 > span { display: none !important; }' +
