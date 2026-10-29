@@ -102,6 +102,13 @@ assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
   'JacRed should appear alongside Torrents');
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
   'avoid duplicate Lampac Online button');
-assert.ok(src.includes('top:calc(100% + .2em)'), 'hover text must be an overlay');
+assert.ok(src.includes("left:calc(100% - .85em)") && src.includes("position:absolute !important"),
+  'desktop TV expansion must be inline with button but outside flex geometry');
+assert.ok(src.includes("buttons-ng-expand-left"),
+  'long buttons close to screen edge must expand leftward');
+assert.ok(src.includes("window.innerWidth<1000") && src.includes("max-width:999px"),
+  'phone viewport must never reveal a tooltip on focus');
+assert.ok(src.includes("var rightSpace=Math.max(0,window.innerWidth-box.right-12)"),
+  'label should be clamped to viewport without pushing other buttons');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
 console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout');
