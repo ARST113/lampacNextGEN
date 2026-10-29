@@ -111,6 +111,10 @@ assert.ok(!src.includes('left:calc(100% - .85em)'),
   'labels must not cover other clickable controls using absolute positioning');
 assert.ok(src.includes('min-width:1000px') && src.includes('max-width:999px'),
   'phone mode must remain compact with no focus label');
+assert.ok(src.includes("mousemove.buttonsNgPointer") && src.includes("buttons-ng-hovered"),
+  'desktop pointer must retain an expanded control until the mouse actually moves');
+assert.ok(src.includes('buttons-ng-mouse-active'),
+  'mouse selection must suppress competing TV focus expansion');
 assert.ok(!src.includes('buttons-ng-expand-left'),
   'old leftward overlay strategy must be entirely removed');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
