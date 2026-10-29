@@ -104,8 +104,18 @@ assert.ok(src.includes("sources.children('.full-start__button').not('.hide,.butt
   'Watch menu torrent and JacRed sources must be collected');
 assert.ok(src.includes("source.trigger(e.type)"),
   'source button proxy must forward activation to the original');
-assert.ok(src.includes("bmSourceObserver.observe(sources[0]"),
-  'dynamic source buttons must be observed');
+assert.ok(src.includes("bmSourceObserver.observe(root,"),
+  'observe the card root so late provider activation or source container replacement is captured');
+assert.ok(src.includes("liveSource!==bmObservedSource"),
+  'replacing source container forces rerender and fresh D-pad navigation');
+assert.ok(src.includes("originalNode||!container[0].contains(originalNode)"),
+  'late-enabled provider must not send clicks to detached source');
+assert.ok(src.includes("proxy.data('buttons-ng-source-ref',source[0])"),
+  'rebind the proxy to the current provider source');
+assert.ok(src.includes("!node.hasAttribute('data-buttons-ng-managed')"),
+  'new buttons injected into the visible strip must be detected without self-rebuilding');
+assert.ok(src.includes("var wasHidden=/(^|\\s)hide(\\s|$)/.test"),
+  'source availability changes must be recognized without focus-class redraw');
 assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
   'JacRed should appear alongside Torrents');
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
