@@ -2133,7 +2133,7 @@
         // Desktop/TV-only edge-aware expansion: keep the full label inside
         // a single extended button surface, never as a tooltip below it.
         // Position does not participate in flex calculations, so D-pad focus stays stable.
-        $(document).on('mouseenter.buttonsNgExpand hover:focus.buttonsNgExpand',
+        if(typeof document!=='undefined')$(document).on('mouseenter.buttonsNgExpand hover:focus.buttonsNgExpand',
             '.full-start-new__buttons .full-start__button.button-mode-1', function(){
                 var btn=$(this), label=btn.children('span').first();
                 if(!label.length||typeof window.innerWidth==='undefined')return;
