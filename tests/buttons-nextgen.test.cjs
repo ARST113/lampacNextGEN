@@ -92,6 +92,14 @@ assert.ok(src.includes("var bmNativePlay = targetContainer.children('.button--pl
   'native Lampa Watch button must survive layout rebuild');
 assert.ok(!src.includes("find('.button--play, .button--edit-order, .button--folder').remove()"),
   'editor resets must never remove native Watch');
+assert.ok(src.includes("sources.children('.full-start__button').not('.hide,.button--play')"),
+  'Watch menu torrent and JacRed sources must be collected');
+assert.ok(src.includes("source.trigger(e.type)"),
+  'source button proxy must forward activation to the original');
+assert.ok(src.includes("bmSourceObserver.observe(sources[0]"),
+  'dynamic source buttons must be observed');
+assert.ok(src.includes("target.children('.view--online.lampac--button')"),
+  'avoid duplicate Lampac Online button');
 assert.ok(src.includes('top:calc(100% + .2em)'), 'hover text must be an overlay');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
 console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout');
