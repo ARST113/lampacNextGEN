@@ -1,0 +1,24 @@
+name: Buttons NextGen checks
+on:
+  push:
+    branches:
+      - fix/buttons-manager-20261017
+    paths:
+      - "Plugins/buttons-nextgen.js"
+      - "tests/buttons-nextgen.test.cjs"
+      - ".github/workflows/buttons-nextgen.yml"
+  pull_request:
+    paths:
+      - "Plugins/buttons-nextgen.js"
+      - "tests/buttons-nextgen.test.cjs"
+      - ".github/workflows/buttons-nextgen.yml"
+  workflow_dispatch:
+jobs:
+  node-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check JavaScript syntax
+        run: node --check Plugins/buttons-nextgen.js
+      - name: Run profile and layout smoke tests
+        run: node --test tests/buttons-nextgen.test.cjs
