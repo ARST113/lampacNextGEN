@@ -102,13 +102,16 @@ assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
   'JacRed should appear alongside Torrents');
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
   'avoid duplicate Lampac Online button');
-assert.ok(src.includes("left:calc(100% - .85em)") && src.includes("position:absolute !important"),
-  'desktop TV expansion must be inline with button but outside flex geometry');
-assert.ok(src.includes("buttons-ng-expand-left"),
-  'long buttons close to screen edge must expand leftward');
-assert.ok(src.includes("window.innerWidth<1000") && src.includes("max-width:999px"),
-  'phone viewport must never reveal a tooltip on focus');
-assert.ok(src.includes("var rightSpace=Math.max(0,window.innerWidth-box.right-12)"),
-  'label should be clamped to viewport without pushing other buttons');
+assert.ok(src.includes('flex-wrap: wrap !important'), 'adjacent buttons must wrap to the next row');
+assert.ok(src.includes('position:static !important') && src.includes('display:inline-block !important'),
+  'desktop TV focused label must expand in normal flex flow');
+assert.ok(src.includes('max-width:100%') && src.includes('overflow-wrap:anywhere'),
+  'long labels must fit inside their row and wrap internally if necessary');
+assert.ok(!src.includes('left:calc(100% - .85em)'),
+  'labels must not cover other clickable controls using absolute positioning');
+assert.ok(src.includes('min-width:1000px') && src.includes('max-width:999px'),
+  'phone mode must remain compact with no focus label');
+assert.ok(!src.includes('buttons-ng-expand-left'),
+  'old leftward overlay strategy must be entirely removed');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
 console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout');
