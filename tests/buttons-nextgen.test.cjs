@@ -88,6 +88,10 @@ assert.notEqual(context.window.__bmTest.getBtnIdentifier(another),id,'different 
 storage.set('button_hidden',['view--online_Онлайн'],true);
 context.window.__bmTest.bmMigrateIds();
 assert.deepEqual(JSON.parse(JSON.stringify(store.button_hidden)),[id],'legacy settings IDs migrated');
+assert.ok(src.includes("var bmNativePlay = targetContainer.children('.button--play').first().detach();"),
+  'native Lampa Watch button must survive layout rebuild');
+assert.ok(!src.includes("find('.button--play, .button--edit-order, .button--folder').remove()"),
+  'editor resets must never remove native Watch');
 assert.ok(src.includes('top:calc(100% + .2em)'), 'hover text must be an overlay');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
 console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout');
