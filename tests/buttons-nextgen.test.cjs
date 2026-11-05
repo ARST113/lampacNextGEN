@@ -165,7 +165,16 @@ const nodes=captions.map(name=>{
 });
 const stripWrapper=[stripElement];
 stripWrapper.first=function(){return this};
-stripWrapper.children=function(){return nodes.slice()};
+stripWrapper.children=function(){
+  const list=nodes.slice();
+  list.filter=function(fn){
+    // jQuery calls the predicate with this=the DOM element (unlike Array.filter).
+    const visible=Array.prototype.filter.call(this,(el,i)=>fn.call(el,i,el));
+    visible.index=function(el){return this.indexOf(el)};
+    return visible;
+  };
+  return list;
+};
 const fakeContainer={
   length:1,0:{},find(sel){
     assert.equal(sel,'.full-start-new__buttons');
