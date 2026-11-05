@@ -165,8 +165,11 @@ const nodes=captions.map(name=>{
 });
 const stripWrapper=[stripElement];
 stripWrapper.first=function(){return this};
-stripWrapper.children=function(){
-  const list=nodes.slice();
+stripWrapper.children=function(selector){
+  const list=selector.endsWith('.focus')
+    ? nodes.filter(n=>n===context.window.Navigator._focus&&n.parentNode===stripElement)
+    : nodes.slice();
+  list.first=function(){return this.length?[this[0]]:[]};
   list.filter=function(fn){
     // jQuery calls the predicate with this=the DOM element (unlike Array.filter).
     const visible=Array.prototype.filter.call(this,(el,i)=>fn.call(el,i,el));
