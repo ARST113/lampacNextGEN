@@ -120,6 +120,20 @@ assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
   'JacRed should appear alongside Torrents');
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
   'avoid duplicate Lampac Online button');
+assert.ok(src.includes("function bmMoveCardButton(step)") && src.includes("controller.__buttonsNgNavWrap=true"),
+  'TV D-pad must use stable logical order within the card button strip');
+assert.ok(src.includes("controller.right=function()") && src.includes("bmMoveCardButton(1)"),
+  'D-pad right must advance one visible button even if a focused label changes geometry');
+assert.ok(src.includes("controller.left=function()") && src.includes("bmMoveCardButton(-1)"),
+  'D-pad left must advance one visible button backwards');
+assert.ok(src.includes("strip.children('.full-start__button.selector').filter(function()"),
+  'D-pad sequence must use rendered DOM order, not spatial nearest-element order');
+assert.ok(src.includes("this.getClientRects().length>0") && src.includes("classList.contains('hidden')"),
+  'TV navigation must skip invisible and disabled buttons');
+assert.ok(src.includes("if(!next)return false; // keep native boundary behavior"),
+  'Native Lampa controller must retain navigation at strip boundaries');
+assert.ok(src.includes("Lampa.Controller.collectionFocus(next,currentContainer)"),
+  'Remote traversal must update Lampa Navigator focus and enter target');
 assert.ok(src.includes('flex-wrap: wrap !important'), 'adjacent buttons must wrap to the next row');
 assert.ok(src.includes('position:static !important') && src.includes('display:inline-block !important'),
   'desktop TV focused label must expand in normal flex flow');
