@@ -2186,7 +2186,9 @@
            !Lampa.Controller.enabled||Lampa.Controller.enabled().name!=='full_start') return false;
         var strip=currentContainer.find('.full-start-new__buttons').first();
         if(!strip.length)return false;
-        var focus=(window.Navigator&&window.Navigator._focus)||strip.children('.full-start__button.focus').first()[0];
+        var focus=window.Navigator&&window.Navigator._focus;
+        if(!focus||focus.parentNode!==strip[0])
+            focus=strip.children('.full-start__button.focus').first()[0];
         if(!focus||focus.parentNode!==strip[0])return false;
         var buttons=strip.children('.full-start__button.selector').filter(function(){
             if(this.classList.contains('hidden')||this.classList.contains('hide')||
