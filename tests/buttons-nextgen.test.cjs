@@ -145,6 +145,18 @@ assert.ok(src.includes('min-width:768px') && src.includes('max-width:767px'),
   'TV CSS widths between 768 and 999 must reveal focus labels, phone stays compact');
 assert.ok(src.includes("mousemove.buttonsNgPointer") && src.includes("buttons-ng-hovered"),
   'desktop pointer must retain an expanded control until the mouse actually moves');
+assert.ok(src.includes("buttons-ng-pointer-mode"),
+  'pointer mode must distinguish stationary air-mouse hover from TV D-pad focus');
+assert.ok(src.includes("keydown.buttonsNgPointer"),
+  'real D-pad input must restore focus-driven label disclosure');
+assert.ok(src.includes("buttons-ng-pointer-mode .full-start__button.button-mode-1.focus:not(.buttons-ng-hovered) > span"),
+  'hover/focus induced by stationary pointer must not make a flex item expand');
+assert.ok(src.includes("bmMouseX===e.clientX&&bmMouseY===e.clientY"),
+  'synthetic hover events with unchanged pointer coordinates cannot choose new expanded item');
+assert.ok(src.includes("bmPointerToDpad()"),
+  'switching from air mouse to TV remote must clear frozen pointer state');
+assert.ok(src.includes("strip.removeClass('buttons-ng-pointer-mode buttons-ng-mouse-active')"),
+  'TV controller movement must restore D-pad mode even without native keydown');
 assert.ok(src.includes('buttons-ng-mouse-active'),
   'mouse selection must suppress competing TV focus expansion');
 assert.ok(!src.includes('buttons-ng-expand-left'),
@@ -165,6 +177,8 @@ const nodes=captions.map(name=>{
 });
 const stripWrapper=[stripElement];
 stripWrapper.first=function(){return this};
+stripWrapper.removeClass=function(){return this};
+stripWrapper.find=function(){return {removeClass(){}}};
 stripWrapper.children=function(selector){
   const list=selector.endsWith('.focus')
     ? nodes.filter(n=>n===context.window.Navigator._focus&&n.parentNode===stripElement)
