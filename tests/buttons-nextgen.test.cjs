@@ -47,7 +47,7 @@ const Lampa={
   Controller:{enabled(){return {name:'full_start'}},toggle(){}}
 };
 const context={window:{Lampa,$:jquery},Lampa,$:jquery,console,setTimeout(fn){fn();return 1},clearTimeout(){}};
-vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds}; init();'),context,{filename:'buttons-nextgen.js'});
+vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds, bmMoveCardButton, bmBindCardNavigation, setCurrentContainer:function(v){currentContainer=v;}}; init();'),context,{filename:'buttons-nextgen.js'});
 assert.ok(settingsParameter,'settings integration loaded');
 assert.deepEqual(JSON.parse(JSON.stringify(storage.get('button_hidden'))),['legacy'],'existing setting retained');
 storage.set('button_hidden',['profile-111'],true);
@@ -150,4 +150,62 @@ assert.ok(src.includes('buttons-ng-mouse-active'),
 assert.ok(!src.includes('buttons-ng-expand-left'),
   'old leftward overlay strategy must be entirely removed');
 assert.ok(!src.includes("        saveOrder();\n\n        setTimeout"), 'render must not persist transient order');
-console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout');
+
+/* Behavioral regression: focused button widens and flex-wrap changes geometry.
+ * D-pad traversal must remain DOM-sequential, including JacRed and late controls. */
+const stripElement={};
+const captions=['Онлайн','PidTor','Торренты','JacRed','Трейлеры','Реакции','Подписаться'];
+const nodes=captions.map(name=>{
+  const hidden={value:false};
+  return {
+    label:name,parentNode:stripElement,_hidden:hidden,
+    classList:{contains(cls){return cls==='hidden'&&hidden.value}},
+    getClientRects(){return hidden.value?[]:[{width:80}]}
+  };
+});
+const stripWrapper=[stripElement];
+stripWrapper.first=function(){return this};
+stripWrapper.children=function(){return nodes.slice()};
+const fakeContainer={
+  length:1,0:{},find(sel){
+    assert.equal(sel,'.full-start-new__buttons');
+    return stripWrapper;
+  }
+};
+const remote={_focus:nodes[2]};
+context.window.Navigator=remote;
+context.window.getComputedStyle=()=>({visibility:'visible'});
+const visited=[];
+let fallbackRight=0,fallbackLeft=0;
+const controls={
+  link:{last:null},
+  right(){fallbackRight++},
+  left(){fallbackLeft++}
+};
+Lampa.Controller.enabled=()=>({name:'full_start',controller:controls});
+Lampa.Controller.collectionFocus=(node)=>{
+  remote._focus=node;
+  visited.push(node.label);
+};
+const testHook=context.window.__bmTest;
+testHook.setCurrentContainer(fakeContainer);
+testHook.bmBindCardNavigation(controls);
+controls.right();
+assert.equal(remote._focus.label,'JacRed','right after Torrent must focus JacRed');
+controls.right();
+assert.equal(remote._focus.label,'Трейлеры','right after JacRed must focus Trailer');
+controls.left();
+assert.equal(remote._focus.label,'JacRed','left after Trailer must focus JacRed');
+nodes[4]._hidden.value=true;
+controls.right();
+assert.equal(remote._focus.label,'Реакции','skip genuinely hidden controls');
+remote._focus=nodes[6];
+controls.right();
+assert.equal(fallbackRight,1,'last button defers to native right handler');
+remote._focus={parentNode:{}};
+controls.left();
+assert.equal(fallbackLeft,1,'outside button bar defers to native left handler');
+assert.deepEqual(visited,['JacRed','Трейлеры','JacRed','Реакции'],
+  'D-pad visits JacRed exactly once and does not jump by spatial geometry');
+
+console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout and deterministic TV D-pad traversal');
