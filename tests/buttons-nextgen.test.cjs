@@ -11,6 +11,7 @@ function jquery(node) {
     node._data=node._data||{};
     return {length:1,0:node,
       attr(k){return k==='class'?'full-start__button selector '+node.label:''},
+      find(){return {text(){return node.label}}},
       data(k,v){if(arguments.length===2){node._data[k]=v;return this}return node._data[k]},
       hasClass(k){return node.classList.contains(k)}
     };
