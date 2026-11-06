@@ -173,9 +173,18 @@ assert.ok(src.includes("if(!next)return false; // keep native boundary behavior"
   'Native Lampa controller must retain navigation at strip boundaries');
 assert.ok(src.includes("Lampa.Controller.collectionFocus(next,currentContainer)"),
   'Remote traversal must update Lampa Navigator focus and enter target');
-assert.ok(src.includes('flex-wrap: wrap !important'), 'adjacent buttons must wrap to the next row');
-assert.ok(src.includes('position:static !important') && src.includes('display:inline-block !important'),
-  'desktop TV focused label must expand in normal flex flow');
+assert.ok(src.includes('body .full-start-new__buttons {display:grid !important') &&
+  src.includes('grid-template-columns:repeat(auto-fill,minmax(7.5em,1fr)) !important') &&
+  src.includes('grid-auto-rows:max-content !important'),
+  'TV button cells must have fixed grid positions independent of selected label width');
+assert.ok(src.includes('body .full-start-new__buttons > .full-start__button.button-mode-1.focus') &&
+  src.includes('width:100% !important') &&
+  src.includes('white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important'),
+  'focused label expands only within its own grid cell without moving neighbors');
+assert.ok(src.includes('body .full-start-new__buttons > .button--play { display:none !important; visibility:hidden !important; pointer-events:none !important; }'),
+  'native Watch is never visible on mobile even before editor marks it as managed');
+assert.ok(src.includes('max-width:767px') && src.includes('min-height:0 !important'),
+  'phone keeps compact flex layout and does not inherit desktop grid height');
 assert.ok(src.includes('max-width:100%') && src.includes('overflow-wrap:anywhere'),
   'long labels must fit inside their row and wrap internally if necessary');
 assert.ok(!src.includes('left:calc(100% - .85em)'),
