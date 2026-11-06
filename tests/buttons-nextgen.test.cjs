@@ -155,6 +155,16 @@ assert.ok(src.includes("bmMouseX===e.clientX&&bmMouseY===e.clientY"),
   'synthetic hover events with unchanged pointer coordinates cannot choose new expanded item');
 assert.ok(src.includes("bmPointerToDpad()"),
   'switching from air mouse to TV remote must clear frozen pointer state');
+assert.ok(src.includes("bmMouseAnchor={node:target[0]") &&
+  src.includes("nearAnchor||dx*dx+dy*dy<576"),
+  'stable pointer hitbox and trackpad hysteresis prevent switching after flex reflow');
+assert.ok(src.includes("window.__buttonsNgPointerReset=bmPointerToDpad"),
+  'D-pad transition must release the mouse anchor before later pointer input');
+assert.ok(src.includes("rowsHeight=Math.ceil(rect.height*2+gap)") &&
+  src.includes("targetContainer.css('min-height',frameHeight+'px')"),
+  'reserve second flex row to keep the entire film card vertically stable');
+assert.ok(src.includes("targetContainer.css('min-height','')"),
+  'reset reserved height when the strip no longer has enough buttons');
 assert.ok(src.includes("strip.removeClass('buttons-ng-pointer-mode buttons-ng-mouse-active')"),
   'TV controller movement must restore D-pad mode even without native keydown');
 assert.ok(src.includes('buttons-ng-mouse-active'),
