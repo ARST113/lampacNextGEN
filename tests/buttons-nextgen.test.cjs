@@ -105,6 +105,13 @@ assert.ok(src.includes(".button--play.buttons-ng-native-play { display:none !imp
   'Watch button is not visible alongside direct torrent and JacRed controls');
 assert.ok(src.includes("c.collectionSet(container)") && src.includes("c.collectionFocus(candidate,container)"),
   'D-pad navigator receives new post-render controls and preserves focus');
+assert.ok(src.includes("function bmHasLiveNavigationCollection(container)") &&
+  src.includes("if(expected[i]!==actual[i])return false"),
+  'detect when the spatial-navigation collection already references the live controls');
+assert.ok(src.includes("if(!bmHasLiveNavigationCollection(container))c.collectionSet(container)"),
+  'do not clear native focus when a source update has not changed the navigator elements');
+assert.ok(src.includes("if(!window.Navigator||window.Navigator._focus!==selected"),
+  'restore focus only if the selected element actually changed');
 assert.ok(!src.includes("toggle('full_start');\n            } catch"),
   'do not force-switch controller away from dynamically opened JacRed or torrent content');
 assert.ok(!src.includes("find('.button--play, .button--edit-order, .button--folder').remove()"),
