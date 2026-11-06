@@ -1,6 +1,6 @@
 /**
  * Плагин управления кнопками Lampa
- * Версия: 1.2.15-nextgen
+ * Версия: 1.2.16-nextgen
  * Автор: @Cheeze_l
  * 
  * Описание:
@@ -2247,6 +2247,17 @@
         });
         return candidate;
     }
+    function bmHasLiveNavigationCollection(container){
+        if(!container||!container.length||!window.Navigator||
+           !window.Navigator._collection)return false;
+        var expected=container[0].querySelectorAll('.selector');
+        var actual=window.Navigator._collection;
+        if(expected.length!==actual.length)return false;
+        for(var i=0;i<expected.length;i++){
+            if(expected[i]!==actual[i])return false;
+        }
+        return true;
+    }
     function bmRestoreCardFocus(container,id){
         if(!container||!container.length||!id||!Lampa.Controller||
            Lampa.Controller.enabled().name!=='full_start')return false;
@@ -2255,8 +2266,13 @@
         var active=Lampa.Controller.enabled().controller;
         try{
             bmFocusRestoring=true;
-            Lampa.Controller.collectionSet(container);
-            Lampa.Controller.collectionFocus(selected,container);
+            // Repeatedly rebuilding an unchanged collection clears .focus and
+            // makes the selected button visually blink on every provider refresh.
+            if(!bmHasLiveNavigationCollection(container))
+                Lampa.Controller.collectionSet(container);
+            if(!window.Navigator||window.Navigator._focus!==selected||
+               !selected.classList.contains('focus'))
+                Lampa.Controller.collectionFocus(selected,container);
             if(active&&active.link)active.link.last=selected;
             bmFocusCard=container[0];bmFocusId=id;
             return true;
@@ -2375,8 +2391,10 @@
             $(candidate).hasClass('hide') || $(candidate).hasClass('hidden'))
             candidate = strip.children('.full-start__button.selector').not('.hide,.hidden').first()[0];
         try {
-            c.collectionSet(container);
-            if (candidate) c.collectionFocus(candidate,container);
+            if(!bmHasLiveNavigationCollection(container))c.collectionSet(container);
+            if(candidate&&(!window.Navigator||window.Navigator._focus!==candidate||
+               !candidate.classList.contains('focus')))
+                c.collectionFocus(candidate,container);
             bmBindCardNavigation(c.enabled().controller);
             if(candidate)bmRememberCardFocus(candidate);
             // The core Start component only binds hover:focus before dynamic buttons
