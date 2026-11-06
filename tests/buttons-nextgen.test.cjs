@@ -121,9 +121,17 @@ assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
   'avoid duplicate Lampac Online button');
 assert.ok(!src.includes("svg.replaceWith(LAMPAC_ICON)") && !src.includes("var LAMPAC_ICON ="),
-  'never replace native Lampac cube SVG with Google Play on rebuild');
-assert.ok(src.includes("Never mutate a provider's icon while regrouping its controls."),
-  'provider SVG must remain under the originating plugin control');
+  'rebuilding a card must not mutate provider SVG, avoiding replacement races');
+assert.ok(src.includes("original SVG is hidden by a CSS rule"),
+  'Google Play icon stays visible regardless of Lampac native SVG changes');
+assert.ok(src.includes(".view--online.lampac--button:not(.buttons-ng-source-bridge) > svg { display:none !important; }"),
+  'hide all original native Lampac icons synchronously through CSS');
+assert.ok(src.includes(".view--online.lampac--button:not(.buttons-ng-source-bridge)::before {content:"),
+  'render one permanent Google Play icon on the visible Online button');
+assert.ok(src.includes("-webkit-mask:url(") && src.includes("background-color:currentColor"),
+  'match TV focus colors and preserve the exact new logo silhouette');
+assert.ok(src.includes("data:image/svg+xml,") && src.includes("M20.331"),
+  'inline the Google Play icon without external file dependencies');
 assert.ok(src.includes("function bmMoveCardButton(step)") && src.includes("controller.__buttonsNgNavWrap=true"),
   'TV D-pad must use stable logical order within the card button strip');
 assert.ok(src.includes("controller.right=function()") && src.includes("bmMoveCardButton(1)"),
