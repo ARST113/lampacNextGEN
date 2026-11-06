@@ -143,6 +143,8 @@ assert.ok(!src.includes('left:calc(100% - .85em)'),
   'labels must not cover other clickable controls using absolute positioning');
 assert.ok(src.includes('min-width:768px') && src.includes('max-width:767px'),
   'TV CSS widths between 768 and 999 must reveal focus labels, phone stays compact');
+assert.ok(src.includes('.full-start-new__buttons { min-height:0 !important; }'),
+  'phone panel must not inherit the reserved desktop flex-row height after resize');
 assert.ok(src.includes("mousemove.buttonsNgPointer") && src.includes("buttons-ng-hovered"),
   'desktop pointer must retain an expanded control until the mouse actually moves');
 assert.ok(src.includes("buttons-ng-pointer-mode"),
