@@ -113,6 +113,17 @@ assert.ok(src.includes("sources.children('.full-start__button').not('.hide,.butt
   'Watch menu torrent and JacRed sources must be collected');
 assert.ok(src.includes("source.trigger(e.type)"),
   'source button proxy must forward activation to the original');
+assert.ok(src.includes("var pool=reusable[sourceId]") &&
+  src.includes("var proxy=pool&&pool.length?pool.shift():null"),
+  'refreshes must reuse the existing Torrent/JacRed proxy DOM nodes');
+assert.ok(src.includes("if(fresh)proxy.on('hover:enter hover:long'"),
+  'reused proxies must not accumulate duplicate enter handlers');
+assert.ok(src.includes("proxy.data('buttons-ng-source-ref',this)"),
+  'reused proxy must always forward to the most recent source element');
+assert.ok(src.includes("reusable[key].forEach(function(stale){stale.remove()}"),
+  'only genuinely unavailable source proxies should be removed');
+assert.ok(!src.includes("target.children('.buttons-ng-source-bridge').remove();"),
+  'a whole-strip proxy reset would invalidate remote focus on every refresh');
 assert.ok(src.includes("bmSourceObserver.observe(root,"),
   'observe the card root so late provider activation or source container replacement is captured');
 assert.ok(src.includes("liveSource!==bmObservedSource"),
