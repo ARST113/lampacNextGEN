@@ -1,6 +1,6 @@
 /**
  * Плагин управления кнопками Lampa
- * Версия: 1.2.12-nextgen
+ * Версия: 1.2.13-nextgen
  * Автор: @Cheeze_l
  * 
  * Описание:
@@ -138,8 +138,6 @@
             return -1;
         };
     }
-
-    var LAMPAC_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M20.331 14.644l-13.794-13.831 17.55 10.075zM2.938 0c-0.813 0.425-1.356 1.2-1.356 2.206v27.581c0 1.006 0.544 1.781 1.356 2.206l16.038-16zM29.512 14.1l-3.681-2.131-4.106 4.031 4.106 4.031 3.756-2.131c1.125-0.893 1.125-2.906-0.075-3.8zM6.538 31.188l17.55-10.075-3.756-3.756z" fill="currentColor"></path></svg>';
 
     var EXCLUDED_CLASSES = ['button--play', 'button--edit-order', 'button--folder'];
 
@@ -590,10 +588,10 @@
             if(i>1)b.data('buttons-ng-id',key);
             seen[key]=b;
             var type=detectBtnCategory(b);
-            if(type==='online'&&b.hasClass('lampac--button')&&!b.hasClass('modss--button')&&!b.hasClass('showy--button')){
-                var svg=b.find('svg').first();
-                if(svg.length&&!svg.hasClass('modss-online-icon'))svg.replaceWith(LAMPAC_ICON);
-            }
+            // Preserve the SVG supplied by Lampac or another online provider.
+            // The former forced Google Play substitution raced with Lampac's
+            // native cube icon updates, causing the icon to flicker on TV.
+            // Never mutate a provider's icon while regrouping its controls.
             (groups[type]||groups.other).push(b);
         }
         buttons.each(function(){add(this)});
