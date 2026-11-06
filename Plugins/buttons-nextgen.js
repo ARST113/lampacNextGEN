@@ -1,6 +1,6 @@
 /**
  * Плагин управления кнопками Lampa
- * Версия: 1.2.14-nextgen
+ * Версия: 1.2.15-nextgen
  * Автор: @Cheeze_l
  * 
  * Описание:
@@ -545,9 +545,17 @@
     // Keep originals there; expose independent controls through forwarding proxies.
     function groupBtnsByType(container){
         var target=container.find('.full-start-new__buttons').first();
-        // Recreate proxies from live sources, never reuse stale cross-card references.
-        target.children('.buttons-ng-source-bridge').remove();
-        var buttons=target.children('.full-start__button').not('.button--edit-order,.button--folder,.button--play');
+        // Keep the DOM identity of an active source proxy while its provider
+        // refreshes. Replacing a focused Torrent/JacRed proxy invalidates
+        // Navigator._focus and Start.last, making Lampa jump to Online.
+        var reusable={};
+        target.children('.buttons-ng-source-bridge').each(function(){
+            var btn=$(this);
+            var key=btn.data('buttons-ng-source-id')||getBtnIdentifier(btn);
+            (reusable[key]||(reusable[key]=[])).push(btn);
+        });
+        var buttons=target.children('.full-start__button')
+            .not('.button--edit-order,.button--folder,.button--play,.buttons-ng-source-bridge');
         var sources=container.find('.buttons--container').first();
         if(sources.length){
             sources.children('.full-start__button').not('.hide,.button--play').each(function(){
@@ -556,11 +564,18 @@
                 // Lampac already exposes its Online button outside Watch's source menu.
                 if(original.hasClass('view--online')&&original.hasClass('lampac--button')&&
                     target.children('.view--online.lampac--button').not('.buttons-ng-source-bridge').length)return;
-                var proxy=original.clone(false,false);
-                proxy.removeClass('focus button--priority').addClass('buttons-ng-source-bridge');
-                proxy.data('buttons-ng-id',getBtnIdentifier(original));
+                var sourceId=getBtnIdentifier(original);
+                var pool=reusable[sourceId];
+                var proxy=pool&&pool.length?pool.shift():null;
+                var fresh=!proxy;
+                if(fresh){
+                    proxy=original.clone(false,false);
+                    proxy.removeClass('focus button--priority').addClass('buttons-ng-source-bridge');
+                    proxy.data('buttons-ng-id',sourceId);
+                }
+                proxy.data('buttons-ng-source-id',sourceId);
                 proxy.data('buttons-ng-source-ref',this);
-                proxy.on('hover:enter hover:long',function(e){
+                if(fresh)proxy.on('hover:enter hover:long',function(e){
                     var originalNode=proxy.data('buttons-ng-source-ref');
                     var source=$(originalNode);
                     // A provider enabled later may replace the entire native source
@@ -579,6 +594,10 @@
                 buttons=buttons.add(proxy);
             });
         }
+        // Discard only proxies whose source genuinely disappeared.
+        Object.keys(reusable).forEach(function(key){
+            reusable[key].forEach(function(stale){stale.remove()});
+        });
         var groups={online:[],torrent:[],trailer:[],shots:[],book:[],reaction:[],subscribe:[],other:[]},seen={};
         function add(el){
             var b=$(el);
