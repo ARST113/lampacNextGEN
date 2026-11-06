@@ -120,6 +120,10 @@ assert.ok(src.includes("{ name: 'torrent', patterns: ['torrent', 'jacred'] }"),
   'JacRed should appear alongside Torrents');
 assert.ok(src.includes("target.children('.view--online.lampac--button')"),
   'avoid duplicate Lampac Online button');
+assert.ok(!src.includes("svg.replaceWith(LAMPAC_ICON)") && !src.includes("var LAMPAC_ICON ="),
+  'never replace native Lampac cube SVG with Google Play on rebuild');
+assert.ok(src.includes("Never mutate a provider's icon while regrouping its controls."),
+  'provider SVG must remain under the originating plugin control');
 assert.ok(src.includes("function bmMoveCardButton(step)") && src.includes("controller.__buttonsNgNavWrap=true"),
   'TV D-pad must use stable logical order within the card button strip');
 assert.ok(src.includes("controller.right=function()") && src.includes("bmMoveCardButton(1)"),
