@@ -6,7 +6,15 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const src = fs.readFileSync(path.join(__dirname,'../Plugins/buttons-nextgen.js'),'utf8');
 new vm.Script(src,{filename:'buttons-nextgen.js'});
-function jquery() {
+function jquery(node) {
+  if(node&&node.label){
+    node._data=node._data||{};
+    return {length:1,0:node,
+      attr(k){return k==='class'?'full-start__button selector '+node.label:''},
+      data(k,v){if(arguments.length===2){node._data[k]=v;return this}return node._data[k]},
+      hasClass(k){return node.classList.contains(k)}
+    };
+  }
   return {
     length:0,
     toggle(){return this},
@@ -47,7 +55,7 @@ const Lampa={
   Controller:{enabled(){return {name:'full_start'}},toggle(){}}
 };
 const context={window:{Lampa,$:jquery},Lampa,$:jquery,console,setTimeout(fn){fn();return 1},clearTimeout(){}};
-vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds, bmMoveCardButton, bmBindCardNavigation, setCurrentContainer:function(v){currentContainer=v;}}; init();'),context,{filename:'buttons-nextgen.js'});
+vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds, bmMoveCardButton, bmBindCardNavigation, bmRememberCardFocus, bmFindCardFocus, bmRestoreCardFocus, getFocusId:()=>bmFocusId, setCurrentContainer:function(v){currentContainer=v;}}; init();'),context,{filename:'buttons-nextgen.js'});
 assert.ok(settingsParameter,'settings integration loaded');
 assert.deepEqual(JSON.parse(JSON.stringify(storage.get('button_hidden'))),['legacy'],'existing setting retained');
 storage.set('button_hidden',['profile-111'],true);
@@ -195,7 +203,7 @@ const nodes=captions.map(name=>{
   const hidden={value:false};
   return {
     label:name,parentNode:stripElement,_hidden:hidden,
-    classList:{contains(cls){return cls==='hidden'&&hidden.value}},
+    classList:{contains(cls){return cls==='selector'||(cls==='hidden'&&hidden.value)}},
     getClientRects(){return hidden.value?[]:[{width:80}]}
   };
 });
@@ -208,6 +216,7 @@ stripWrapper.children=function(selector){
     ? nodes.filter(n=>n===context.window.Navigator._focus&&n.parentNode===stripElement)
     : nodes.slice();
   list.first=function(){return this.length?[this[0]]:[]};
+  list.each=function(fn){this.forEach((el,i)=>fn.call(el,i,el));return this};
   list.filter=function(fn){
     // jQuery calls the predicate with this=the DOM element (unlike Array.filter).
     const visible=Array.prototype.filter.call(this,(el,i)=>fn.call(el,i,el));
@@ -258,4 +267,34 @@ assert.equal(fallbackLeft,1,'outside button bar defers to native left handler');
 assert.deepEqual(visited,['JacRed','Трейлеры','JacRed','Реакции'],
   'D-pad visits JacRed exactly once and does not jump by spatial geometry');
 
-console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable hover layout and deterministic TV D-pad traversal');
+/* Dynamic provider replaces the Torrent proxy while Start.toggle runs.
+ * The old DOM reference is detached; the semantic ID must survive. */
+remote._focus=nodes[2];
+nodes[2].label='view--torrent';
+testHook.bmRememberCardFocus(nodes[2]);
+assert.equal(testHook.getFocusId(),'bm2_view--torrent',
+  'remember Torrent by logical ID rather than disposable DOM element');
+const stale=nodes[2];
+const returnController={
+  link:{last:stale},
+  toggle(){
+    const fresh={label:'view--torrent',parentNode:stripElement,
+      classList:{contains(cls){return cls==='selector'}},
+      getClientRects(){return [{width:80}]}
+    };
+    nodes[2]=fresh;
+    stale.parentNode=null;
+    // Native Lampa collects new selectors but sees the old disconnected last;
+    // it falls back to the first Online button.
+    remote._focus=nodes[0];
+  }
+};
+Lampa.Controller.collectionSet=()=>{remote._focus=null};
+Lampa.Controller.enabled=()=>({name:'full_start',controller:returnController});
+testHook.bmBindCardNavigation(returnController);
+returnController.toggle();
+assert.equal(remote._focus,nodes[2],'return from Torrent focuses the NEW Torrent button');
+assert.equal(returnController.link.last,nodes[2],'native Start.last is rebound to live proxy');
+assert.notEqual(returnController.link.last,stale,'detached Torrent proxy must not be retained');
+assert.equal(testHook.getFocusId(),'bm2_view--torrent','stable focus ID survives toggle');
+console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable layout, TV D-pad traversal and Torrent return-focus restoration');
