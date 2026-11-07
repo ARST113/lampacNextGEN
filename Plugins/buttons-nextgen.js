@@ -1,6 +1,6 @@
 /**
  * Плагин управления кнопками Lampa
- * Версия: 1.2.17-nextgen
+ * Версия: 1.2.18-nextgen
  * Автор: @Cheeze_l
  * 
  * Описание:
@@ -2359,6 +2359,47 @@
         controller.__buttonsNgNavWrap=true;
     }
 
+    // Position a TV caption below the whole flex strip, independently of
+    // which physical row contains the selected source. offsetTop/offsetHeight
+    // ignore fade animations and preserve stable geometry during focus changes.
+    function bmAlignTvCaptions(strip){
+        if(!strip||!strip.length||!window.innerWidth||window.innerWidth<768)return;
+        var bar=strip[0],nodes=strip.children('.full-start__button.selector'),bottom=0;
+        nodes.each(function(){
+            if(this.offsetWidth>0&&this.offsetHeight>0&&!this.classList.contains('hidden'))
+                bottom=Math.max(bottom,this.offsetTop+this.offsetHeight);
+        });
+        if(!bottom)return;
+        var context=null,barWidth=bar.clientWidth;
+        nodes.each(function(){
+            if(!this.classList.contains('button-mode-1')||this.offsetWidth===0)return;
+            this.style.setProperty('--bm-tv-caption-top',
+                Math.ceil(bottom-this.offsetTop+8)+'px');
+            var caption=this.querySelector('.text-wrapper')||this.querySelector('span');
+            if(!caption)return;
+            // Keep long captions entirely on-screen for controls near the
+            // right edge (e.g. Resume, Subscribe). Canvas measurement does
+            // not change the provider's DOM or Lampa's current focus.
+            var estimate=(caption.textContent||'').length*10+26;
+            try{
+                if(!context&&document.createElement){
+                    var canvas=document.createElement('canvas');
+                    context=canvas.getContext&&canvas.getContext('2d');
+                }
+                if(context){
+                    var style=window.getComputedStyle(this);
+                    var size=(parseFloat(style.fontSize)||20)*.8;
+                    context.font=size+'px '+(style.fontFamily||'sans-serif');
+                    estimate=context.measureText(caption.textContent||'').width+28;
+                }
+            }catch(e){}
+            var allowed=Math.min(estimate,(parseFloat(window.getComputedStyle(this).fontSize)||20)*.8*16);
+            var shift=Math.min(0,barWidth-this.offsetLeft-allowed-8);
+            this.style.setProperty('--bm-tv-caption-x',
+                Math.floor(Math.max(-this.offsetLeft,shift))+'px');
+        });
+    }
+
     function setupButtonNavigation(container) {
         // Lampa builds Navigator's selector collection BEFORE this plugin's 400 ms
         // rebuild. Simply toggling the already-active full_start does nothing:
@@ -2369,6 +2410,7 @@
         if (typeof c.collectionSet !== 'function' || typeof c.collectionFocus !== 'function') return;
         var strip = container.find('.full-start-new__buttons').first();
         if (!strip.length) return;
+        bmAlignTvCaptions(strip);
         // Guard the native source menu and never allow 'Watch' to steal D-pad focus.
         strip.children('.button--play').removeClass('selector focus').addClass('buttons-ng-native-play');
         var active = (window.Navigator && window.Navigator._focus) || null;
@@ -2409,6 +2451,11 @@
     }
 
     function init() {
+        // TV row count changes with resolution/orientation; refresh the
+        // caption coordinates without rebuilding buttons or resetting focus.
+        if(typeof window!=='undefined')$(window).on('resize.buttonsNgTvCaptions',function(){
+            if(currentContainer)bmAlignTvCaptions(currentContainer.find('.full-start-new__buttons').first());
+        });
         if(typeof Lampa.Storage.sync==='function')try{Lampa.Storage.sync(bmCloudKey,'object_object')}catch(e){}
         bmActivate();
         if(Lampa.Storage.listener&&Lampa.Storage.listener.follow)Lampa.Storage.listener.follow('change',function(e){if(e.name==='account'&&bmActivate()&&currentContainer)reorderButtons(currentContainer,false)});
@@ -2540,14 +2587,15 @@
             '/* A stationary TV air-mouse pointer must not re-expand a button via Lampa mouseenter/focus. */' +
             '.full-start-new__buttons.buttons-ng-pointer-mode .full-start__button.button-mode-1.focus:not(.buttons-ng-hovered) > span, .full-start-new__buttons.buttons-ng-pointer-mode .full-start__button.button-mode-1.focus:not(.buttons-ng-hovered) .text-wrapper { display:none !important; }' +
             '}' +
-            // Keep every button at a fixed grid coordinate. Expanding only the
-            // focused cell cannot push later controls to a new row (TV/desktop).
-            // Phone keeps the original compact flex-wrap behavior.
+            // TV/desktop: compact native-sized flex pills, with fixed width
+            // for mode 1. A focused caption sits in a reserved strip beneath
+            // all rows; it never changes flex geometry, covers other buttons,
+            // or creates the oversized empty grid cells of v1.2.17.
+            // Mobile styles are unchanged.
             '@media screen and (min-width:768px) {' +
-            'body .full-start-new__buttons {display:grid !important;grid-template-columns:repeat(auto-fill,minmax(7.5em,1fr)) !important;grid-auto-rows:max-content !important;align-items:start !important;justify-items:start !important;column-gap:.5em !important;row-gap:.5em !important;}' +
-            'body .full-start-new__buttons > .full-start__button.selector {width:3.5em !important;max-width:100% !important;height:2.8em !important;min-height:2.8em !important;box-sizing:border-box !important;overflow:hidden !important;flex-shrink:0 !important;}' +
-            'body .full-start-new__buttons > .full-start__button.button-mode-1.focus,body .full-start-new__buttons > .full-start__button.button-mode-1.buttons-ng-hovered,body .full-start-new__buttons > .full-start__button.button-mode-3 {width:100% !important;}' +
-            'body .full-start-new__buttons > .full-start__button.button-mode-1.focus > span,body .full-start-new__buttons > .full-start__button.button-mode-1.buttons-ng-hovered > span,body .full-start-new__buttons > .full-start__button.button-mode-3 > span {white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important;flex-shrink:1 !important;}' +
+            'body .full-start-new__buttons {display:flex !important;flex-wrap:wrap !important;position:relative !important;gap:.5em !important;align-items:flex-start !important;padding-bottom:2.3em !important;}' +
+            'body .full-start-new__buttons > .full-start__button.button-mode-1 {width:3.5em !important;min-width:3.5em !important;max-width:3.5em !important;flex:0 0 3.5em !important;height:2.8em !important;min-height:2.8em !important;box-sizing:border-box !important;overflow:visible !important;position:relative !important;}' +
+            'body .full-start-new__buttons > .full-start__button.button-mode-1.focus > span,body .full-start-new__buttons > .full-start__button.button-mode-1.focus .text-wrapper,body .full-start-new__buttons > .full-start__button.button-mode-1.buttons-ng-hovered > span,body .full-start-new__buttons > .full-start__button.button-mode-1.buttons-ng-hovered .text-wrapper {display:inline-block !important;position:absolute !important;left:var(--bm-tv-caption-x,0px) !important;top:var(--bm-tv-caption-top,3em) !important;right:auto !important;bottom:auto !important;width:max-content !important;max-width:16em !important;height:auto !important;margin:0 !important;padding:.22em .45em !important;background:rgba(26,28,32,.90) !important;color:#fff !important;border:1px solid rgba(255,255,255,.18) !important;border-radius:.3em !important;white-space:nowrap !important;overflow:hidden !important;overflow-wrap:normal !important;text-overflow:ellipsis !important;font-size:.8em !important;line-height:1.15 !important;z-index:12 !important;pointer-events:none !important;transform:none !important;}' +
             '}' +
             '@media screen and (max-width:767px) {' +
             '/* Keep phone layout untouched even after changing viewport orientation. */' +
