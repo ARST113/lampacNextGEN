@@ -173,22 +173,31 @@ assert.ok(src.includes("if(!next)return false; // keep native boundary behavior"
   'Native Lampa controller must retain navigation at strip boundaries');
 assert.ok(src.includes("Lampa.Controller.collectionFocus(next,currentContainer)"),
   'Remote traversal must update Lampa Navigator focus and enter target');
-assert.ok(src.includes('body .full-start-new__buttons {display:grid !important') &&
-  src.includes('grid-template-columns:repeat(auto-fill,minmax(7.5em,1fr)) !important') &&
-  src.includes('grid-auto-rows:max-content !important'),
-  'TV button cells must have fixed grid positions independent of selected label width');
-assert.ok(src.includes('body .full-start-new__buttons > .full-start__button.button-mode-1.focus') &&
-  src.includes('width:100% !important') &&
-  src.includes('white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important'),
-  'focused label expands only within its own grid cell without moving neighbors');
+assert.ok(!src.includes('grid-template-columns:repeat(auto-fill') &&
+  src.includes('body .full-start-new__buttons {display:flex !important;flex-wrap:wrap !important'),
+  'TV uses native compact flex pills rather than oversized, empty grid cells');
+assert.ok(src.includes('width:3.5em !important;min-width:3.5em !important;max-width:3.5em !important;flex:0 0 3.5em !important'),
+  'standard TV controls have stable compact width regardless of focus');
+assert.ok(src.includes('function bmAlignTvCaptions(strip)') &&
+  src.includes('bottom-this.offsetTop+8') &&
+  src.includes('bmAlignTvCaptions(strip);'),
+  'TV caption stays in the reserved row after the last control without moving buttons');
+assert.ok(src.includes('top:var(--bm-tv-caption-top,3em) !important') &&
+  src.includes('left:var(--bm-tv-caption-x,0px) !important') &&
+  src.includes('max-width:16em !important'),
+  'focused label is readable in a bounded caption below the buttons');
+assert.ok(src.includes('resize.buttonsNgTvCaptions') &&
+  src.includes('canvas.getContext&&canvas.getContext'),
+  'different TV resolutions recompute caption position and clamp rightmost text');
 assert.ok(src.includes('body .full-start-new__buttons > .button--play { display:none !important; visibility:hidden !important; pointer-events:none !important; }'),
   'native Watch is never visible on mobile even before editor marks it as managed');
 assert.ok(src.includes('max-width:767px') && src.includes('min-height:0 !important'),
   'phone keeps compact flex layout and does not inherit desktop grid height');
-assert.ok(src.includes('max-width:100%') && src.includes('overflow-wrap:anywhere'),
-  'long labels must fit inside their row and wrap internally if necessary');
-assert.ok(!src.includes('left:calc(100% - .85em)'),
-  'labels must not cover other clickable controls using absolute positioning');
+assert.ok(src.includes('max-width:16em !important') && src.includes('text-overflow:ellipsis !important'),
+  'long captions are bounded without affecting geometry of the TV strip');
+assert.ok(!src.includes('left:calc(100% - .85em)') &&
+  src.includes('padding-bottom:2.3em !important'),
+  'caption uses an independent reserved line rather than covering adjacent icons');
 assert.ok(src.includes('min-width:768px') && src.includes('max-width:767px'),
   'TV CSS widths between 768 and 999 must reveal focus labels, phone stays compact');
 assert.ok(src.includes('.full-start-new__buttons { min-height:0 !important; }'),
