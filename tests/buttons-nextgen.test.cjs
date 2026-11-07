@@ -56,7 +56,7 @@ const Lampa={
   Controller:{enabled(){return {name:'full_start'}},toggle(){}}
 };
 const context={window:{Lampa,$:jquery},Lampa,$:jquery,console,setTimeout(fn){fn();return 1},clearTimeout(){}};
-vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds, bmMoveCardButton, bmBindCardNavigation, bmRememberCardFocus, bmFindCardFocus, bmRestoreCardFocus, getFocusId:()=>bmFocusId, setCurrentContainer:function(v){currentContainer=v;}}; init();'),context,{filename:'buttons-nextgen.js'});
+vm.runInNewContext(src.replace('    init();', '    window.__bmTest = {getBtnIdentifier, bmLegacyId, bmMigrateIds, bmMoveCardButton, bmBindCardNavigation, bmRememberCardFocus, bmFindCardFocus, bmRestoreCardFocus, bmLaunchJacredCinema, getFocusId:()=>bmFocusId, setCurrentContainer:function(v){currentContainer=v;}}; init();'),context,{filename:'buttons-nextgen.js'});
 assert.ok(settingsParameter,'settings integration loaded');
 assert.deepEqual(JSON.parse(JSON.stringify(storage.get('button_hidden'))),['legacy'],'existing setting retained');
 storage.set('button_hidden',['profile-111'],true);
@@ -120,6 +120,14 @@ assert.ok(src.includes("sources.children('.full-start__button').not('.hide,.butt
   'Watch menu torrent and JacRed sources must be collected');
 assert.ok(src.includes("source.trigger(e.type)"),
   'source button proxy must forward activation to the original');
+assert.ok(src.includes("if(e.type==='hover:enter'&&bmLaunchJacredCinema(proxy))return;"),
+  'JacRed activation must not rely on hidden source-node forwarding');
+assert.ok(src.includes("proxy.on('click.buttonsNgJacred'"),
+  'JacRed OK mouse/click input on TV must open the same component');
+assert.ok(src.includes("if(bmJacredActivatedAt&&now-bmJacredActivatedAt<650)return true"),
+  'TV click and hover:enter generated from one OK must not open duplicate screens');
+assert.ok(src.includes("if(fresh&&proxy.hasClass('jacred-ng-card-button'))"),
+  'only JacRed receives the special click handler, other sources stay native');
 assert.ok(src.includes("var pool=reusable[sourceId]") &&
   src.includes("var proxy=pool&&pool.length?pool.shift():null"),
   'refreshes must reuse the existing Torrent/JacRed proxy DOM nodes');
@@ -338,4 +346,26 @@ assert.equal(remote._focus,nodes[2],'return from Torrent focuses the NEW Torrent
 assert.equal(returnController.link.last,nodes[2],'native Start.last is rebound to live proxy');
 assert.notEqual(returnController.link.last,stale,'detached Torrent proxy must not be retained');
 assert.equal(testHook.getFocusId(),'bm2_view--torrent','stable focus ID survives toggle');
+// Regression: detached hidden JacRed source must not prevent visible button activation.
+const directLaunches=[];
+const jacredCard={title:'Top Gun: Maverick',id:361743};
+Lampa.Component={get(name){return name==='jacred_cinema_v2'?function JacredCinema(){}:undefined}};
+Lampa.Activity={
+  active(){return {component:'full',card:jacredCard}},
+  push(entry){directLaunches.push(entry)}
+};
+const jacredProxy={hasClass(name){return name==='jacred-ng-card-button'}};
+assert.equal(context.window.__bmTest.bmLaunchJacredCinema(jacredProxy),true,
+  'JacRed visible proxy launches independently of its missing/removed native source');
+assert.equal(directLaunches.length,1);
+assert.equal(directLaunches[0].component,'jacred_cinema_v2');
+assert.equal(directLaunches[0].movie,jacredCard);
+assert.equal(context.window.__bmTest.bmLaunchJacredCinema(jacredProxy),true,
+  'same remote OK can emit a second click without duplicating the screen');
+assert.equal(directLaunches.length,1);
+assert.equal(context.window.__bmTest.bmLaunchJacredCinema({hasClass(){return false}}),false,
+  'non-JacRed buttons are never redirected to JacRed component');
+Lampa.Component.get=function(){return undefined};
+assert.equal(context.window.__bmTest.bmLaunchJacredCinema(jacredProxy),false,
+  'when JacRed Cinema is absent the proxy preserves its provider fallback');
 console.log('Passed: syntax, legacy migration bootstrap, isolated profiles, sync snapshot, cloud restore, stable layout, TV D-pad traversal and Torrent return-focus restoration');
