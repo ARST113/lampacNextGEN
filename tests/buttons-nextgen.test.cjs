@@ -175,29 +175,33 @@ assert.ok(src.includes("Lampa.Controller.collectionFocus(next,currentContainer)"
   'Remote traversal must update Lampa Navigator focus and enter target');
 assert.ok(!src.includes('grid-template-columns:repeat(auto-fill') &&
   src.includes('body .full-start-new__buttons {display:flex !important;flex-wrap:wrap !important'),
-  'TV uses native compact flex pills rather than oversized, empty grid cells');
-assert.ok(src.includes('width:3.5em !important;min-width:3.5em !important;max-width:3.5em !important;flex:0 0 3.5em !important'),
-  'standard TV controls have stable compact width regardless of focus');
+  'TV retains the familiar compact flex row without oversized grid gaps');
+assert.ok(src.includes('width:3.5em !important;min-width:3.5em !important;max-width:16em !important;flex:0 0 3.5em !important'),
+  'unfocused TV pills are compact but can expand when selected');
+assert.ok(src.includes('width:var(--bm-expanded-width,11em) !important;flex-basis:var(--bm-expanded-width,11em) !important'),
+  'focused TV buttons really expand horizontally together with the label');
+assert.ok(src.includes('transition:flex-basis .16s ease,width .16s ease !important'),
+  'TV buttons expand and collapse with a smooth width transition');
 assert.ok(src.includes('function bmAlignTvCaptions(strip)') &&
-  src.includes('bottom-this.offsetTop+8') &&
+  src.includes('Math.max(maxExtra,extra)>barWidth-22') &&
+  src.includes("bar.insertBefore(divider,rows[i][0])") &&
   src.includes('bmAlignTvCaptions(strip);'),
-  'TV caption stays in the reserved row after the last control without moving buttons');
-assert.ok(src.includes('top:var(--bm-tv-caption-top,3em) !important') &&
-  src.includes('left:var(--bm-tv-caption-x,0px) !important') &&
-  src.includes('max-width:16em !important'),
-  'focused label is readable in a bounded caption below the buttons');
+  'stable row dividers prevent focus expansion from moving buttons between lines');
+assert.ok(src.includes("strip.children('.buttons-ng-row-break').remove()") &&
+  src.includes('window.innerWidth<768'),
+  'reflow separators must be removed when switching back to a phone viewport');
 assert.ok(src.includes('resize.buttonsNgTvCaptions') &&
-  src.includes('canvas.getContext&&canvas.getContext'),
-  'different TV resolutions recompute caption position and clamp rightmost text');
+  src.includes('context.measureText(caption.textContent).width'),
+  'TV layout reserves enough width for real font metrics after viewport changes');
 assert.ok(src.includes('body .full-start-new__buttons > .button--play { display:none !important; visibility:hidden !important; pointer-events:none !important; }'),
   'native Watch is never visible on mobile even before editor marks it as managed');
 assert.ok(src.includes('max-width:767px') && src.includes('min-height:0 !important'),
   'phone keeps compact flex layout and does not inherit desktop grid height');
 assert.ok(src.includes('max-width:16em !important') && src.includes('text-overflow:ellipsis !important'),
-  'long captions are bounded without affecting geometry of the TV strip');
+  'very long caption text remains bounded inside the expanded pill');
 assert.ok(!src.includes('left:calc(100% - .85em)') &&
-  src.includes('padding-bottom:2.3em !important'),
-  'caption uses an independent reserved line rather than covering adjacent icons');
+  src.includes('row-gap:0 !important'),
+  'TV labels are inline while stable row breaks control vertical spacing');
 assert.ok(src.includes('min-width:768px') && src.includes('max-width:767px'),
   'TV CSS widths between 768 and 999 must reveal focus labels, phone stays compact');
 assert.ok(src.includes('.full-start-new__buttons { min-height:0 !important; }'),
