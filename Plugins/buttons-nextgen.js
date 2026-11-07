@@ -553,11 +553,13 @@
         var component=null;
         try{component=Lampa.Component.get('jacred_cinema_v2')}catch(e){return false}
         if(!component)return false;
+        var now=Date.now();
+        // Suppress a second OK event EVEN AFTER Activity.push has switched
+        // the active screen away from 'full'. Otherwise fallback forwarding
+        // would open the same JacRed component twice on Tizen/WebView.
+        if(bmJacredActivatedAt&&now-bmJacredActivatedAt<650)return true;
         var activity=Lampa.Activity.active();
         if(!activity||activity.component!=='full'||!activity.card)return false;
-        var now=Date.now();
-        // Some TV remotes produce click() and hover:enter for the same OK key.
-        if(bmJacredActivatedAt&&now-bmJacredActivatedAt<650)return true;
         bmJacredActivatedAt=now;
         try{
             var card=activity.card;
