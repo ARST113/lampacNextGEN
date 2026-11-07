@@ -349,10 +349,11 @@ assert.equal(testHook.getFocusId(),'bm2_view--torrent','stable focus ID survives
 // Regression: detached hidden JacRed source must not prevent visible button activation.
 const directLaunches=[];
 const jacredCard={title:'Top Gun: Maverick',id:361743};
+let mockScreen='full';
 Lampa.Component={get(name){return name==='jacred_cinema_v2'?function JacredCinema(){}:undefined}};
 Lampa.Activity={
-  active(){return {component:'full',card:jacredCard}},
-  push(entry){directLaunches.push(entry)}
+  active(){return {component:mockScreen,card:jacredCard}},
+  push(entry){directLaunches.push(entry);mockScreen='jacred_cinema_v2'}
 };
 const jacredProxy={hasClass(name){return name==='jacred-ng-card-button'}};
 assert.equal(context.window.__bmTest.bmLaunchJacredCinema(jacredProxy),true,
@@ -361,8 +362,9 @@ assert.equal(directLaunches.length,1);
 assert.equal(directLaunches[0].component,'jacred_cinema_v2');
 assert.equal(directLaunches[0].movie,jacredCard);
 assert.equal(context.window.__bmTest.bmLaunchJacredCinema(jacredProxy),true,
-  'same remote OK can emit a second click without duplicating the screen');
+  'same remote OK must be swallowed even after the active screen becomes JacRed');
 assert.equal(directLaunches.length,1);
+mockScreen='full';
 assert.equal(context.window.__bmTest.bmLaunchJacredCinema({hasClass(){return false}}),false,
   'non-JacRed buttons are never redirected to JacRed component');
 Lampa.Component.get=function(){return undefined};
